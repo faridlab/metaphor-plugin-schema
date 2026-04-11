@@ -1,0 +1,5 @@
+/target
+.claude/
+**/*.rs.bk
+.DS_Store
+Cargo.lock

@@ -1,0 +1,64 @@
+[package]
+name = "metaphor-plugin-schema"
+version = "0.1.0"
+edition = "2021"
+description = "Schema-driven code generator (extracted from metaphor-schema)"
+authors = ["Farid Hidayat"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/faridlab/metaphor-plugin-schema"
+keywords = ["cli", "code-generator", "schema", "rust", "ddd"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "metaphor-schema"
+path = "src/main.rs"
+
+[lib]
+name = "metaphor_schema"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env", "color"] }
+colored = "2"
+indicatif = "0.17"
+
+# Parsing
+logos = "0.14"
+
+# Code generation
+handlebars = "5"
+prettyplease = "0.2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# File system
+walkdir = "2"
+notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-mini = "0.4"
+
+# Utilities
+indexmap = { version = "2", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+
+# Optional database introspection
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
+tokio = { version = "1.0", features = ["rt-multi-thread"], optional = true }
+
+[features]
+default = []
+database = ["sqlx", "tokio"]
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+insta = { version = "1", features = ["yaml"] }
