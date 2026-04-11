@@ -1,0 +1,62 @@
+# Entity Example - Tests entity parsing with methods and invariants
+models:
+  - name: User
+    collection: users
+    fields:
+      id:
+        type: uuid
+        primary_key: true
+      email:
+        type: string
+        required: true
+        unique: true
+      password_hash:
+        type: string
+        required: true
+      status:
+        type: UserStatus
+        required: true
+      created_at:
+        type: timestamp
+        auto: true
+      updated_at:
+        type: timestamp
+        auto: true
+
+enums:
+  - name: UserStatus
+    variants:
+      - Active
+      - Inactive
+      - Suspended
+      - Deleted
+
+entities:
+  User:
+    model: User
+    implements:
+      - Auditable
+      - SoftDeletable
+    value_objects:
+      email: Email
+    methods:
+      - name: verify_email
+        mutates: true
+        returns: "Result<(), UserError>"
+        description: "Marks the user's email as verified"
+      - name: can_login
+        returns: bool
+        description: "Checks if user is allowed to login"
+      - name: suspend
+        mutates: true
+        async: true
+        returns: "Result<(), UserError>"
+      - name: reactivate
+        mutates: true
+        params:
+          reason: String
+        returns: "Result<(), UserError>"
+    invariants:
+      - "email must be unique"
+      - "password_hash must be at least 60 characters"
+      - "status cannot be deleted if user has active sessions"

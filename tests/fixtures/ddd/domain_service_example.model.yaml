@@ -1,0 +1,101 @@
+# Domain Service Examples - Tests service parsing with dependencies and methods
+domain_services:
+  # Stateless authentication service
+  PasswordService:
+    stateless: true
+    description: "Handles password hashing and verification"
+    methods:
+      - name: hash
+        async: true
+        params:
+          plain: "&str"
+        returns: "Result<String, PasswordError>"
+      - name: verify
+        async: true
+        params:
+          plain: "&str"
+          hash: "&str"
+        returns: "Result<bool, PasswordError>"
+      - name: check_strength
+        params:
+          password: "&str"
+        returns: PasswordStrength
+
+  # Service with repository dependencies
+  UserRegistrationService:
+    stateless: false
+    description: "Orchestrates user registration workflow"
+    dependencies:
+      - UserRepository
+      - ProfileRepository
+      - PasswordService
+      - EmailService
+    methods:
+      - name: register
+        async: true
+        params:
+          email: Email
+          password: "&str"
+          profile_data: ProfileData
+        returns: "Result<User, RegistrationError>"
+      - name: resend_verification
+        async: true
+        params:
+          user_id: Uuid
+        returns: "Result<(), RegistrationError>"
+    error_type: RegistrationError
+
+  # Service with external client dependencies
+  PaymentService:
+    stateless: false
+    dependencies:
+      - OrderRepository
+      - PaymentRepository
+      - StripeClient
+      - PayPalClient
+    methods:
+      - name: process_payment
+        async: true
+        params:
+          order_id: Uuid
+          payment_method: PaymentMethod
+          amount: Money
+        returns: "Result<PaymentResult, PaymentError>"
+      - name: refund
+        async: true
+        params:
+          payment_id: Uuid
+          amount: "Option<Money>"
+        returns: "Result<RefundResult, PaymentError>"
+      - name: get_payment_status
+        async: true
+        params:
+          payment_id: Uuid
+        returns: "Result<PaymentStatus, PaymentError>"
+    error_type: PaymentError
+
+  # Order domain service
+  OrderService:
+    stateless: false
+    dependencies:
+      - OrderRepository
+      - ProductRepository
+      - InventoryService
+      - PaymentService
+    methods:
+      - name: place_order
+        async: true
+        params:
+          customer_id: Uuid
+          items: "Vec<OrderItem>"
+        returns: "Result<Order, OrderError>"
+      - name: cancel_order
+        async: true
+        params:
+          order_id: Uuid
+          reason: String
+        returns: "Result<(), OrderError>"
+      - name: calculate_total
+        params:
+          items: "&[OrderItem]"
+        returns: Money

@@ -1,0 +1,80 @@
+# Value Object Examples - Tests both wrapper and composite value objects
+value_objects:
+  # Wrapper value object (single inner type)
+  Email:
+    inner_type: String
+    validation: email_format
+    methods:
+      - name: domain
+        returns: "&str"
+        description: "Returns the domain part of the email"
+      - name: local_part
+        returns: "&str"
+        description: "Returns the local part before @"
+
+  # Composite value object (multiple fields)
+  Money:
+    fields:
+      amount:
+        type: decimal
+        required: true
+      currency:
+        type: string
+        required: true
+        min_length: 3
+        max_length: 3
+    methods:
+      - name: add
+        params:
+          other: Money
+        returns: "Result<Money, MoneyError>"
+      - name: subtract
+        params:
+          other: Money
+        returns: "Result<Money, MoneyError>"
+      - name: multiply
+        params:
+          factor: f64
+        returns: Money
+      - name: is_zero
+        returns: bool
+        const: true
+    derives:
+      - Clone
+      - Debug
+      - PartialEq
+    messages:
+      amount_positive: "Amount must be positive"
+      currency_match: "Currencies must match for arithmetic operations"
+
+  # Address value object (composite)
+  Address:
+    fields:
+      street:
+        type: string
+        required: true
+      city:
+        type: string
+        required: true
+      postal_code:
+        type: string
+        required: true
+      country:
+        type: string
+        required: true
+    methods:
+      - name: format_single_line
+        returns: String
+      - name: is_complete
+        returns: bool
+        const: true
+
+  # Phone number wrapper with validation
+  PhoneNumber:
+    inner_type: String
+    validation: phone_format
+    methods:
+      - name: country_code
+        returns: "Option<&str>"
+      - name: is_mobile
+        returns: bool

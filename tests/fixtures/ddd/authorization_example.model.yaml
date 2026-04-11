@@ -1,0 +1,153 @@
+# Authorization Example - Tests RBAC and ABAC configuration
+models:
+  - name: Document
+    collection: documents
+    fields:
+      id:
+        type: uuid
+        primary_key: true
+      title:
+        type: string
+        required: true
+      content:
+        type: text
+      owner_id:
+        type: uuid
+        required: true
+      department_id:
+        type: uuid
+      classification:
+        type: DocumentClassification
+      created_at:
+        type: timestamp
+        auto: true
+
+enums:
+  - name: DocumentClassification
+    variants:
+      - Public
+      - Internal
+      - Confidential
+      - Secret
+
+authorization:
+  # Permission definitions by resource
+  permissions:
+    users:
+      - read
+      - create
+      - update
+      - delete
+      - manage
+    documents:
+      - read
+      - create
+      - update
+      - delete
+      - share
+      - archive
+    reports:
+      - read
+      - create
+      - export
+    settings:
+      - read
+      - update
+
+  # Role definitions with hierarchy
+  roles:
+    guest:
+      permissions:
+        - "documents.read"
+      level: 0
+      description: "Anonymous or unauthenticated access"
+
+    user:
+      permissions:
+        - "users.read"
+        - "documents.read"
+        - "documents.create"
+        - "reports.read"
+      level: 10
+      inherits: guest
+      description: "Basic authenticated user"
+
+    editor:
+      permissions:
+        - "documents.update"
+        - "documents.share"
+        - "reports.create"
+      level: 30
+      inherits: user
+      description: "Can edit and share documents"
+
+    manager:
+      permissions:
+        - "users.create"
+        - "users.update"
+        - "documents.delete"
+        - "documents.archive"
+        - "reports.export"
+      level: 50
+      inherits: editor
+      description: "Department manager with elevated privileges"
+
+    admin:
+      permissions:
+        - "users.*"
+        - "documents.*"
+        - "reports.*"
+        - "settings.*"
+      level: 80
+      description: "Full administrative access"
+
+    superadmin:
+      permissions:
+        - "*"
+      level: 100
+      description: "Unrestricted system access"
+
+  # ABAC Policies
+  policies:
+    # Owner can always access their own resources
+    document_owner:
+      type: any
+      description: "Document owners have full access to their documents"
+      rules:
+        - owner:
+            resource: Document
+            field: owner_id
+            actor_field: id
+
+    # Department-based access
+    department_access:
+      type: all
+      description: "Users can access documents in their department"
+      rules:
+        - permission: "documents.read"
+        - condition: "actor.department_id == resource.department_id"
+
+    # Classification-based restrictions
+    confidential_access:
+      type: all
+      description: "Only managers can access confidential documents"
+      rules:
+        - role: manager
+        - condition: "resource.classification in ['Confidential', 'Secret']"
+
+    # Time-based access
+    business_hours_only:
+      type: all
+      description: "Some operations restricted to business hours"
+      rules:
+        - permission: "documents.delete"
+        - condition: "current_hour >= 9 && current_hour <= 17"
+        - condition: "current_day_of_week >= 1 && current_day_of_week <= 5"
+
+    # Multi-factor authentication required
+    sensitive_operations:
+      type: all
+      description: "Sensitive operations require MFA"
+      rules:
+        - permission: "users.delete"
+        - condition: "actor.mfa_verified == true"

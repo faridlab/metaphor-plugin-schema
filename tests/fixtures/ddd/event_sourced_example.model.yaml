@@ -1,0 +1,98 @@
+# Event Sourced Examples - Tests event sourcing configuration with snapshots
+models:
+  - name: Order
+    collection: orders
+    fields:
+      id:
+        type: uuid
+        primary_key: true
+      customer_id:
+        type: uuid
+        required: true
+      status:
+        type: OrderStatus
+        required: true
+      total:
+        type: decimal
+      items:
+        type: json
+      created_at:
+        type: timestamp
+        auto: true
+
+  - name: Account
+    collection: accounts
+    fields:
+      id:
+        type: uuid
+        primary_key: true
+      owner_id:
+        type: uuid
+        required: true
+      balance:
+        type: decimal
+        required: true
+      currency:
+        type: string
+        required: true
+      status:
+        type: AccountStatus
+
+enums:
+  - name: OrderStatus
+    variants:
+      - Pending
+      - Confirmed
+      - Processing
+      - Shipped
+      - Delivered
+      - Cancelled
+      - Refunded
+
+  - name: AccountStatus
+    variants:
+      - Active
+      - Frozen
+      - Closed
+
+event_sourced:
+  # Order with full event sourcing
+  Order:
+    events:
+      - OrderPlaced
+      - OrderConfirmed
+      - OrderItemAdded
+      - OrderItemRemoved
+      - OrderShipped
+      - OrderDelivered
+      - OrderCancelled
+      - OrderRefunded
+    snapshot:
+      enabled: true
+      every_n_events: 50
+    handlers:
+      OrderPlaced: handle_order_placed
+      OrderConfirmed: handle_order_confirmed
+      OrderShipped: handle_order_shipped
+
+  # Account with more frequent snapshots
+  Account:
+    events:
+      - AccountOpened
+      - MoneyDeposited
+      - MoneyWithdrawn
+      - AccountFrozen
+      - AccountUnfrozen
+      - AccountClosed
+    snapshot:
+      enabled: true
+      every_n_events: 100
+      max_age_seconds: 3600
+      storage: database
+
+  # Simple entity with event sourcing but no snapshots
+  AuditLog:
+    events:
+      - AuditEntryCreated
+    snapshot:
+      enabled: false

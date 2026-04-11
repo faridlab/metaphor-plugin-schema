@@ -1,0 +1,269 @@
+# Complete DDD Example - Combines all DDD features in one schema
+# This fixture tests the full YAML → AST → Generator pipeline
+
+models:
+  - name: Order
+    collection: orders
+    fields:
+      id:
+        type: uuid
+        primary_key: true
+      customer_id:
+        type: uuid
+        required: true
+      status:
+        type: OrderStatus
+        required: true
+      total:
+        type: decimal
+      shipping_address:
+        type: json
+      billing_address:
+        type: json
+      created_at:
+        type: timestamp
+        auto: true
+      updated_at:
+        type: timestamp
+        auto: true
+
+  - name: Customer
+    collection: customers
+    fields:
+      id:
+        type: uuid
+        primary_key: true
+      email:
+        type: string
+        required: true
+        unique: true
+      name:
+        type: string
+        required: true
+      status:
+        type: CustomerStatus
+      created_at:
+        type: timestamp
+        auto: true
+
+enums:
+  - name: OrderStatus
+    variants:
+      - Pending
+      - Confirmed
+      - Shipped
+      - Delivered
+      - Cancelled
+
+  - name: CustomerStatus
+    variants:
+      - Active
+      - Inactive
+      - Suspended
+
+# Value Objects
+value_objects:
+  Money:
+    fields:
+      amount:
+        type: decimal
+        required: true
+      currency:
+        type: string
+        required: true
+    methods:
+      - name: add
+        params:
+          other: Money
+        returns: "Result<Money, Error>"
+      - name: is_positive
+        returns: bool
+        const: true
+
+  Email:
+    inner_type: String
+    validation: email_format
+    methods:
+      - name: domain
+        returns: "&str"
+
+  Address:
+    fields:
+      street:
+        type: string
+        required: true
+      city:
+        type: string
+        required: true
+      postal_code:
+        type: string
+        required: true
+      country:
+        type: string
+        required: true
+    methods:
+      - name: format
+        returns: String
+
+# Entity Definitions
+entities:
+  Order:
+    model: Order
+    implements:
+      - Auditable
+    value_objects:
+      total: Money
+      shipping_address: Address
+      billing_address: Address
+    methods:
+      - name: confirm
+        mutates: true
+        returns: "Result<(), OrderError>"
+      - name: ship
+        mutates: true
+        async: true
+        params:
+          tracking_number: String
+        returns: "Result<(), OrderError>"
+      - name: cancel
+        mutates: true
+        params:
+          reason: String
+        returns: "Result<(), OrderError>"
+      - name: can_cancel
+        returns: bool
+      - name: calculate_total
+        returns: Money
+    invariants:
+      - "total must be positive"
+      - "shipping_address required for physical orders"
+
+  Customer:
+    model: Customer
+    implements:
+      - SoftDeletable
+    value_objects:
+      email: Email
+    methods:
+      - name: activate
+        mutates: true
+      - name: suspend
+        mutates: true
+        params:
+          reason: String
+      - name: can_place_order
+        returns: bool
+
+# Domain Services
+domain_services:
+  OrderService:
+    stateless: false
+    dependencies:
+      - OrderRepository
+      - CustomerRepository
+      - PaymentService
+      - InventoryService
+    methods:
+      - name: place_order
+        async: true
+        params:
+          customer_id: Uuid
+          items: "Vec<OrderItem>"
+        returns: "Result<Order, OrderError>"
+      - name: process_payment
+        async: true
+        params:
+          order_id: Uuid
+          payment_method: PaymentMethod
+        returns: "Result<PaymentResult, OrderError>"
+
+  CustomerService:
+    stateless: false
+    dependencies:
+      - CustomerRepository
+      - EmailService
+    methods:
+      - name: register
+        async: true
+        params:
+          email: Email
+          name: String
+        returns: "Result<Customer, CustomerError>"
+      - name: send_welcome_email
+        async: true
+        params:
+          customer_id: Uuid
+        returns: "Result<(), CustomerError>"
+
+# Event Sourcing
+event_sourced:
+  Order:
+    events:
+      - OrderPlaced
+      - OrderConfirmed
+      - OrderShipped
+      - OrderDelivered
+      - OrderCancelled
+    snapshot:
+      enabled: true
+      every_n_events: 50
+
+  Customer:
+    events:
+      - CustomerRegistered
+      - CustomerActivated
+      - CustomerSuspended
+    snapshot:
+      enabled: true
+      every_n_events: 100
+
+# Authorization
+authorization:
+  permissions:
+    orders:
+      - read
+      - create
+      - update
+      - cancel
+    customers:
+      - read
+      - create
+      - update
+      - delete
+
+  roles:
+    customer:
+      permissions:
+        - "orders.read"
+        - "orders.create"
+      level: 10
+
+    support:
+      permissions:
+        - "orders.read"
+        - "orders.update"
+        - "customers.read"
+      level: 30
+      inherits: customer
+
+    admin:
+      permissions:
+        - "orders.*"
+        - "customers.*"
+      level: 80
+
+  policies:
+    order_owner:
+      type: any
+      rules:
+        - owner:
+            resource: Order
+            field: customer_id
+
+    customer_self:
+      type: any
+      rules:
+        - owner:
+            resource: Customer
+            field: id
+            actor_field: customer_id
