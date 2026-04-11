@@ -1,0 +1,80 @@
+// User entity definition for Sapiens module
+
+model User {
+    collection: users
+
+    fields {
+        id          uuid        @id @default(uuid)
+        email       email       @unique @required
+        username    string      @unique @required @min(3) @max(50)
+        password    string      @required @min(8)
+        status      Status      @default(active)
+        created_at  datetime    @default(now)
+        updated_at  datetime?
+        deleted_at  datetime?
+    }
+
+    relations {
+        profile     Profile     @one
+        roles       Role[]      @many_to_many
+    }
+
+    indexes {
+        @@index(email)
+        @@index(username)
+        @@index(status, created_at)
+    }
+}
+
+enum Status {
+    active      @default @label("Active User")
+    inactive    @label("Inactive User")
+    pending     @label("Pending Verification")
+    suspended   @label("Suspended Account")
+}
+
+model Profile {
+    collection: profiles
+
+    fields {
+        id          uuid        @id @default(uuid)
+        user_id     uuid        @required @foreign_key(User.id)
+        first_name  string?     @max(100)
+        last_name   string?     @max(100)
+        avatar_url  url?
+        bio         string?     @max(500)
+        created_at  datetime    @default(now)
+        updated_at  datetime?
+    }
+}
+
+model Role {
+    collection: roles
+
+    fields {
+        id          uuid        @id @default(uuid)
+        name        string      @unique @required
+        description string?
+        created_at  datetime    @default(now)
+    }
+
+    relations {
+        permissions Permission[] @many_to_many
+    }
+}
+
+model Permission {
+    collection: permissions
+
+    fields {
+        id          uuid        @id @default(uuid)
+        name        string      @unique @required
+        resource    string      @required
+        action      string      @required
+        created_at  datetime    @default(now)
+    }
+
+    indexes {
+        @@unique(resource, action)
+    }
+}

@@ -1,0 +1,88 @@
+// User workflow definition for Sapiens module
+
+workflow UserWorkflow from "User" {
+    states(status) {
+        pending @initial {
+            on_enter {
+                notify("user.pending", $user.email)
+            }
+        }
+        active {
+            on_enter {
+                send_email("welcome", $user.email)
+                log("user.activated", $user.id)
+            }
+        }
+        inactive
+        suspended @final
+
+        transitions {
+            activate: pending -> active @role(admin)
+            deactivate: active -> inactive @role(admin)
+            reactivate: inactive -> active @role(admin)
+            suspend: [active, inactive] -> suspended @role(admin)
+        }
+    }
+
+    rules {
+        email_format {
+            when: [create, update]
+            condition: email != ""
+            message: "Email is required"
+            code: "USER_EMAIL_REQUIRED"
+        }
+
+        password_strength {
+            when: create
+            condition: password.length >= 8
+            message: "Password must be at least 8 characters"
+        }
+
+        username_unique {
+            when: [create, update]
+            condition: count(User, username == $this.username && id != $this.id) == 0
+            message: "Username is already taken"
+        }
+    }
+
+    permissions {
+        admin {
+            allow: all
+        }
+
+        user {
+            allow: read
+                only: [id, email, username, status, created_at]
+            allow: update
+                only: [username]
+                if: $user.id == id
+            deny: delete
+        }
+
+        guest {
+            allow: read
+                only: [id, username]
+        }
+    }
+
+    triggers {
+        after_create {
+            send_email("verification", email)
+            log("user.created")
+        }
+
+        after_update {
+            if: $old.email != email
+            send_email("email_changed", email)
+        }
+
+        before_delete {
+            log("user.deleting")
+        }
+    }
+
+    computed {
+        full_name: profile.first_name + " " + profile.last_name
+        is_verified: status == "active"
+    }
+}
