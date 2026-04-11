@@ -1,0 +1,33 @@
+[package]
+name = "metaphor-schema-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.metaphor-plugin-schema]
+path = ".."
+
+# Prevent this from interfering with the monorepo workspace
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_model_yaml"
+path = "fuzz_targets/fuzz_model_yaml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_hook_yaml"
+path = "fuzz_targets/fuzz_hook_yaml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_workflow_yaml"
+path = "fuzz_targets/fuzz_workflow_yaml.rs"
+doc = false
