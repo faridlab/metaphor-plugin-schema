@@ -74,6 +74,7 @@ pub mod migration;
 pub mod parser;
 pub mod resolver;
 pub mod utils;
+pub mod webgen;
 
 /// Re-export commonly used types
 pub use ast::{Model, Hook, Workflow};
