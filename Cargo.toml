@@ -54,9 +54,14 @@ regex = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
 tokio = { version = "1.0", features = ["rt-multi-thread"], optional = true }
 
+# Optional proto file parsing (for webgen)
+protox = { version = "0.7", optional = true }
+
 [features]
-default = []
+default = ["webapp"]
 database = ["sqlx", "tokio"]
+webapp = []
+proto-parse = ["protox"]
 
 [dev-dependencies]
 pretty_assertions = "1"
