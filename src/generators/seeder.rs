@@ -226,11 +226,47 @@ impl SeederGenerator {
         output
     }
 
+    /// Resolve the Rust identifier for the host crate that contains the
+    /// `seeders/` module, so the seeder binary can `use <crate>::seeders::*`.
+    ///
+    /// Strategy: read `./Cargo.toml` at generation time and extract
+    /// `[package].name` (with `-` → `_`). Falls back to `backbone_<module>`
+    /// for the library-style convention used inside `backbone-framework`.
+    fn resolve_host_crate_name(module_name: &str) -> String {
+        let fallback = || format!("backbone_{}", module_name.replace('-', "_"));
+        let Ok(contents) = std::fs::read_to_string("Cargo.toml") else {
+            return fallback();
+        };
+        let mut in_package = false;
+        for raw in contents.lines() {
+            let line = raw.trim();
+            if line.starts_with('[') {
+                in_package = line == "[package]";
+                continue;
+            }
+            if !in_package {
+                continue;
+            }
+            // Match: name = "<value>"  (tolerant of whitespace / single-quotes).
+            let Some(rest) = line.strip_prefix("name") else { continue };
+            let rest = rest.trim_start();
+            let Some(rest) = rest.strip_prefix('=') else { continue };
+            let rest = rest.trim_start();
+            let (open, close) = if rest.starts_with('"') { ('"', '"') } else { ('\'', '\'') };
+            if rest.starts_with(open) {
+                if let Some(end) = rest[1..].find(close) {
+                    let name = &rest[1..1 + end];
+                    return name.replace('-', "_");
+                }
+            }
+        }
+        fallback()
+    }
+
     /// Generate seeder binary
     fn generate_seeder_binary(&self, models: &[&Model], module_name: &str) -> String {
         let mut output = String::new();
-        let crate_name = format!("backbone_{}", module_name);
-        let crate_name_snake = crate_name.replace('-', "_");
+        let crate_name_snake = Self::resolve_host_crate_name(module_name);
 
         writeln!(output, "//! Database seeder binary for module: {}", module_name).unwrap();
         writeln!(output, "//!").unwrap();
