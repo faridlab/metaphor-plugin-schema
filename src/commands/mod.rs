@@ -36,7 +36,9 @@ pub enum Commands {
     /// Generate server-side Rust code (alias for `schema generate`)
     ///
     /// Example: metaphor-schema generate:rust bersihir --target all
-    #[command(name = "generate:rust")]
+    ///
+    /// Also accessible as plain `generate` (defaults to Rust target).
+    #[command(name = "generate:rust", alias = "generate")]
     GenerateRust {
         /// Module name to generate code for
         module: String,
