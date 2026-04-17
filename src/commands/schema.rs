@@ -1512,13 +1512,14 @@ fn collect_custom_blocks(existing_content: &str, generated_content: &str) -> Vec
                 .any(|l| l.contains("END CUSTOM"));
 
             let mut block_lines = vec![line.to_string()];
-            let line_number = i + 1; // 1-based line number for diagnostics
             i += 1;
 
             if has_end_marker {
-                // Paired block: preserve ALL lines verbatim until END CUSTOM
-                const MAX_BLOCK_LINES: usize = 200;
-                let mut consumed = 0;
+                // Paired block: preserve ALL lines verbatim until END CUSTOM.
+                // The `has_end_marker` scan above already confirmed a closing
+                // marker exists before the next `// <<< CUSTOM`, so we loop
+                // without an arbitrary line cap — capping here truncates
+                // legitimate multi-line blocks (e.g. large `matches!` macros).
                 while i < existing_lines.len() {
                     let next = existing_lines[i];
                     if next.contains("END CUSTOM") {
@@ -1528,11 +1529,6 @@ fn collect_custom_blocks(existing_content: &str, generated_content: &str) -> Vec
                     }
                     block_lines.push(next.to_string());
                     i += 1;
-                    consumed += 1;
-                    if consumed >= MAX_BLOCK_LINES {
-                        eprintln!("  Warning: Missing '// END CUSTOM' marker after line {}, block truncated at 200 lines", line_number);
-                        break;
-                    }
                 }
             } else {
                 // Inline marker: filter lines that already exist in generated content
