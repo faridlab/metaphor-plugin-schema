@@ -292,6 +292,8 @@ impl ValueObjectGenerator {
         if has_pattern_validation {
             writeln!(output, "use regex::Regex;").unwrap();
         }
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(output, "use utoipa::ToSchema;").unwrap();
         writeln!(output).unwrap();
 
         // Check if any field is a float type (f32/f64) - can't derive Eq/Hash for floats
@@ -306,6 +308,7 @@ impl ValueObjectGenerator {
         } else {
             writeln!(output, "#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]").unwrap();
         }
+        writeln!(output, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
 
         // Struct definition
         writeln!(output, "pub struct {} {{", name).unwrap();
@@ -482,10 +485,13 @@ impl ValueObjectGenerator {
         writeln!(output, "use chrono::{{DateTime, Utc}};").unwrap();
         writeln!(output, "use serde::{{Deserialize, Serialize}};").unwrap();
         writeln!(output, "use uuid::Uuid;").unwrap();
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(output, "use utoipa::ToSchema;").unwrap();
         writeln!(output).unwrap();
 
         // Struct derives - DateTime<Utc> doesn't impl Eq/Hash, so exclude those
         writeln!(output, "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]").unwrap();
+        writeln!(output, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
 
         // Struct definition
         writeln!(output, "pub struct Metadata {{").unwrap();
@@ -791,6 +797,8 @@ impl ValueObjectGenerator {
         if needs_uuid {
             writeln!(output, "use uuid::Uuid;").unwrap();
         }
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(output, "use utoipa::ToSchema;").unwrap();
         writeln!(output).unwrap();
 
         // Determine derives - default plus custom
@@ -829,6 +837,7 @@ impl ValueObjectGenerator {
 
         // Struct derives
         writeln!(output, "#[derive({})]", derives.join(", ")).unwrap();
+        writeln!(output, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
 
         // Tuple struct for simple value objects
         writeln!(output, "pub struct {}(pub {});", name, inner_type).unwrap();
@@ -945,6 +954,7 @@ impl ValueObjectGenerator {
 
         // Struct derives
         writeln!(output, "#[derive({})]", derives.join(", ")).unwrap();
+        writeln!(output, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
 
         // Struct definition
         writeln!(output, "pub struct {} {{", name).unwrap();

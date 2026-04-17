@@ -1499,13 +1499,14 @@ impl RustGenerator {
             // Use fully qualified path to avoid conflict
             writeln!(output, "use serde::{{Deserialize, Serialize}};").unwrap();
             writeln!(output, "use std::str::FromStr;").unwrap();
-            writeln!(output).unwrap();
         } else {
             writeln!(output, "use serde::{{Deserialize, Serialize}};").unwrap();
             writeln!(output, "use sqlx::Type;").unwrap();
             writeln!(output, "use std::str::FromStr;").unwrap();
-            writeln!(output).unwrap();
         }
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(output, "use utoipa::ToSchema;").unwrap();
+        writeln!(output).unwrap();
 
         // Convert to PascalCase first (needed for enum)
         let pascal_enum_name = to_pascal_case(enum_name);
@@ -1517,6 +1518,7 @@ impl RustGenerator {
             "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]"
         )
         .unwrap();
+        writeln!(output, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
         // Use the actual PostgreSQL enum type name (snake_case)
         writeln!(output, "#[sqlx(type_name = \"{}\", rename_all = \"snake_case\")]",
@@ -1784,12 +1786,15 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "use chrono::{{DateTime, Utc}};").unwrap();
         writeln!(mod_content, "use serde::{{Deserialize, Serialize}};").unwrap();
         writeln!(mod_content, "use uuid::Uuid;").unwrap();
+        writeln!(mod_content, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(mod_content, "use utoipa::ToSchema;").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "/// Audit metadata stored as JSONB in the database").unwrap();
         writeln!(mod_content, "///").unwrap();
         writeln!(mod_content, "/// This struct consolidates audit fields (timestamps and actors) into a single").unwrap();
         writeln!(mod_content, "/// JSONB column for efficient storage and flexible querying.").unwrap();
         writeln!(mod_content, "#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]").unwrap();
+        writeln!(mod_content, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
         writeln!(mod_content, "pub struct AuditMetadata {{").unwrap();
         writeln!(mod_content, "    /// Timestamp when the record was created").unwrap();
         writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();

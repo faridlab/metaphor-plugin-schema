@@ -648,6 +648,24 @@ impl DtoGenerator {
         }
     }
 
+    /// Unwrap `Option<T>` / `Vec<T>` to reach the inner type, so validator
+    /// selection (`length` vs `range`) sees the effective primitive type.
+    fn effective_type_ref<'a>(ty: &'a TypeRef) -> &'a TypeRef {
+        match ty {
+            TypeRef::Optional(inner) | TypeRef::Array(inner) => Self::effective_type_ref(inner),
+            _ => ty,
+        }
+    }
+
+    fn is_string_like(ty: &TypeRef) -> bool {
+        matches!(
+            Self::effective_type_ref(ty),
+            TypeRef::Primitive(PrimitiveType::String)
+                | TypeRef::Primitive(PrimitiveType::Markdown)
+                | TypeRef::Primitive(PrimitiveType::Html)
+        )
+    }
+
     fn write_field_validation_attrs(&self, output: &mut String, field: &Field) -> Result<(), GenerateError> {
         let mut validations = Vec::new();
 
@@ -660,7 +678,7 @@ impl DtoGenerator {
                 "url" => validations.push("url".to_string()),
                 "min_length" | "min" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::String) | TypeRef::Primitive(PrimitiveType::Markdown) | TypeRef::Primitive(PrimitiveType::Html)) {
+                        if Self::is_string_like(&field.type_ref) {
                             validations.push(format!("length(min = {})", val));
                         } else {
                             validations.push(format!("range(min = {})", val));
@@ -669,7 +687,7 @@ impl DtoGenerator {
                 }
                 "max_length" | "max" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::String) | TypeRef::Primitive(PrimitiveType::Markdown) | TypeRef::Primitive(PrimitiveType::Html)) {
+                        if Self::is_string_like(&field.type_ref) {
                             validations.push(format!("length(max = {})", val));
                         } else {
                             validations.push(format!("range(max = {})", val));
@@ -693,7 +711,10 @@ impl DtoGenerator {
     }
 
     fn write_field_validation_attrs_optional(&self, output: &mut String, field: &Field) -> Result<(), GenerateError> {
-        // For optional fields in PatchDto, we need to validate only if present
+        // For optional fields in PatchDto, emit the validators directly —
+        // `validator` handles `Option<T>` by validating only when `Some`.
+        // (Earlier versions emitted `validate(nested)`, which requires
+        // validator 0.18+ and applies to sub-structs, not length/range.)
         let mut validations = Vec::new();
 
         for attr in &field.attributes {
@@ -702,7 +723,7 @@ impl DtoGenerator {
                 "url" => validations.push("url".to_string()),
                 "min_length" | "min" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::String)) {
+                        if Self::is_string_like(&field.type_ref) {
                             validations.push(format!("length(min = {})", val));
                         } else {
                             validations.push(format!("range(min = {})", val));
@@ -711,7 +732,7 @@ impl DtoGenerator {
                 }
                 "max_length" | "max" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::String)) {
+                        if Self::is_string_like(&field.type_ref) {
                             validations.push(format!("length(max = {})", val));
                         } else {
                             validations.push(format!("range(max = {})", val));
@@ -722,10 +743,8 @@ impl DtoGenerator {
             }
         }
 
-        // Only write validation if there are any
-        // For patch DTOs, wrap in nested validation for Option
         if !validations.is_empty() {
-            writeln!(output, "    #[cfg_attr(feature = \"validation\", validate(nested))]").unwrap();
+            writeln!(output, "    #[cfg_attr(feature = \"validation\", validate({}))]", validations.join(", ")).unwrap();
         }
 
         Ok(())

@@ -641,9 +641,9 @@ impl ModuleGenerator {
             writeln!(output, "pub mod triggers;").unwrap();
         }
 
-        // Add validation module if there are models (validators are generated for each model)
+        // Add validator module if there are models (validators are generated for each model)
         if !schema.schema.models.is_empty() {
-            writeln!(output, "pub mod validation;").unwrap();
+            writeln!(output, "pub mod validator;").unwrap();
         }
 
         // Add workflows module if there are workflows defined
