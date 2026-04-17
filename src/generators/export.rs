@@ -31,6 +31,34 @@ impl ExportGenerator {
         Self
     }
 
+    /// Walk a `TypeRef` and set flags for types that need additional imports.
+    fn collect_type_needs(
+        ty: &crate::ast::TypeRef,
+        needs_decimal: &mut bool,
+        needs_naive_date: &mut bool,
+        needs_naive_time: &mut bool,
+    ) {
+        use crate::ast::{PrimitiveType, TypeRef};
+        match ty {
+            TypeRef::Primitive(p) => match p {
+                PrimitiveType::Decimal | PrimitiveType::Money | PrimitiveType::Percentage => {
+                    *needs_decimal = true;
+                }
+                PrimitiveType::Date => *needs_naive_date = true,
+                PrimitiveType::Time => *needs_naive_time = true,
+                _ => {}
+            },
+            TypeRef::Optional(inner) | TypeRef::Array(inner) => {
+                Self::collect_type_needs(inner, needs_decimal, needs_naive_date, needs_naive_time);
+            }
+            TypeRef::Map { key, value } => {
+                Self::collect_type_needs(key, needs_decimal, needs_naive_date, needs_naive_time);
+                Self::collect_type_needs(value, needs_decimal, needs_naive_date, needs_naive_time);
+            }
+            _ => {}
+        }
+    }
+
     /// Generate exports module entry point
     fn generate_mod(&self, schema: &ResolvedSchema) -> String {
         let mut output = String::new();
@@ -104,9 +132,29 @@ impl ExportGenerator {
         writeln!(output, "//! They are decoupled from internal domain entities.").unwrap();
         writeln!(output).unwrap();
 
+        // Scan all models for types that require additional imports.
+        let mut needs_decimal = false;
+        let mut needs_naive_date = false;
+        let mut needs_naive_time = false;
+        for model in &schema.schema.models {
+            for field in &model.fields {
+                Self::collect_type_needs(&field.type_ref, &mut needs_decimal, &mut needs_naive_date, &mut needs_naive_time);
+            }
+        }
+
         writeln!(output, "use serde::{{Deserialize, Serialize}};").unwrap();
         writeln!(output, "use uuid::Uuid;").unwrap();
-        writeln!(output, "use chrono::{{DateTime, Utc}};").unwrap();
+        let mut chrono_imports = vec!["DateTime", "Utc"];
+        if needs_naive_date { chrono_imports.push("NaiveDate"); }
+        if needs_naive_time { chrono_imports.push("NaiveTime"); }
+        writeln!(output, "use chrono::{{{}}};", chrono_imports.join(", ")).unwrap();
+        if needs_decimal {
+            writeln!(output, "use rust_decimal::Decimal;").unwrap();
+        }
+        // Re-exported structs reference schema-defined enums (AccountType,
+        // OrderStatus, …). Pull them in via a wildcard import from the
+        // domain layer — exported types don't own the enum definitions.
+        writeln!(output, "use crate::domain::entity::*;").unwrap();
         writeln!(output).unwrap();
 
         for model in &schema.schema.models {
