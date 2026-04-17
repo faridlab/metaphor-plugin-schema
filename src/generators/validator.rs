@@ -64,7 +64,8 @@ impl ValidatorGenerator {
 
             if field.has_attribute("required") || !is_optional {
                 match inner {
-                    TypeRef::Primitive(PrimitiveType::Uuid) => { imports.insert("RequiredUuid"); }
+                    // See note in `field_rules`: actual `Uuid` fields are skipped
+                    // because `RequiredUuid` operates on `&str`.
                     TypeRef::Primitive(PrimitiveType::String)
                     | TypeRef::Primitive(PrimitiveType::Email)
                     | TypeRef::Primitive(PrimitiveType::Url) => { imports.insert("RequiredString"); }
@@ -132,14 +133,10 @@ impl ValidatorGenerator {
         // Required / optional rules
         if !is_optional {
             match inner {
-                TypeRef::Primitive(PrimitiveType::Uuid) => {
-                    rules.push(format!(
-                        "        .rule(RequiredUuid::new(\"{fname}\", |e: &{name}| &e.{rust_field}))",
-                        fname = fname,
-                        name = name,
-                        rust_field = escape_rust_keyword(fname),
-                    ));
-                }
+                // Skip RequiredUuid for actual `Uuid` fields — the type already
+                // guarantees a valid UUID. `RequiredUuid` is string-based and
+                // expects `Fn(&E) -> &str`, so it can only be used on UUID
+                // fields stored as `String`.
                 TypeRef::Primitive(PrimitiveType::String)
                 | TypeRef::Primitive(PrimitiveType::Email)
                 | TypeRef::Primitive(PrimitiveType::Url) => {
@@ -180,12 +177,27 @@ impl ValidatorGenerator {
                     }
                 }
                 "min" | "non_negative" => {
-                    rules.push(format!(
-                        "        .rule(NonNegative::new(\"{fname}\", |e: &{name}| e.{rust_field}))",
-                        fname = fname,
-                        name = name,
-                        rust_field = escape_rust_keyword(fname),
-                    ));
+                    // `NonNegative` in backbone-core takes a closure returning `i64`.
+                    // Only emit it for non-optional integer fields; cast `i32` to
+                    // `i64`. Skip `Decimal`/`Money`/`Percentage` and `Option<T>`
+                    // since there's no safe cast — those would need dedicated rules.
+                    if !is_optional {
+                        // `Int` and `Int32` both map to Rust `i32`; only `Int64` is native `i64`.
+                        let cast = match inner {
+                            TypeRef::Primitive(PrimitiveType::Int64) => Some(""),
+                            TypeRef::Primitive(PrimitiveType::Int) | TypeRef::Primitive(PrimitiveType::Int32) => Some(" as i64"),
+                            _ => None,
+                        };
+                        if let Some(cast) = cast {
+                            rules.push(format!(
+                                "        .rule(NonNegative::new(\"{fname}\", |e: &{name}| e.{rust_field}{cast}))",
+                                fname = fname,
+                                name = name,
+                                rust_field = escape_rust_keyword(fname),
+                                cast = cast,
+                            ));
+                        }
+                    }
                 }
                 "pattern" => {
                     if let Some(pat) = attr.first_arg().and_then(|v| v.as_str()) {
@@ -195,7 +207,7 @@ impl ValidatorGenerator {
                             format!("e.{}.as_str()", escape_rust_keyword(fname))
                         };
                         rules.push(format!(
-                            "        .rule(Regex::new(\"{fname}\", |e: &{name}| {acc}, r\"{pat}\"))",
+                            "        .rule(Regex::new(\"{fname}\", |e: &{name}| {acc}, r\"{pat}\", \"does not match required pattern\"))",
                             fname = fname, name = name, acc = accessor, pat = pat,
                         ));
                     }

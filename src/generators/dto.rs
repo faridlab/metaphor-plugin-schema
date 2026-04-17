@@ -663,6 +663,14 @@ impl DtoGenerator {
             TypeRef::Primitive(PrimitiveType::String)
                 | TypeRef::Primitive(PrimitiveType::Markdown)
                 | TypeRef::Primitive(PrimitiveType::Html)
+                | TypeRef::Primitive(PrimitiveType::Url)
+                | TypeRef::Primitive(PrimitiveType::Email)
+                | TypeRef::Primitive(PrimitiveType::Phone)
+                | TypeRef::Primitive(PrimitiveType::Slug)
+                | TypeRef::Primitive(PrimitiveType::Ip)
+                | TypeRef::Primitive(PrimitiveType::IpV4)
+                | TypeRef::Primitive(PrimitiveType::IpV6)
+                | TypeRef::Primitive(PrimitiveType::Mac)
         )
     }
 
@@ -695,9 +703,10 @@ impl DtoGenerator {
                     }
                 }
                 "pattern" | "regex" => {
-                    if let Some(val) = attr.first_arg().and_then(|v| v.as_str()) {
-                        validations.push(format!("regex(path = \"*{}\")", val));
-                    }
+                    // Skipped: `validator` 0.16 requires `regex = path::to::LAZY_REGEX`,
+                    // not an inline string. Regex checks are emitted by the entity
+                    // validator generator instead (via backbone_core::Regex).
+                    let _ = attr;
                 }
                 _ => {}
             }
