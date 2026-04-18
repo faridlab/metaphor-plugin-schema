@@ -94,7 +94,7 @@ impl AuthGenerator {
         writeln!(output, "        &self,").unwrap();
         writeln!(output, "        action: ResourceAction,").unwrap();
         writeln!(output, "        _entity: &{},", name).unwrap();
-        writeln!(output, "        ctx: &backbone_auth::AuthContext,").unwrap();
+        writeln!(output, "        ctx: &backbone_auth::middleware::AuthContext,").unwrap();
         writeln!(output, "    ) -> bool {{").unwrap();
         writeln!(output, "        let required = match action {{").unwrap();
         writeln!(output, "            ResourceAction::Read   => permissions::READ,").unwrap();
@@ -111,8 +111,7 @@ impl AuthGenerator {
         writeln!(output, "/// Permission guard for {} handlers.", name).unwrap();
         writeln!(output, "///").unwrap();
         writeln!(output, "/// Wraps `{}Service` and checks `{}Policy` before delegating.", name, name).unwrap();
-        writeln!(output, "pub type {}Guard = PermissionGuard<{}, {}Service, {}Policy>;",
-            name, name, name, name).unwrap();
+        writeln!(output, "pub type {}Guard = PermissionGuard<{}>;", name, name).unwrap();
         writeln!(output).unwrap();
         writeln!(output, "/// Service-integrated permission guard for {} (for use in generated handlers).", name).unwrap();
         writeln!(output, "pub type {}ServiceGuard = ServicePermissionGuard<{}, {}Service, {}Policy>;",

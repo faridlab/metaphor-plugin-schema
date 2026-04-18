@@ -596,6 +596,9 @@ impl ModuleGenerator {
             writeln!(output, "pub use computed::*;").unwrap();
         }
         writeln!(output, "pub use entity::*;").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "// <<< CUSTOM").unwrap();
+        writeln!(output, "// END CUSTOM").unwrap();
 
         output
     }
@@ -657,6 +660,8 @@ impl ModuleGenerator {
         writeln!(output).unwrap();
         writeln!(output, "// Re-exports").unwrap();
         writeln!(output, "pub use service::*;").unwrap();
+        writeln!(output, "// <<< CUSTOM").unwrap();
+        writeln!(output, "// END CUSTOM").unwrap();
 
         output
     }
