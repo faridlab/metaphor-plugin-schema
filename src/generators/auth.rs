@@ -97,12 +97,14 @@ impl AuthGenerator {
         writeln!(output, "        ctx: &backbone_auth::middleware::AuthContext,").unwrap();
         writeln!(output, "    ) -> bool {{").unwrap();
         writeln!(output, "        let required = match action {{").unwrap();
-        writeln!(output, "            ResourceAction::Read   => permissions::READ,").unwrap();
+        writeln!(output, "            ResourceAction::Read | ResourceAction::List => permissions::READ,").unwrap();
         writeln!(output, "            ResourceAction::Create => permissions::CREATE,").unwrap();
-        writeln!(output, "            ResourceAction::Update => permissions::UPDATE,").unwrap();
-        writeln!(output, "            ResourceAction::Delete => permissions::DELETE,").unwrap();
+        writeln!(output, "            ResourceAction::Update | ResourceAction::Patch => permissions::UPDATE,").unwrap();
+        writeln!(output, "            ResourceAction::Delete | ResourceAction::HardDelete => permissions::DELETE,").unwrap();
+        writeln!(output, "            ResourceAction::Restore => permissions::RESTORE,").unwrap();
+        writeln!(output, "            ResourceAction::Custom(_) => return false,").unwrap();
         writeln!(output, "        }};").unwrap();
-        writeln!(output, "        ctx.has_permission(required)").unwrap();
+        writeln!(output, "        ctx.permissions.iter().any(|p| p == required)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
