@@ -9,6 +9,7 @@ use crate::ast::model::Model;
 use crate::ast::expressions::{Expression, Literal, FieldRef, BinaryOp, UnaryOp};
 use crate::parser::parse_expression_str;
 use crate::resolver::ResolvedSchema;
+use crate::utils::to_snake_case;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -1644,21 +1645,6 @@ impl Generator for ComputedGenerator {
     fn name(&self) -> &'static str {
         "computed"
     }
-}
-
-fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(c.to_lowercase().next().unwrap());
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 #[cfg(test)]

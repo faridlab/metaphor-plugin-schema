@@ -9,6 +9,7 @@
 
 use super::{GenerateError, GeneratedOutput, Generator};
 use crate::resolver::ResolvedSchema;
+use crate::utils::to_snake_case;
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -205,22 +206,6 @@ fn to_pascal_case(s: &str) -> String {
         .collect()
 }
 
-/// Convert string to snake_case
-fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(c.to_lowercase().next().unwrap());
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +222,7 @@ mod tests {
         assert_eq!(to_snake_case("User"), "user");
         assert_eq!(to_snake_case("UserProfile"), "user_profile");
         assert_eq!(to_snake_case("user"), "user");
+        assert_eq!(to_snake_case("CorporateSLA"), "corporate_sla");
+        assert_eq!(to_snake_case("HTTPRequest"), "http_request");
     }
 }

@@ -264,18 +264,9 @@ impl Default for KotlinTypeMapper {
 pub struct KotlinNaming;
 
 impl KotlinNaming {
-    /// Convert to snake_case
+    /// Convert to snake_case (acronym-aware: "CorporateSLA" -> "corporate_sla")
     pub fn to_snake_case(name: &str) -> String {
-        let mut result = String::new();
-        for (i, c) in name.chars().enumerate() {
-            if c.is_uppercase() && i > 0 {
-                result.push('_');
-                result.extend(c.to_lowercase());
-            } else {
-                result.extend(c.to_lowercase());
-            }
-        }
-        result
+        crate::utils::to_snake_case(name)
     }
 
     /// Convert to camelCase
