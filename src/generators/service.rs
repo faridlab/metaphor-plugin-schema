@@ -182,7 +182,7 @@ impl Generator for ServiceGenerator {
                 }
             } else {
                 for model in &schema.schema.models {
-                    writeln!(mod_content, "mod {}_service;", to_snake_case(&model.name)).unwrap();
+                    writeln!(mod_content, "pub mod {}_service;", to_snake_case(&model.name)).unwrap();
                 }
                 writeln!(mod_content).unwrap();
                 writeln!(mod_content, "// <<< CUSTOM").unwrap();
