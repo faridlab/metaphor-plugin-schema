@@ -396,7 +396,7 @@ export function get{name}Label(value: {name}): string {{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webgen::ast::entity::FieldType;
+    use crate::webgen::ast::entity::{FieldDefinition, FieldType};
 
     fn test_config() -> Config {
         Config::new("test_module")

@@ -120,6 +120,8 @@ fn test_entity_template_includes_serial_name_annotation() {
         relations: vec![],
         indexes: vec![],
         attributes: vec![],
+        disabled_generators: vec![],
+        enabled_generators: vec![],
         span: Default::default(),
     };
 
@@ -182,6 +184,8 @@ fn test_entity_template_no_annotation_for_matching_names() {
         relations: vec![],
         indexes: vec![],
         attributes: vec![],
+        disabled_generators: vec![],
+        enabled_generators: vec![],
         span: Default::default(),
     };
 
