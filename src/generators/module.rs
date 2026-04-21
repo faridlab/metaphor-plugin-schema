@@ -676,12 +676,10 @@ impl ModuleGenerator {
         writeln!(output).unwrap();
         writeln!(output, "pub mod dto;").unwrap();
         writeln!(output, "pub mod http;").unwrap();
-        writeln!(output).unwrap();
-        // gRPC module is feature-gated since it requires proto compilation
-        writeln!(output, "#[cfg(feature = \"grpc\")]").unwrap();
+        // gRPC module is emitted unconditionally — main.rs references it directly.
         writeln!(output, "pub mod grpc;").unwrap();
         writeln!(output).unwrap();
-        // GraphQL module is feature-gated
+        // GraphQL module is feature-gated since it depends on optional async-graphql.
         writeln!(output, "#[cfg(feature = \"graphql\")]").unwrap();
         writeln!(output, "pub mod graphql;").unwrap();
         writeln!(output).unwrap();
