@@ -391,89 +391,57 @@ impl EventStoreGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
-        // stream_all implementation with proper cursor-based streaming
+        // stream_all implementation — buffer into Vec then wrap in stream::iter.
+        // Rationale: sqlx's borrowing `fetch()` requires the query String to outlive
+        // the returned Stream, which isn't possible here without an owning wrapper
+        // or the async-stream crate. fetch_all is correct and simple; event replay
+        // callers typically pull bounded ranges so buffering is acceptable.
         writeln!(output, "    async fn stream_all(&self, from_position: i64) -> Result<Pin<Box<dyn Stream<Item = StoredEvent> + Send>>> {{").unwrap();
         writeln!(output, "        let query = format!(").unwrap();
         writeln!(output, "            \"SELECT * FROM {{}} WHERE sequence > $1 ORDER BY sequence ASC\",").unwrap();
         writeln!(output, "            self.table_name").unwrap();
         writeln!(output, "        );").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        // Use sqlx's native streaming with fetch() for memory-efficient processing").unwrap();
-        writeln!(output, "        let stream = sqlx::query_as::<_, StoredEvent>(&query)").unwrap();
+        writeln!(output, "        let rows = sqlx::query_as::<_, StoredEvent>(&query)").unwrap();
         writeln!(output, "            .bind(from_position)").unwrap();
-        writeln!(output, "            .fetch(&self.pool);").unwrap();
+        writeln!(output, "            .fetch_all(&self.pool)").unwrap();
+        writeln!(output, "            .await?;").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        // Map Result<StoredEvent> to StoredEvent, logging errors").unwrap();
-        writeln!(output, "        use futures::StreamExt;").unwrap();
-        writeln!(output, "        let mapped = stream.filter_map(|result| async move {{").unwrap();
-        writeln!(output, "            match result {{").unwrap();
-        writeln!(output, "                Ok(event) => Some(event),").unwrap();
-        writeln!(output, "                Err(e) => {{").unwrap();
-        writeln!(output, "                    tracing::error!(\"Error streaming event: {{}}\", e);").unwrap();
-        writeln!(output, "                    None").unwrap();
-        writeln!(output, "                }}").unwrap();
-        writeln!(output, "            }}").unwrap();
-        writeln!(output, "        }});").unwrap();
-        writeln!(output).unwrap();
-        writeln!(output, "        Ok(Box::pin(mapped))").unwrap();
+        writeln!(output, "        Ok(Box::pin(futures::stream::iter(rows)))").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
-        // stream_by_type implementation with proper cursor-based streaming
+        // stream_by_type implementation — see stream_all rationale.
         writeln!(output, "    async fn stream_by_type(&self, event_type: &str, from_position: i64) -> Result<Pin<Box<dyn Stream<Item = StoredEvent> + Send>>> {{").unwrap();
-        writeln!(output, "        let event_type = event_type.to_string();").unwrap();
         writeln!(output, "        let query = format!(").unwrap();
         writeln!(output, "            \"SELECT * FROM {{}} WHERE event_type = $1 AND sequence > $2 ORDER BY sequence ASC\",").unwrap();
         writeln!(output, "            self.table_name").unwrap();
         writeln!(output, "        );").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        // Use sqlx's native streaming with fetch() for memory-efficient processing").unwrap();
-        writeln!(output, "        let stream = sqlx::query_as::<_, StoredEvent>(&query)").unwrap();
-        writeln!(output, "            .bind(&event_type)").unwrap();
+        writeln!(output, "        let rows = sqlx::query_as::<_, StoredEvent>(&query)").unwrap();
+        writeln!(output, "            .bind(event_type)").unwrap();
         writeln!(output, "            .bind(from_position)").unwrap();
-        writeln!(output, "            .fetch(&self.pool);").unwrap();
+        writeln!(output, "            .fetch_all(&self.pool)").unwrap();
+        writeln!(output, "            .await?;").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        // Map Result<StoredEvent> to StoredEvent, logging errors").unwrap();
-        writeln!(output, "        use futures::StreamExt;").unwrap();
-        writeln!(output, "        let mapped = stream.filter_map(|result| async move {{").unwrap();
-        writeln!(output, "            match result {{").unwrap();
-        writeln!(output, "                Ok(event) => Some(event),").unwrap();
-        writeln!(output, "                Err(e) => {{").unwrap();
-        writeln!(output, "                    tracing::error!(\"Error streaming event: {{}}\", e);").unwrap();
-        writeln!(output, "                    None").unwrap();
-        writeln!(output, "                }}").unwrap();
-        writeln!(output, "            }}").unwrap();
-        writeln!(output, "        }});").unwrap();
-        writeln!(output).unwrap();
-        writeln!(output, "        Ok(Box::pin(mapped))").unwrap();
+        writeln!(output, "        Ok(Box::pin(futures::stream::iter(rows)))").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
-        // stream_by_aggregate_type implementation
+        // stream_by_aggregate_type implementation — see stream_all rationale.
         writeln!(output, "    async fn stream_by_aggregate_type(&self, aggregate_type: &str, from_position: i64) -> Result<Pin<Box<dyn Stream<Item = StoredEvent> + Send>>> {{").unwrap();
-        writeln!(output, "        let aggregate_type = aggregate_type.to_string();").unwrap();
         writeln!(output, "        let query = format!(").unwrap();
         writeln!(output, "            \"SELECT * FROM {{}} WHERE aggregate_type = $1 AND sequence > $2 ORDER BY sequence ASC\",").unwrap();
         writeln!(output, "            self.table_name").unwrap();
         writeln!(output, "        );").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        let stream = sqlx::query_as::<_, StoredEvent>(&query)").unwrap();
-        writeln!(output, "            .bind(&aggregate_type)").unwrap();
+        writeln!(output, "        let rows = sqlx::query_as::<_, StoredEvent>(&query)").unwrap();
+        writeln!(output, "            .bind(aggregate_type)").unwrap();
         writeln!(output, "            .bind(from_position)").unwrap();
-        writeln!(output, "            .fetch(&self.pool);").unwrap();
+        writeln!(output, "            .fetch_all(&self.pool)").unwrap();
+        writeln!(output, "            .await?;").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        use futures::StreamExt;").unwrap();
-        writeln!(output, "        let mapped = stream.filter_map(|result| async move {{").unwrap();
-        writeln!(output, "            match result {{").unwrap();
-        writeln!(output, "                Ok(event) => Some(event),").unwrap();
-        writeln!(output, "                Err(e) => {{").unwrap();
-        writeln!(output, "                    tracing::error!(\"Error streaming event: {{}}\", e);").unwrap();
-        writeln!(output, "                    None").unwrap();
-        writeln!(output, "                }}").unwrap();
-        writeln!(output, "            }}").unwrap();
-        writeln!(output, "        }});").unwrap();
-        writeln!(output).unwrap();
-        writeln!(output, "        Ok(Box::pin(mapped))").unwrap();
+        writeln!(output, "        Ok(Box::pin(futures::stream::iter(rows)))").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
