@@ -1461,6 +1461,46 @@ fn normalize_line(line: &str) -> String {
     line.trim().replace(".clone()", "").replace("  ", " ")
 }
 
+/// Whether a line contains a real `// <<< CUSTOM` start marker.
+///
+/// Doc comments (`///`) and module doc comments (`//!`) that mention the marker
+/// string inside prose or backticks (e.g. `/// ... in the `// <<< CUSTOM` zone.`)
+/// are NOT markers — they are documentation *about* markers. Treating them as
+/// markers creates ghost blocks that later leak stale content into regenerated
+/// files.
+fn is_custom_start_marker(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("///") || trimmed.starts_with("//!") {
+        return false;
+    }
+    line.contains("// <<< CUSTOM")
+}
+
+/// Whether a line contains a real `// END CUSTOM` end marker. Doc comments are
+/// excluded for the same reason as `is_custom_start_marker`.
+fn is_custom_end_marker(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("///") || trimmed.starts_with("//!") {
+        return false;
+    }
+    line.contains("END CUSTOM")
+}
+
+/// Whether the line is PURELY a CUSTOM marker with no other content (e.g.
+/// `    // <<< CUSTOM` or `    // END CUSTOM`). These are structural markers
+/// that bracket content rather than content themselves.
+///
+/// Inline markers like `mod foo; // <<< CUSTOM - Extension` return false — the
+/// Rust code preceding the marker IS preservable content.
+fn is_whole_line_custom_marker(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("//!") {
+        return false;
+    }
+    let after = trimmed[2..].trim_start();
+    after.starts_with("<<< CUSTOM") || after.starts_with("END CUSTOM")
+}
+
 /// Walk backwards from `start_index` to find the nearest non-empty, non-CUSTOM line.
 fn find_anchor_line(existing_lines: &[&str], start_index: usize) -> Option<String> {
     if start_index == 0 {
@@ -1469,7 +1509,7 @@ fn find_anchor_line(existing_lines: &[&str], start_index: usize) -> Option<Strin
     let mut j = start_index - 1;
     loop {
         let prev = existing_lines[j].trim();
-        if !prev.is_empty() && !prev.contains("// <<< CUSTOM") && !prev.contains("END CUSTOM") {
+        if !prev.is_empty() && !is_custom_start_marker(prev) && !is_custom_end_marker(prev) {
             // Skip pure closing braces — they are not unique enough as anchors
             // and can match at wrong positions in the regenerated content.
             if matches!(prev, "}" | "})" | "});" | "}," | "};" | "}" ) {
@@ -1502,14 +1542,14 @@ fn collect_custom_blocks(existing_content: &str, generated_content: &str) -> Vec
             i += 1;
             continue;
         }
-        if line.contains("// <<< CUSTOM") {
+        if is_custom_start_marker(line) {
             // Find the preceding non-empty generated line as an anchor
             let anchor = find_anchor_line(&existing_lines, i);
 
             // Check if this custom block has a paired END CUSTOM marker
             let has_end_marker = existing_lines[i+1..].iter()
-                .take_while(|l| !l.contains("// <<< CUSTOM"))
-                .any(|l| l.contains("END CUSTOM"));
+                .take_while(|l| !is_custom_start_marker(l))
+                .any(|l| is_custom_end_marker(l));
 
             let mut block_lines = vec![line.to_string()];
             i += 1;
@@ -1522,7 +1562,7 @@ fn collect_custom_blocks(existing_content: &str, generated_content: &str) -> Vec
                 // legitimate multi-line blocks (e.g. large `matches!` macros).
                 while i < existing_lines.len() {
                     let next = existing_lines[i];
-                    if next.contains("END CUSTOM") {
+                    if is_custom_end_marker(next) {
                         block_lines.push(next.to_string());
                         i += 1;
                         break;
@@ -1535,7 +1575,7 @@ fn collect_custom_blocks(existing_content: &str, generated_content: &str) -> Vec
                 while i < existing_lines.len() {
                     let next = existing_lines[i];
                     // Stop at empty lines or next custom block
-                    if next.trim().is_empty() || next.contains("// <<< CUSTOM") {
+                    if next.trim().is_empty() || is_custom_start_marker(next) {
                         break;
                     }
                     // Include any line that is NOT in the generated content
@@ -1548,9 +1588,11 @@ fn collect_custom_blocks(existing_content: &str, generated_content: &str) -> Vec
                 }
             }
 
-            // Skip empty paired blocks (just markers, no content) to prevent accumulation
+            // Skip empty paired blocks (just markers, no content) to prevent accumulation.
+            // Inline markers (code with a trailing ` // <<< CUSTOM` tag) are NOT whole-line
+            // markers, so the code part still counts as preservable content.
             let has_content = block_lines.iter().any(|l| {
-                !l.contains("// <<< CUSTOM") && !l.contains("END CUSTOM") && !l.trim().is_empty()
+                !is_whole_line_custom_marker(l) && !l.trim().is_empty()
             });
             if has_content {
                 custom_blocks.push((anchor, block_lines));
@@ -1569,7 +1611,7 @@ fn insert_custom_blocks(result_lines: &mut Vec<String>, custom_blocks: &[(Option
     for (anchor, block_lines) in custom_blocks {
         // Dedup: skip if the first real content line already exists in the result
         let first_content_line = block_lines.iter()
-            .find(|l| !l.contains("// <<< CUSTOM") && !l.contains("END CUSTOM") && !l.trim().is_empty());
+            .find(|l| !is_whole_line_custom_marker(l) && !l.trim().is_empty());
         if let Some(content_line) = first_content_line {
             let content_normalized = normalize_line(content_line);
             let already_in_result = result_lines.iter()
@@ -1604,11 +1646,11 @@ fn insert_custom_blocks(result_lines: &mut Vec<String>, custom_blocks: &[(Option
         if let Some(pos) = insert_pos {
             // Check if a custom block placeholder already exists at this position
             let has_custom_at_pos = pos < result_lines.len()
-                && result_lines[pos].contains("// <<< CUSTOM");
+                && is_custom_start_marker(&result_lines[pos]);
             if has_custom_at_pos {
                 // Check if the existing block is an empty placeholder (// <<< CUSTOM followed by // END CUSTOM)
                 let is_empty_placeholder = pos + 1 < result_lines.len()
-                    && result_lines[pos + 1].contains("END CUSTOM");
+                    && is_custom_end_marker(&result_lines[pos + 1]);
                 if is_empty_placeholder {
                     // Replace the empty placeholder with our custom content
                     result_lines.remove(pos + 1); // remove // END CUSTOM
@@ -1845,11 +1887,11 @@ fn detect_unprotected_custom_code(generated_content: &str, existing_path: &Path)
         let trimmed = line.trim();
 
         // Track custom block boundaries
-        if trimmed.contains("// <<< CUSTOM") {
+        if is_custom_start_marker(line) {
             in_custom_block = true;
             continue;
         }
-        if trimmed.contains("// END CUSTOM") || (in_custom_block && trimmed.is_empty()) {
+        if is_custom_end_marker(line) || (in_custom_block && trimmed.is_empty()) {
             in_custom_block = false;
             continue;
         }
@@ -3008,5 +3050,69 @@ let service = Arc::new(Service::new(repo));
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
         assert_eq!(result, generated, "should return generated content for empty existing file");
+    }
+
+    /// Regression: when the generator flips from type-alias output (else-branch)
+    /// to struct+impl output (if-branch), the old anchor line (`pub type ...`)
+    /// must not leak into the new file. Previously the empty `// <<< CUSTOM`
+    /// block was preserved with its anchor, appending the stale alias lines.
+    #[test]
+    fn test_branch_flip_does_not_leak_old_alias() {
+        // Existing file: else-branch output (pub type alias with empty CUSTOM markers)
+        let existing = "\
+//! Domain policy for CustomerLoyaltyAccount aggregate
+//!
+//! Generated by metaphor-schema. Do not edit manually.
+
+use backbone_core::PermitAllPolicy;
+use crate::domain::entity::CustomerLoyaltyAccount;
+
+/// Domain policy for CustomerLoyaltyAccount — permits all operations (no business invariants).
+///
+/// To add domain rules, replace this alias with a struct implementing
+/// `backbone_core::DomainPolicy<CustomerLoyaltyAccount>` in the `// <<< CUSTOM` zone.
+pub type CustomerLoyaltyAccountDomainPolicy = PermitAllPolicy<CustomerLoyaltyAccount>;
+
+// <<< CUSTOM
+// END CUSTOM
+";
+        // Generated content: if-branch output (struct+impl with CUSTOM markers inside impl)
+        let generated = "\
+//! Domain policy for CustomerLoyaltyAccount aggregate
+//!
+//! Generated by metaphor-schema. Do not edit manually.
+
+use async_trait::async_trait;
+use backbone_core::{DomainPolicy, PolicyDecision};
+use crate::domain::entity::CustomerLoyaltyAccount;
+
+/// Domain policy for CustomerLoyaltyAccount — enforces business invariants.
+pub struct CustomerLoyaltyAccountDomainPolicy;
+
+#[async_trait]
+impl DomainPolicy<CustomerLoyaltyAccount> for CustomerLoyaltyAccountDomainPolicy {
+    // <<< CUSTOM
+    // Add entity-specific invariant checks here.
+    // END CUSTOM
+}
+";
+        let (_tmp, path) = write_temp(existing);
+        let result = merge_rust_mod_custom(generated, &path).unwrap();
+
+        // Must NOT leak the old type alias
+        assert!(
+            !result.contains("pub type CustomerLoyaltyAccountDomainPolicy = PermitAllPolicy"),
+            "old type alias must not leak into merged output; got:\n{}",
+            result
+        );
+        // Must NOT contain the stale else-branch doc comment
+        assert!(
+            !result.contains("in the `// <<< CUSTOM` zone."),
+            "stale else-branch doc line must not be appended; got:\n{}",
+            result
+        );
+        // Must contain the new struct and impl
+        assert!(result.contains("pub struct CustomerLoyaltyAccountDomainPolicy;"));
+        assert!(result.contains("impl DomainPolicy<CustomerLoyaltyAccount>"));
     }
 }
