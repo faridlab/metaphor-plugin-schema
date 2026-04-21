@@ -706,9 +706,11 @@ impl Generator for ModuleGenerator {
         let lib_content = self.generate_lib_rs(schema)?;
         output.add_file(PathBuf::from("src/lib.rs"), lib_content);
 
-        // Generate routes.rs
+        // Generate routes/generated.rs (emitted into the routes/ subdirectory so it
+        // coexists with user-managed routes/mod.rs and routes/auth etc. Avoids the
+        // E0761 clash caused by also having routes.rs + routes/mod.rs in the same dir).
         let routes_content = self.generate_routes(schema)?;
-        output.add_file(PathBuf::from("src/presentation/http/routes.rs"), routes_content);
+        output.add_file(PathBuf::from("src/presentation/http/routes/generated.rs"), routes_content);
 
         // Generate gRPC registration
         let grpc_content = self.generate_grpc(schema)?;
