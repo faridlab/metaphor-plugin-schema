@@ -328,6 +328,35 @@ impl HandlerGenerator {
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
+        // Read-only routes (public-safe)
+        writeln!(output, "/// Create Axum router with only the read (GET) endpoints for {}.", model.name).unwrap();
+        writeln!(output, "///").unwrap();
+        writeln!(output, "/// Safe for public, unauthenticated exposure (e.g., reference data).").unwrap();
+        writeln!(output, "/// Mutations must be served separately via `create_{}_write_routes`,", model_snake).unwrap();
+        writeln!(output, "/// typically wrapped in an auth middleware layer.").unwrap();
+        writeln!(output, "pub fn create_{}_read_routes(service: Arc<{}Service>) -> Router {{", model_snake, model.name).unwrap();
+        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::read_routes(",
+            model.name, model.name, model.name, model.name, model.name).unwrap();
+        writeln!(output, "        service,").unwrap();
+        writeln!(output, "        \"/{}\",", model_plural).unwrap();
+        writeln!(output, "    )").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        // Write-only routes (intended for use behind auth)
+        writeln!(output, "/// Create Axum router with only the write (mutation) endpoints for {}.", model.name).unwrap();
+        writeln!(output, "///").unwrap();
+        writeln!(output, "/// These routes must NOT be publicly exposed. Wrap them with an auth").unwrap();
+        writeln!(output, "/// middleware before nesting into the application router.").unwrap();
+        writeln!(output, "pub fn create_{}_write_routes(service: Arc<{}Service>) -> Router {{", model_snake, model.name).unwrap();
+        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::write_routes(",
+            model.name, model.name, model.name, model.name, model.name).unwrap();
+        writeln!(output, "        service,").unwrap();
+        writeln!(output, "        \"/{}\",", model_plural).unwrap();
+        writeln!(output, "    )").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
         // Protected routes with auth
         writeln!(output, "/// Create authenticated routes with auth middleware.").unwrap();
         writeln!(output, "///").unwrap();
@@ -636,6 +665,8 @@ impl Generator for HandlerGenerator {
                 writeln!(mod_content, "    Patch{}Dto,", model).unwrap();
                 writeln!(mod_content, "    {}ResponseDto,", model).unwrap();
                 writeln!(mod_content, "    create_{}_routes,", model_snake).unwrap();
+                writeln!(mod_content, "    create_{}_read_routes,", model_snake).unwrap();
+                writeln!(mod_content, "    create_{}_write_routes,", model_snake).unwrap();
                 writeln!(mod_content, "}};").unwrap();
             }
         } else {
@@ -654,7 +685,11 @@ impl Generator for HandlerGenerator {
             writeln!(mod_content, "// Re-exports").unwrap();
             for model in &schema.schema.models {
                 let model_snake = to_snake_case(&model.name);
-                writeln!(mod_content, "pub use {}_handler::create_{}_routes;", model_snake, model_snake).unwrap();
+                writeln!(
+                    mod_content,
+                    "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes}};",
+                    model_snake, model_snake, model_snake, model_snake
+                ).unwrap();
             }
             // Custom re-exports (preserved across regeneration)
             writeln!(mod_content, "// <<< CUSTOM").unwrap();
@@ -809,6 +844,10 @@ mod tests {
         let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
 
         assert!(handler.contains("pub fn create_user_routes"));
+        assert!(handler.contains("pub fn create_user_read_routes"));
+        assert!(handler.contains("pub fn create_user_write_routes"));
+        assert!(handler.contains("BackboneCrudHandler::<UserService, User, CreateUserDto, UpdateUserDto, UserResponseDto>::read_routes"));
+        assert!(handler.contains("BackboneCrudHandler::<UserService, User, CreateUserDto, UpdateUserDto, UserResponseDto>::write_routes"));
     }
 
     #[test]
