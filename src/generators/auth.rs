@@ -48,7 +48,12 @@ impl AuthGenerator {
     }
 
     /// Generate the auth/permission file for a single entity.
-    fn generate_auth(&self, model: &Model) -> Result<String, GenerateError> {
+    ///
+    /// `emit_service_guard` controls whether the `{name}ServiceGuard` alias is
+    /// emitted. It must be `false` when another entity named `{name}Service`
+    /// exists in the schema — otherwise `{name}ServiceGuard` collides with that
+    /// entity's `{name}Service -> {name}ServiceGuard` base guard (E0252).
+    fn generate_auth(&self, model: &Model, emit_service_guard: bool) -> Result<String, GenerateError> {
         let mut output = String::new();
         let name = &model.name;
         let snake_name = to_snake_case(name);
@@ -115,10 +120,12 @@ impl AuthGenerator {
         writeln!(output, "/// Wraps `{}Service` and checks `{}Policy` before delegating.", name, name).unwrap();
         writeln!(output, "pub type {}Guard = PermissionGuard<{}>;", name, name).unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "/// Service-integrated permission guard for {} (for use in generated handlers).", name).unwrap();
-        writeln!(output, "pub type {}ServiceGuard = ServicePermissionGuard<{}, {}Service, {}Policy>;",
-            name, name, name, name).unwrap();
-        writeln!(output).unwrap();
+        if emit_service_guard {
+            writeln!(output, "/// Service-integrated permission guard for {} (for use in generated handlers).", name).unwrap();
+            writeln!(output, "pub type {}ServiceGuard = ServicePermissionGuard<{}, {}Service, {}Policy>;",
+                name, name, name, name).unwrap();
+            writeln!(output).unwrap();
+        }
         writeln!(output, "// <<< CUSTOM").unwrap();
         writeln!(output, "// END CUSTOM").unwrap();
 
@@ -139,9 +146,18 @@ impl Generator for AuthGenerator {
             .map(|m| m.name.clone())
             .collect();
 
+        // Collision check: skip emitting `{name}ServiceGuard` when another entity
+        // named `{name}Service` exists — its `{ThatName}Guard` would be the same
+        // identifier (E0252). Example: entity `Provider` + entity `ProviderService`.
+        let model_name_set: std::collections::HashSet<&str> =
+            model_names.iter().map(String::as_str).collect();
+        let emit_service_guard = |name: &str| -> bool {
+            !model_name_set.contains(format!("{}Service", name).as_str())
+        };
+
         for model in &schema.schema.models {
             let snake_name = to_snake_case(&model.name);
-            let content = self.generate_auth(model)?;
+            let content = self.generate_auth(model, emit_service_guard(&model.name))?;
 
             if self.group_by_domain {
                 let path = build_generated_path(
@@ -182,8 +198,13 @@ impl Generator for AuthGenerator {
             writeln!(mod_content).unwrap();
             for name in &model_names {
                 let snake = to_snake_case(name);
-                writeln!(mod_content, "pub use {snake}_auth::{{{name}Policy, {name}Guard, {name}ServiceGuard}};",
-                    snake = snake, name = name).unwrap();
+                if emit_service_guard(name) {
+                    writeln!(mod_content, "pub use {snake}_auth::{{{name}Policy, {name}Guard, {name}ServiceGuard}};",
+                        snake = snake, name = name).unwrap();
+                } else {
+                    writeln!(mod_content, "pub use {snake}_auth::{{{name}Policy, {name}Guard}};",
+                        snake = snake, name = name).unwrap();
+                }
             }
             writeln!(mod_content).unwrap();
             writeln!(mod_content, "// <<< CUSTOM").unwrap();
