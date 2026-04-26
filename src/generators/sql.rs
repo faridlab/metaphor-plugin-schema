@@ -114,10 +114,26 @@ impl SqlGenerator {
                     table_name, field.name, table_name, field.name
                 )
                 .unwrap();
-                // Expression index for soft delete queries (WHERE metadata->>'deleted_at' IS NULL)
+                // Expression indexes for the audit timestamps. Stored as ISO-8601
+                // strings inside the JSONB, so lex ordering on the text projection
+                // matches chronological order — range queries like
+                // `(metadata->>'created_at') >= '2026-01-01'` use the index without
+                // needing an IMMUTABLE timestamptz cast wrapper.
                 writeln!(
                     output,
                     "CREATE INDEX IF NOT EXISTS idx_{}_{}_deleted_at ON {} (({}->>'deleted_at'));",
+                    table_name, field.name, table_name, field.name
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "CREATE INDEX IF NOT EXISTS idx_{}_{}_created_at ON {} (({}->>'created_at'));",
+                    table_name, field.name, table_name, field.name
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "CREATE INDEX IF NOT EXISTS idx_{}_{}_updated_at ON {} (({}->>'updated_at'));",
                     table_name, field.name, table_name, field.name
                 )
                 .unwrap();
@@ -1009,6 +1025,53 @@ mod tests {
         let content = output.files.get(&PathBuf::from("migrations/002_create_user_table.up.sql")).unwrap();
 
         assert!(content.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email"));
+    }
+
+    /// Audit-metadata models should get text-typed expression indexes on
+    /// `created_at`, `updated_at`, and `deleted_at` so range queries against
+    /// the JSONB-stored timestamps don't fall back to full table scans.
+    /// (ISO-8601 string ordering matches chronological order, so lex compares
+    /// behave correctly without needing an IMMUTABLE timestamptz cast.)
+    #[test]
+    fn test_audit_metadata_emits_timestamp_expression_indexes() {
+        let mut model = Model::new("Account");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "metadata".to_string(),
+                type_ref: TypeRef::Custom("Metadata".to_string()),
+                attributes: vec![Attribute::new("audit_metadata")],
+                ..Default::default()
+            },
+        ];
+
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let resolved = ResolvedSchema { schema };
+
+        let generator = SqlGenerator::new().with_split(true);
+        let output = generator.generate(&resolved).unwrap();
+        let content = output.files
+            .get(&PathBuf::from("migrations/002_create_account_table.up.sql"))
+            .unwrap();
+
+        assert!(
+            content.contains("idx_accounts_metadata_created_at ON accounts ((metadata->>'created_at'))"),
+            "expected created_at expression index, got:\n{}", content
+        );
+        assert!(
+            content.contains("idx_accounts_metadata_updated_at ON accounts ((metadata->>'updated_at'))"),
+            "expected updated_at expression index, got:\n{}", content
+        );
+        assert!(
+            content.contains("idx_accounts_metadata_deleted_at ON accounts ((metadata->>'deleted_at'))"),
+            "expected deleted_at expression index (regression check), got:\n{}", content
+        );
     }
 
     /// Models with `@audit_metadata` store `deleted_at` inside a JSONB column,
