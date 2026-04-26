@@ -272,11 +272,15 @@ impl SqlGenerator {
             self.resolve_index_field(field_name, model)
         }).collect();
 
-        // Extract optional WHERE clause for partial indexes
+        // Extract optional WHERE clause for partial indexes.
+        // Audit-metadata sub-keys (e.g. `deleted_at`) referenced bare in the
+        // clause must be rewritten to their JSONB expression form, since they
+        // aren't real columns when the model stores audit data in an
+        // `@audit_metadata` JSONB field.
         let where_clause = index.attributes.iter()
             .find(|a| a.name == "where")
             .and_then(|a| a.get_string_arg())
-            .map(|w| format!(" WHERE {}", w))
+            .map(|w| format!(" WHERE {}", self.resolve_where_clause(w, model)))
             .unwrap_or_default();
 
         Ok(format!(
@@ -346,6 +350,84 @@ impl SqlGenerator {
             field_name, model.name
         );
         field_name.to_string()
+    }
+
+    /// Rewrite audit-metadata sub-keys appearing as bare identifiers in a
+    /// partial-index `WHERE` clause to their JSONB expression form.
+    ///
+    /// For models carrying an `@audit_metadata` JSONB field (e.g. `metadata`),
+    /// `deleted_at` (and the other audit keys) are stored *inside* that JSONB
+    /// rather than as real columns. A clause authored as
+    /// `WHERE deleted_at IS NULL` would therefore fail with
+    /// `column "deleted_at" does not exist`.
+    ///
+    /// This rewrites bare audit-key identifiers (whole-word, outside string
+    /// literals, not already qualified with `table.`) to
+    /// `(metadata->>'deleted_at')`. Real columns shadow the JSONB key, so a
+    /// model that declares `deleted_at` as a real column is left untouched.
+    fn resolve_where_clause(&self, where_clause: &str, model: &Model) -> String {
+        const AUDIT_METADATA_KEYS: &[&str] = &[
+            "created_at", "updated_at", "deleted_at",
+            "created_by", "updated_by", "deleted_by",
+        ];
+
+        let Some(jsonb_field) = model.fields.iter().find(|f| f.has_attribute("audit_metadata")) else {
+            return where_clause.to_string();
+        };
+
+        let keys_to_rewrite: Vec<&str> = AUDIT_METADATA_KEYS.iter()
+            .copied()
+            .filter(|key| !model.fields.iter().any(|f| f.name == *key))
+            .collect();
+
+        if keys_to_rewrite.is_empty() {
+            return where_clause.to_string();
+        }
+
+        let mut out = String::with_capacity(where_clause.len());
+        let bytes = where_clause.as_bytes();
+        let mut i = 0;
+        let mut in_string = false;
+
+        while i < bytes.len() {
+            let b = bytes[i];
+
+            if in_string {
+                out.push(b as char);
+                if b == b'\'' {
+                    in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if b == b'\'' {
+                in_string = true;
+                out.push(b as char);
+                i += 1;
+                continue;
+            }
+
+            if b.is_ascii_alphabetic() || b == b'_' {
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                let ident = &where_clause[start..i];
+                let prev_is_dot = start > 0 && bytes[start - 1] == b'.';
+                if !prev_is_dot && keys_to_rewrite.contains(&ident) {
+                    write!(out, "({}->>'{}')", jsonb_field.name, ident).unwrap();
+                } else {
+                    out.push_str(ident);
+                }
+                continue;
+            }
+
+            out.push(b as char);
+            i += 1;
+        }
+
+        out
     }
 
     fn generate_enum(&self, enum_def: &EnumDef) -> Result<String, GenerateError> {
@@ -927,6 +1009,182 @@ mod tests {
         let content = output.files.get(&PathBuf::from("migrations/002_create_user_table.up.sql")).unwrap();
 
         assert!(content.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email"));
+    }
+
+    /// Models with `@audit_metadata` store `deleted_at` inside a JSONB column,
+    /// so partial indexes authored as `WHERE deleted_at IS NULL` must be
+    /// rewritten to `WHERE (metadata->>'deleted_at') IS NULL` — otherwise the
+    /// migration fails with `column "deleted_at" does not exist`.
+    #[test]
+    fn test_partial_index_where_rewrites_audit_metadata_keys() {
+        let mut model = Model::new("Account");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "account_number".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::String),
+                attributes: vec![Attribute::new("required")],
+                ..Default::default()
+            },
+            Field {
+                name: "metadata".to_string(),
+                type_ref: TypeRef::Custom("Metadata".to_string()),
+                attributes: vec![Attribute::new("audit_metadata")],
+                ..Default::default()
+            },
+        ];
+        model.indexes.push(Index {
+            fields: vec!["account_number".to_string()],
+            index_type: IndexType::Unique,
+            attributes: vec![
+                Attribute::new("where")
+                    .with_arg(AttributeValue::String("deleted_at IS NULL".to_string())),
+            ],
+            ..Default::default()
+        });
+
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let resolved = ResolvedSchema { schema };
+
+        let generator = SqlGenerator::new().with_split(true);
+        let output = generator.generate(&resolved).unwrap();
+        let content = output.files
+            .get(&PathBuf::from("migrations/002_create_account_table.up.sql"))
+            .unwrap();
+
+        assert!(
+            content.contains("WHERE (metadata->>'deleted_at') IS NULL"),
+            "expected JSONB-rewritten WHERE clause, got:\n{}",
+            content
+        );
+        assert!(
+            !content.contains("WHERE deleted_at IS NULL"),
+            "raw `deleted_at` should not appear as a top-level column in WHERE, got:\n{}",
+            content
+        );
+    }
+
+    /// String literals inside the WHERE clause must be passed through
+    /// unchanged — only bare identifiers are rewritten.
+    #[test]
+    fn test_partial_index_where_preserves_string_literals() {
+        let mut model = Model::new("Job");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "label".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::String),
+                attributes: vec![Attribute::new("required")],
+                ..Default::default()
+            },
+            Field {
+                name: "metadata".to_string(),
+                type_ref: TypeRef::Custom("Metadata".to_string()),
+                attributes: vec![Attribute::new("audit_metadata")],
+                ..Default::default()
+            },
+        ];
+        model.indexes.push(Index {
+            fields: vec!["label".to_string()],
+            index_type: IndexType::Index,
+            attributes: vec![
+                Attribute::new("where")
+                    .with_arg(AttributeValue::String(
+                        "deleted_at IS NULL AND label != 'deleted_at'".to_string(),
+                    )),
+            ],
+            ..Default::default()
+        });
+
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let resolved = ResolvedSchema { schema };
+
+        let generator = SqlGenerator::new().with_split(true);
+        let output = generator.generate(&resolved).unwrap();
+        let content = output.files
+            .get(&PathBuf::from("migrations/002_create_job_table.up.sql"))
+            .unwrap();
+
+        // Bare identifier rewritten:
+        assert!(content.contains("(metadata->>'deleted_at') IS NULL"), "got:\n{}", content);
+        // String literal preserved verbatim:
+        assert!(content.contains("label != 'deleted_at'"), "got:\n{}", content);
+    }
+
+    /// If the model declares `deleted_at` as a real column, that column
+    /// shadows the audit-metadata sub-key and the WHERE clause should be
+    /// left alone.
+    #[test]
+    fn test_partial_index_where_skips_rewrite_when_real_column_shadows_audit_key() {
+        let mut model = Model::new("Legacy");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "name".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::String),
+                attributes: vec![Attribute::new("required")],
+                ..Default::default()
+            },
+            Field {
+                name: "deleted_at".to_string(),
+                type_ref: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::DateTime))),
+                attributes: vec![],
+                ..Default::default()
+            },
+            Field {
+                name: "metadata".to_string(),
+                type_ref: TypeRef::Custom("Metadata".to_string()),
+                attributes: vec![Attribute::new("audit_metadata")],
+                ..Default::default()
+            },
+        ];
+        model.indexes.push(Index {
+            fields: vec!["name".to_string()],
+            index_type: IndexType::Unique,
+            attributes: vec![
+                Attribute::new("where")
+                    .with_arg(AttributeValue::String("deleted_at IS NULL".to_string())),
+            ],
+            ..Default::default()
+        });
+
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let resolved = ResolvedSchema { schema };
+
+        let generator = SqlGenerator::new().with_split(true);
+        let output = generator.generate(&resolved).unwrap();
+        let content = output.files
+            .get(&PathBuf::from("migrations/002_create_legacy_table.up.sql"))
+            .unwrap();
+
+        assert!(
+            content.contains("WHERE deleted_at IS NULL"),
+            "real column should not be rewritten, got:\n{}",
+            content
+        );
+        assert!(
+            !content.contains("(metadata->>'deleted_at') IS NULL"),
+            "should not produce JSONB rewrite when real column shadows the audit key, got:\n{}",
+            content
+        );
     }
 
     #[test]
