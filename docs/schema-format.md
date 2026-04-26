@@ -340,6 +340,35 @@ indexes {
 }
 ```
 
+### Partial Indexes
+
+Use the `@where` attribute to emit a partial index — the predicate is appended
+verbatim as a SQL `WHERE` clause:
+
+```yaml
+indexes:
+  - fields: [email]
+    unique: true
+    attributes: ['@where(deleted_at IS NULL)']
+```
+
+**Audit-metadata rewriting.** When the model carries an `@audit_metadata`
+JSONB field, audit keys (`created_at`, `updated_at`, `deleted_at`,
+`created_by`, `updated_by`, `deleted_by`) are stored *inside* that JSONB
+column, not as real columns. To keep the predicate readable, bare
+identifiers matching those keys are rewritten to their JSONB form
+(`(metadata->>'deleted_at')`). String literals and identifiers already
+qualified (e.g. `t.deleted_at`) are left alone, and a model that declares
+one of those names as a real column shadows the rewrite.
+
+```yaml
+# Authored:
+attributes: ['@where(deleted_at IS NULL)']
+
+# Emitted (model has @audit_metadata field `metadata`):
+WHERE (metadata->>'deleted_at') IS NULL
+```
+
 ---
 
 ## Soft Delete

@@ -202,6 +202,7 @@ Generates SQL migration scripts with:
 - Foreign key constraints with ON DELETE/UPDATE actions
 - GIN indexes for JSONB audit metadata
 - Composite and single-field indexes
+- Partial indexes via `@where(...)` (audit-metadata keys auto-rewritten to JSONB form)
 - Automatic timestamp trigger functions
 - CHECK constraints for JSONB structure validation
 
