@@ -923,16 +923,10 @@ impl SqlGenerator {
 
     /// Deterministic timestamp for migration filenames.
     ///
-    /// Uses a fixed base epoch (2026-04-26 22:00:00 UTC) plus a 1-second
-    /// offset per migration index, so regenerating produces stable file
-    /// names. New hand-authored migrations should use real wall-clock
-    /// timestamps; they will sort after any regenerated batch as long as
-    /// the wall clock is past the base epoch.
+    /// Delegates to `super::migration_timestamp_for` so every generator
+    /// (sql, audit_triggers, …) shares the same epoch and step.
     fn timestamp_for(index: usize) -> String {
-        use chrono::TimeZone;
-        let base = chrono::Utc.with_ymd_and_hms(2026, 4, 26, 22, 0, 0).unwrap();
-        let ts = base + chrono::Duration::seconds(index as i64);
-        ts.format("%Y%m%d%H%M%S").to_string()
+        super::migration_timestamp_for(index)
     }
 
     /// Topologically sort models so each model is created after its FK

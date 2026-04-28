@@ -173,6 +173,19 @@ pub fn build_generated_path(
     }
 }
 
+/// Deterministic timestamp prefix for migration filenames.
+///
+/// Fixed base epoch (2026-04-26 22:00:00 UTC) plus a 1-second offset per
+/// migration index, producing stable `YYYYMMDDHHMMSS` prefixes that sort
+/// lexically. Shared across generators (sql, audit_triggers, …) so every
+/// emitter agrees on the format and ordering.
+pub fn migration_timestamp_for(index: usize) -> String {
+    use chrono::TimeZone;
+    let base = chrono::Utc.with_ymd_and_hms(2026, 4, 26, 22, 0, 0).unwrap();
+    let ts = base + chrono::Duration::seconds(index as i64);
+    ts.format("%Y%m%d%H%M%S").to_string()
+}
+
 /// Generate mod.rs content for a model subdirectory
 ///
 /// Creates the index file for a model-specific subdirectory that re-exports

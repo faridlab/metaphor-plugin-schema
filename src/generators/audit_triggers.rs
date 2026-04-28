@@ -100,19 +100,24 @@ impl AuditTriggersGenerator {
         Ok(())
     }
 
-    /// Get the migration file number (should be last, after all table migrations)
-    fn get_migration_number(&self, schema: &ResolvedSchema) -> String {
-        // Must come AFTER all SQL generator migrations:
-        //   001 = enums (if any)
-        //   002..N+1 = one per model (N = model_count)
-        //   N+2 = foreign keys (if any)
-        //   N+3 = join tables (if any)
-        // Reserve slots for FK and join tables even if absent (gaps are fine)
+    /// Build the migration filename prefix using the shared timestamp scheme.
+    ///
+    /// Must slot AFTER every SQL-generator migration so that triggers attach
+    /// to tables that already exist. SQL gen's emission order is:
+    ///   index 0           : enums (if any)
+    ///   indices 1..=N     : one per model (N = model_count)
+    ///   index N+1         : join tables (if any)
+    ///   index N+2         : deferred foreign keys (if any)
+    ///
+    /// We reserve slots for join-tables and deferred-FKs unconditionally —
+    /// gaps in the timestamp sequence are harmless, but landing on an
+    /// already-used slot would collide.
+    fn get_migration_timestamp(&self, schema: &ResolvedSchema) -> String {
         let model_count = schema.schema.models.len();
-        let enum_count = schema.schema.enums.len();
-        let base = if enum_count > 0 { 2 } else { 1 }; // Start after enums
-        // +2 reserves slots for foreign_keys and join_tables migration files
-        format!("{:03}", model_count + base + 2)
+        let enum_slot = if schema.schema.enums.is_empty() { 0 } else { 1 };
+        // enum + models + join_tables_reserve + deferred_fks_reserve
+        let index = enum_slot + model_count + 2;
+        super::migration_timestamp_for(index)
     }
 }
 
@@ -131,10 +136,10 @@ impl Generator for AuditTriggersGenerator {
 
         // Add the migration file
         let _module_name = crate::utils::to_snake_case(&schema.schema.name);
-        let migration_number = self.get_migration_number(schema);
+        let migration_ts = self.get_migration_timestamp(schema);
         let path = PathBuf::from(format!(
             "migrations/{}_add_audit_triggers.up.sql",
-            migration_number
+            migration_ts
         ));
 
         output.add_file(path, migration_content);
@@ -215,7 +220,8 @@ mod tests {
         let generator = AuditTriggersGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        assert!(output.files.contains_key(&PathBuf::from("migrations/003_add_audit_triggers.up.sql")));
+        // 2 models + 0 enums => index = 0 + 2 + 2 = 4 => 20260426220004
+        assert!(output.files.contains_key(&PathBuf::from("migrations/20260426220004_add_audit_triggers.up.sql")));
     }
 
     #[test]
@@ -224,7 +230,7 @@ mod tests {
         let generator = AuditTriggersGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let content = output.files.get(&PathBuf::from("migrations/003_add_audit_triggers.up.sql")).unwrap();
+        let content = output.files.get(&PathBuf::from("migrations/20260426220004_add_audit_triggers.up.sql")).unwrap();
 
         // Check that trigger functions are created
         assert!(content.contains("CREATE OR REPLACE FUNCTION users_audit_timestamp()"));
@@ -269,7 +275,8 @@ mod tests {
         let generator = AuditTriggersGenerator::new();
         let output = generator.generate(&resolved).unwrap();
 
-        let content = output.files.get(&PathBuf::from("migrations/002_add_audit_triggers.up.sql")).unwrap();
+        // 1 model + 0 enums => index = 0 + 1 + 2 = 3 => 20260426220003
+        let content = output.files.get(&PathBuf::from("migrations/20260426220003_add_audit_triggers.up.sql")).unwrap();
 
         // Should indicate no audit metadata tables found
         assert!(content.contains("No tables with audit metadata found"));
