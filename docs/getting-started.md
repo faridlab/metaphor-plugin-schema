@@ -9,7 +9,9 @@ This guide walks you through creating your first schema and generating code for 
 
 ## Project Structure
 
-The schema generator expects modules to live under `libs/modules/`:
+The schema generator supports two layouts:
+
+### Standalone (`libs/modules/`)
 
 ```
 your-project/
@@ -22,9 +24,13 @@ your-project/
   │               └── order.model.yaml
   ├── apps/
   │   ├── webapp/                # Webapp output (TypeScript + React)
-  │   └── mobileapp/            # Mobile output (Kotlin)
+  │   └── mobileapp/             # Mobile output (Kotlin)
   └── Cargo.toml
 ```
+
+### Metaphor workspace (`metaphor.yaml` at root)
+
+When `metaphor.yaml` exists, the generator reads it to discover projects and their schema directories. Modules may live anywhere — typically `apps/<service>/schema/` for backend-service projects and `modules/<module>/schema/` for upstream modules. The MODULE arg accepts either a workspace project name or the schema's `module:` field, and auto-detects from CWD when omitted. See [generate-rust.md → How MODULE Resolves](generate-rust.md#how-module-resolves) for the full lookup order.
 
 ## Step 1: Create Your First Schema
 
@@ -99,16 +105,22 @@ metaphor schema generate sapiens --dry-run
 
 ## Step 4: Generate Kotlin Mobile Code
 
-Generate Kotlin Multiplatform code for mobile apps:
+Generate Kotlin Multiplatform code for mobile apps. Inside a Metaphor workspace, MODULE auto-detects from CWD and `--output` accepts the mobileapp project's name:
 
 ```bash
-metaphor schema generate:kotlin sapiens
+metaphor schema generate:kotlin --output mobileapp
 ```
 
-This generates data classes, repository interfaces, API clients, ViewModels, and more for the KMP stack. To generate only domain entities:
+In a standalone (non-workspace) project, pass MODULE and use `--output-path` for a raw filesystem path:
 
 ```bash
-metaphor schema generate:kotlin sapiens --target entities,enums,repositories
+metaphor schema generate:kotlin sapiens --output-path ./apps/mobileapp/shared/src/commonMain
+```
+
+Either form generates data classes, repository interfaces, API clients, ViewModels, and more for the KMP stack. The generator also walks `external_imports` and emits Kotlin for transitive schema-module dependencies in the same run; pass `--no-deps` to opt out. To generate only specific layers:
+
+```bash
+metaphor schema generate:kotlin --output mobileapp --target entities,enums,repositories
 ```
 
 ## Step 5: Generate Webapp Code

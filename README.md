@@ -12,12 +12,16 @@ Schema-driven code generator for Rust, Kotlin Multiplatform, and TypeScript + Re
 
 ## Quick Start
 
-```bash
-# Generate server-side Rust code (38 targets)
-metaphor schema generate sapiens
+When invoked from inside a Metaphor workspace project directory (a subdir of any project listed in `metaphor.yaml`), the `MODULE` arg auto-detects from CWD. Pass it explicitly to target a different module — either the schema's `module:` value (e.g. `bersihir`, `sapiens`, `bucket`) or a workspace project name (`bersihir-service`, `backbone-sapiens`).
 
-# Generate Kotlin Multiplatform Mobile code (16 targets)
-metaphor schema generate:kotlin sapiens
+```bash
+# Generate server-side Rust code (38 targets) for the current project
+metaphor schema generate
+
+# Generate Kotlin Multiplatform Mobile code into a workspace mobileapp project.
+# Also walks `external_imports` and emits Kotlin for transitive schema-module deps
+# (e.g. sapiens, bucket) in the same run; pass --no-deps to opt out.
+metaphor schema generate:kotlin --output bersihir-mobile-laundry
 
 # Generate TypeScript + React webapp code (14 targets)
 metaphor schema generate:webapp sapiens

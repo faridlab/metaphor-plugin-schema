@@ -5,18 +5,39 @@ Deep-dive into the `metaphor schema generate` (and `generate:rust`) pipeline. Th
 ## Quick Start
 
 ```bash
-# Generate all targets
+# From inside a workspace project dir, MODULE auto-detects from CWD
+metaphor schema generate
+
+# Same thing with the alias
+metaphor schema generate:rust
+
+# Explicit MODULE — workspace project name
 metaphor schema generate sapiens
 
-# Same thing, using the shortcut
-metaphor schema generate:rust sapiens
+# Or schema `module:` value (resolves to the same project)
+metaphor schema generate bucket
 
-# Generate specific targets
-metaphor schema generate sapiens --target rust,sql,repository,handler
+# Specific targets only
+metaphor schema generate --target rust,sql,repository,handler
 
 # Preview without writing
-metaphor schema generate sapiens --dry-run
+metaphor schema generate --dry-run
 ```
+
+---
+
+## How MODULE Resolves
+
+Inside a Metaphor workspace (a directory tree containing `metaphor.yaml`), the resolver tries, in order:
+
+1. **Auto-detect from CWD** — when MODULE is omitted, walks up from CWD until it matches a `metaphor.yaml` project's `path:`. Errors with the available project list if no match.
+2. **Workspace project name** — e.g. `bersihir-service`, `backbone-sapiens`. Resolves to that project's `schema/` directory.
+3. **Schema `module:` value** — e.g. `bersihir`, `sapiens`, `bucket`. Read from each project's `schema/models/index.model.yaml` and matched.
+4. **Legacy candidate paths** (kept for backwards compatibility outside workspaces) — `libs/modules/<MODULE>/schema`, `libs/modules/<MODULE>`, `modules/<MODULE>/schema`, `modules/<MODULE>`, then the literal arg as a direct path.
+
+Outside a workspace, only step 4 applies.
+
+> **Note** — Rust generate is single-module: it does not fan out to transitive `external_imports` / `depends_on` dependencies. Run the command per module if you need to regenerate dependent modules.
 
 ---
 
@@ -254,16 +275,18 @@ Generates request/response DTOs with:
 
 ## Practical Examples
 
+In each example below, MODULE is omitted because it auto-detects from CWD when run inside a project directory. Pass MODULE explicitly (`metaphor schema generate sapiens --…`) when you want to target a different module.
+
 ### Generate Only Data Layer
 
 ```bash
-metaphor schema generate sapiens --target proto,rust,sql,repository,repository-trait
+metaphor schema generate --target proto,rust,sql,repository,repository-trait
 ```
 
 ### Generate for a Single Model
 
 ```bash
-metaphor schema generate sapiens --models Customer --lenient
+metaphor schema generate --models Customer --lenient
 ```
 
 The `--lenient` flag is recommended with `--models` because filtered generation may have unresolvable cross-references.
@@ -271,7 +294,7 @@ The `--lenient` flag is recommended with `--models` because filtered generation 
 ### CI Pipeline: Changed Schemas Only
 
 ```bash
-metaphor schema generate sapiens --changed --base main --validate
+metaphor schema generate --changed --base main --validate
 ```
 
 This:
@@ -282,7 +305,7 @@ This:
 ### Dry Run Preview
 
 ```bash
-metaphor schema generate sapiens --dry-run
+metaphor schema generate --dry-run
 ```
 
 Shows all files that would be generated and their sizes without writing anything.
@@ -290,7 +313,7 @@ Shows all files that would be generated and their sizes without writing anything
 ### Force Regenerate Everything
 
 ```bash
-metaphor schema generate sapiens --force
+metaphor schema generate --force
 ```
 
 Overwrites all existing generated files.
@@ -299,8 +322,18 @@ Overwrites all existing generated files.
 
 ```bash
 # Only generate for specific hooks
-metaphor schema generate sapiens --hooks OrderHooks,CustomerHooks --lenient
+metaphor schema generate --hooks OrderHooks,CustomerHooks --lenient
 
 # Only generate for specific workflows
-metaphor schema generate sapiens --workflows OrderProcessing --lenient
+metaphor schema generate --workflows OrderProcessing --lenient
+```
+
+### Target a Different Module From the Current Project
+
+```bash
+# Schema-module name
+metaphor schema generate sapiens --target rust,sql
+
+# Or workspace project name (resolves to the same place)
+metaphor schema generate backbone-sapiens --target rust,sql
 ```

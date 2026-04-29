@@ -99,14 +99,14 @@ metaphor schema validate sapiens --warnings
 Generate server-side Rust code from schema definitions. This is the primary generation command, producing up to 38 different code targets organized by architectural layer.
 
 ```bash
-metaphor schema generate <MODULE> [OPTIONS]
+metaphor schema generate [MODULE] [OPTIONS]
 ```
 
 ### Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `MODULE` | Module name to generate code for (e.g., `sapiens`) |
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `MODULE` | optional inside a workspace | Module to generate code for. Accepts a workspace project name (`bersihir-service`), the schema's `module:` value (`bersihir`), or a legacy direct path. Auto-detects from CWD when omitted inside a Metaphor workspace. See [Module resolution](generate-rust.md#how-module-resolves) for the full lookup order. |
 
 ### Options
 
@@ -128,39 +128,45 @@ metaphor schema generate <MODULE> [OPTIONS]
 ### Examples
 
 ```bash
-# Generate all targets for a module
+# Auto-detect MODULE from CWD (when run from a project dir)
+metaphor schema generate
+
+# Explicit MODULE — workspace project name
 metaphor schema generate sapiens
 
+# Or schema `module:` value
+metaphor schema generate bucket
+
 # Generate specific targets only
-metaphor schema generate sapiens --target proto,rust,sql,repository,handler
+metaphor schema generate --target proto,rust,sql,repository,handler
 
 # Dry run to preview output
-metaphor schema generate sapiens --dry-run
+metaphor schema generate --dry-run
 
 # Force overwrite existing files
-metaphor schema generate sapiens --force
+metaphor schema generate --force
 
 # Generate only for changed schemas (CI-friendly)
-metaphor schema generate sapiens --changed --validate
+metaphor schema generate --changed --validate
 
 # Generate only for specific models
-metaphor schema generate sapiens --models Customer,Order --lenient
+metaphor schema generate --models Customer,Order --lenient
 
 # Compare against a specific git branch
-metaphor schema generate sapiens --changed --base main
+metaphor schema generate --changed --base main
 
 # Split OpenAPI specs per entity
-metaphor schema generate sapiens --target openapi --split
+metaphor schema generate --target openapi --split
 ```
 
 ---
 
 ## `metaphor schema generate:rust`
 
-Shortcut alias for `metaphor schema generate`. Accepts all the same options.
+Shortcut alias for `metaphor schema generate`. Accepts all the same options, including the optional MODULE arg.
 
 ```bash
-metaphor schema generate:rust <MODULE> [OPTIONS]
+metaphor schema generate:rust [MODULE] [OPTIONS]
 ```
 
 All flags are identical to `metaphor schema generate`. See above.
@@ -168,7 +174,7 @@ All flags are identical to `metaphor schema generate`. See above.
 ### Examples
 
 ```bash
-metaphor schema generate:rust sapiens --target rust,sql,repository
+metaphor schema generate:rust --target rust,sql,repository
 metaphor schema generate:rust sapiens --changed --base main
 ```
 
@@ -176,28 +182,30 @@ metaphor schema generate:rust sapiens --changed --base main
 
 ## `metaphor schema generate:kotlin`
 
-Generate Kotlin Multiplatform Mobile code from schema definitions. Produces code for the KMP stack including Ktor API clients, SQLDelight database schemas, Decompose navigation, and MVI ViewModels.
+Generate Kotlin Multiplatform Mobile code from schema definitions. Produces code for the KMP stack including Ktor API clients, SQLDelight database schemas, Decompose navigation, and MVI ViewModels. Walks `external_imports` and `metaphor.yaml` `depends_on` to also generate transitive schema-module dependencies in the same invocation; pass `--no-deps` to opt out.
 
 ```bash
-metaphor schema generate:kotlin <MODULE> [OPTIONS]
+metaphor schema generate:kotlin [MODULE] [OPTIONS]
 ```
 
 ### Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `MODULE` | Module name to generate code for |
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `MODULE` | optional inside a workspace | Workspace project name (`bersihir-service`), schema `module:` value (`bersihir`), or legacy direct path. Auto-detects from CWD when omitted. See [Module resolution](generate-kotlin.md#how-module-and---output-resolve). |
 
 ### Options
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--target`, `-t` | string(s) | `all` | Comma-separated generation targets (see [generate-kotlin.md](generate-kotlin.md)) |
-| `--module-path` | path | `libs/modules` | Module base path (where `libs/modules/` is located) |
-| `--output`, `-o` | path | `apps/mobileapp/shared/src/commonMain/` | Output directory for generated code |
+| `--output`, `-o` | string | — | Workspace project name (resolves to `<project>/shared/src/commonMain/kotlin`). Mutually exclusive with `--output-path`. |
+| `--output-path` | path | — | Raw filesystem output path. Mutually exclusive with `--output`. |
+| `--module-path` | path | `libs/modules` | Legacy fallback for non-workspace layouts; ignored when a workspace is detected. |
 | `--package`, `-p` | string | auto-detect | Kotlin package name (auto-detects from `build.gradle.kts`) |
-| `--skip-existing` | flag | - | Skip files that already exist on disk |
-| `--verbose`, `-v` | flag | - | Verbose output |
+| `--no-deps` | flag | — | Skip transitive schema-module dependencies; generate only the primary module |
+| `--skip-existing` | flag | — | Skip files that already exist on disk |
+| `--verbose`, `-v` | flag | — | Verbose output (auto-detected MODULE, resolved schema path, output path) |
 
 ### Package Auto-Detection
 
@@ -210,23 +218,33 @@ When `--package` is not provided, the tool automatically detects the Kotlin pack
 ### Examples
 
 ```bash
-# Generate all Kotlin targets
-metaphor schema generate:kotlin sapiens
+# Auto-detect MODULE from CWD, write to a workspace mobileapp project
+metaphor schema generate:kotlin --output bersihir-mobile-laundry
+
+# Explicit MODULE (project name)
+metaphor schema generate:kotlin bersihir-service --output bersihir-mobile-laundry
+
+# Or schema `module:` value
+metaphor schema generate:kotlin sapiens --output bersihir-mobile-laundry
 
 # Generate only domain layer
-metaphor schema generate:kotlin sapiens --target entities,enums,repositories
+metaphor schema generate:kotlin --output bersihir-mobile-laundry \
+  --target entities,enums,repositories
 
-# Custom output directory
-metaphor schema generate:kotlin sapiens --output ./my-app/shared/src/commonMain/
+# Skip transitive deps; generate only the primary module
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
+
+# Raw filesystem path (e.g. preview to /tmp)
+metaphor schema generate:kotlin --output-path /tmp/kmp-preview
 
 # Custom package name
-metaphor schema generate:kotlin sapiens --package com.myapp.sapiens
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --package com.myapp.{module}
 
 # Skip files that have been customized
-metaphor schema generate:kotlin sapiens --skip-existing
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --skip-existing
 
 # Verbose output for debugging
-metaphor schema generate:kotlin sapiens --verbose
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --verbose
 ```
 
 ---

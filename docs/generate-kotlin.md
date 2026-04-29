@@ -5,14 +5,70 @@ Deep-dive into the `metaphor schema generate:kotlin` pipeline. This generates Ko
 ## Quick Start
 
 ```bash
-# Generate all Kotlin targets
-metaphor schema generate:kotlin sapiens
+# From inside a workspace project dir (auto-detects MODULE)
+metaphor schema generate:kotlin --output bersihir-mobile-laundry
 
-# Generate only domain layer
-metaphor schema generate:kotlin sapiens --target entities,enums,repositories
+# Same thing, MODULE explicit
+metaphor schema generate:kotlin bersihir-service --output bersihir-mobile-laundry
 
-# Custom output directory
-metaphor schema generate:kotlin sapiens --output ./my-app/shared/src/commonMain/
+# Schema-module name also works
+metaphor schema generate:kotlin bersihir --output bersihir-mobile-laundry
+
+# Subset of targets only
+metaphor schema generate:kotlin --target entities,enums,repositories --output bersihir-mobile-laundry
+
+# Skip transitive schema-module deps (otherwise the generator also walks
+# `external_imports` and emits Kotlin for sapiens, bucket, etc.)
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
+
+# Raw filesystem path instead of a workspace project name
+metaphor schema generate:kotlin --output-path /tmp/preview
+```
+
+---
+
+## How MODULE and --output Resolve
+
+Both arguments are workspace-aware when invoked inside a Metaphor workspace (a directory with `metaphor.yaml` somewhere up the tree).
+
+### MODULE argument
+
+In order:
+
+1. **Auto-detect from CWD** — if omitted entirely, walks up from CWD until it matches a `metaphor.yaml` project's `path:`. Errors with the available project list if no match.
+2. **Workspace project name** — e.g. `bersihir-service`, `backbone-sapiens`. Resolves to that project's `schema/` directory.
+3. **Schema `module:` value** — e.g. `bersihir`, `sapiens`. Read from each project's `schema/models/index.model.yaml` and matched.
+4. **Legacy fallback** — `<--module-path>/<MODULE>/schema` (kept for non-workspace layouts).
+
+When MODULE was given as a project name (e.g. `bersihir-service`), the Kotlin generator translates it to the schema's declared `module:` value (`bersihir`) before passing it through to package-name generation. This avoids hyphens-in-Kotlin-package issues.
+
+### --output vs --output-path
+
+`--output` and `--output-path` are mutually exclusive. Pick the one that matches your intent:
+
+| Flag | Argument | Use when |
+|------|----------|----------|
+| `--output`, `-o` | Workspace project name | You want generated code to land in a registered KMP app, e.g. `bersihir-mobile-laundry`. Resolves to `<project-path>/shared/src/commonMain/kotlin`. |
+| `--output-path` | Raw filesystem path | Preview to `/tmp`, ad-hoc dump elsewhere, or generation outside a workspace. |
+
+If `--output` doesn't match any `metaphor.yaml` project, the resolver also tries `apps/<name>/shared/src/commonMain/kotlin` on disk — apps that exist but aren't yet declared in `metaphor.yaml` still resolve. If neither lookup succeeds, the command errors with the list of available projects rather than silently creating a directory.
+
+If neither flag is provided, the generator falls back to its built-in default (`apps/mobileapp/shared/src/commonMain`), which exists for non-workspace use only.
+
+---
+
+## Transitive Dependencies
+
+By default `generate:kotlin` walks the primary module's schema for `external_imports[*].module` references plus any `depends_on` entries declared for the project in `metaphor.yaml`, then runs the generator once per dependency in the same invocation. Modules that resolve to a project without a `schema/` dir (e.g. crate-only deps like `backbone-framework`) are silently skipped; modules referenced via `external_imports` that don't exist on disk yet are skipped with a warning.
+
+Pass `--no-deps` to opt out and generate only the primary module.
+
+```bash
+# Primary + transitive deps (default)
+metaphor schema generate:kotlin --output bersihir-mobile-laundry
+
+# Primary only
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 ```
 
 ---
@@ -101,12 +157,10 @@ metaphor schema generate:kotlin sapiens --package com.myapp.{module}
 
 ## Output Directory
 
-Default output: `apps/mobileapp/shared/src/commonMain/`
-
-The generator adds the Kotlin package path structure automatically:
+Resolution rules are described in [How MODULE and --output Resolve](#how-module-and---output-resolve). The generator always adds the Kotlin package path structure underneath whatever output dir was resolved:
 
 ```
-apps/mobileapp/shared/src/commonMain/
+<output-root>/
   └── kotlin/
       └── com/
           └── myapp/
@@ -117,10 +171,14 @@ apps/mobileapp/shared/src/commonMain/
                   └── presentation/
 ```
 
-Override with `--output`:
+Examples:
 
 ```bash
-metaphor schema generate:kotlin sapiens --output ./my-app/shared/src/commonMain/
+# Workspace project name → <project>/shared/src/commonMain/kotlin
+metaphor schema generate:kotlin --output bersihir-mobile-laundry
+
+# Raw filesystem path
+metaphor schema generate:kotlin --output-path ./build/preview/kmp
 ```
 
 ---
@@ -176,59 +234,80 @@ The generated Kotlin code uses these libraries:
 
 ## Options Reference
 
+### Positional
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `MODULE` | optional inside a workspace | Project name (`bersihir-service`), schema `module:` value (`bersihir`), or legacy direct path. Auto-detects from CWD when omitted inside a workspace. |
+
+### Flags
+
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--target`, `-t` | string(s) | `all` | Comma-separated targets |
-| `--module-path` | path | `libs/modules` | Where `libs/modules/` is located |
-| `--output`, `-o` | path | `apps/mobileapp/shared/src/commonMain/` | Output directory |
-| `--package`, `-p` | string | auto-detect | Kotlin package name |
-| `--skip-existing` | flag | - | Do not overwrite existing files |
-| `--verbose`, `-v` | flag | - | Show detailed output |
+| `--output`, `-o` | string | — | Workspace project name (resolves to `<project>/shared/src/commonMain/kotlin`). Mutually exclusive with `--output-path`. |
+| `--output-path` | path | — | Raw filesystem output path. Mutually exclusive with `--output`. |
+| `--module-path` | path | `libs/modules` | Legacy fallback for non-workspace layouts; ignored when a workspace is detected. |
+| `--package`, `-p` | string | auto-detect | Kotlin package name (auto-detected from `build.gradle.kts` / SQLDelight / existing sources) |
+| `--no-deps` | flag | — | Generate only the primary module; skip transitive `external_imports` / `depends_on` deps |
+| `--skip-existing` | flag | — | Do not overwrite existing files |
+| `--verbose`, `-v` | flag | — | Show detailed output (auto-detected MODULE, resolved schema path, output path) |
 
 ---
 
 ## Practical Examples
 
-### Full Generation
+### Regenerate a mobile app after a schema change
+
+From the backend project's directory (e.g. `apps/bersihir-service/`):
 
 ```bash
-metaphor schema generate:kotlin sapiens
+metaphor schema generate:kotlin --output bersihir-mobile-laundry
 ```
 
-### Domain Layer Only
+This auto-detects MODULE from CWD, generates the primary module (`bersihir`) plus its transitive deps (`sapiens`, `bucket`, etc.), and writes Kotlin into `apps/bersihir-mobile-laundry/shared/src/commonMain/kotlin`.
+
+### Primary module only (skip deps)
 
 ```bash
-metaphor schema generate:kotlin sapiens --target entities,enums,repositories
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 ```
 
-### Infrastructure Layer Only
+### Domain layer only
 
 ```bash
-metaphor schema generate:kotlin sapiens --target api-clients,database,sync
+metaphor schema generate:kotlin --output bersihir-mobile-laundry \
+  --target entities,enums,repositories
 ```
 
-### Preserve Customized Files
+### Preview to a temp dir
+
+```bash
+metaphor schema generate:kotlin --output-path /tmp/kmp-preview --no-deps
+```
+
+### Preserve customized files
 
 When you've manually edited generated files and don't want them overwritten:
 
 ```bash
-metaphor schema generate:kotlin sapiens --skip-existing
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --skip-existing
 ```
 
-### Debug Package Detection
+### Debug auto-detection / package detection
 
 ```bash
-metaphor schema generate:kotlin sapiens --verbose
+metaphor schema generate:kotlin --output bersihir-mobile-laundry --verbose
 ```
 
-This prints the detected package name and source.
+Prints the auto-detected MODULE (if applicable), the resolved schema path, the resolved output path, and the detected Kotlin package + source.
 
-### Multiple Modules
+### Generate a different module than the current project
 
 ```bash
-metaphor schema generate:kotlin sapiens
-metaphor schema generate:kotlin commerce
-metaphor schema generate:kotlin messaging
+# From inside any workspace project
+metaphor schema generate:kotlin sapiens --output bersihir-mobile-laundry
+metaphor schema generate:kotlin bucket  --output bersihir-mobile-laundry
 ```
 
-Each module generates into its own package namespace.
+Each module generates into its own package namespace under the same output root.
