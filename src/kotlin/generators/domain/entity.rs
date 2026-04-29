@@ -138,6 +138,10 @@ impl EntityData {
 
         // Check if entity has a metadata field
         let has_metadata_field = fields.iter().any(|f| f.original_name == "metadata");
+        // Check if entity has an explicit `is_deleted` schema field — if so, the
+        // derived `val isDeleted` helper must be suppressed to avoid a duplicate
+        // declaration (Conflicting declarations / overload-resolution ambiguity).
+        let has_is_deleted_field = fields.iter().any(|f| f.original_name == "is_deleted");
         // Check if any field uses Map<String, Any?>
         let has_map_any = fields.iter().any(|f| f.kotlin_type.contains("Map<String, Any?>"));
 
@@ -153,7 +157,9 @@ impl EntityData {
                 set.into_iter().collect()
             },
             has_soft_delete: model.has_soft_delete(),
-            has_soft_delete_with_metadata: model.has_soft_delete() && has_metadata_field,
+            has_soft_delete_with_metadata: model.has_soft_delete()
+                && has_metadata_field
+                && !has_is_deleted_field,
             has_map_any,
             primary_key,
             description: None,
