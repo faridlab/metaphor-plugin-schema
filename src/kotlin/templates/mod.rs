@@ -1201,11 +1201,11 @@ sealed class {{module_pascal}}NavConfig {
 {{#each entities}}
     /** Navigate to the [{{entity_name}}] list screen (optional filter string). */
     @Serializable
-    data class {{entity_name}}List(val filter: String? = null) : {{module_pascal}}NavConfig()
+    data class {{entity_name}}List(val filter: String? = null) : {{../module_pascal}}NavConfig()
 
     /** Navigate to a single [{{entity_name}}] detail screen. */
     @Serializable
-    data class {{entity_name}}Detail(val id: String) : {{module_pascal}}NavConfig()
+    data class {{entity_name}}Detail(val id: String) : {{../module_pascal}}NavConfig()
 {{/each}}
 
     companion object {
