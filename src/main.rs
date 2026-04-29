@@ -13,7 +13,9 @@ fn main() -> Result<()> {
             kotlin::run(action)?;
         }
 
-        // Shortcut: generate:rust → same as `schema generate`
+        // Shortcut: generate:rust → same as `schema generate`. The MODULE
+        // arg is optional here too; the inner SchemaAction::Generate dispatch
+        // applies the same auto-detect-or-error logic.
         Commands::GenerateRust {
             module, target, output, dry_run, force, changed, base,
             models, hooks, workflows, lenient,

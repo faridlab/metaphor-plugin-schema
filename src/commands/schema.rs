@@ -74,8 +74,8 @@ pub enum SchemaAction {
     /// authorization) in YAML schemas are used to enhance generated code with
     /// methods, invariants, dependencies, and access control.
     Generate {
-        /// Module name to generate code for
-        module: String,
+        /// Module name to generate code for (auto-detected from CWD if omitted)
+        module: Option<String>,
 
         /// Generation targets (comma-separated)
         ///
@@ -249,7 +249,10 @@ pub fn execute(action: SchemaAction) -> Result<()> {
             hooks,
             workflows,
             lenient,
-        } => execute_generate(&module, &target, output, dry_run, force, split, changed, &base, validate, models.as_deref(), hooks.as_deref(), workflows.as_deref(), lenient),
+        } => {
+            let module = resolve_module_arg(module, "schema generate")?;
+            execute_generate(&module, &target, output, dry_run, force, split, changed, &base, validate, models.as_deref(), hooks.as_deref(), workflows.as_deref(), lenient)
+        },
         SchemaAction::Diff { module, base } => execute_diff(&module, &base),
         SchemaAction::Watch {
             module,
@@ -2277,9 +2280,70 @@ fn is_schema_file(path: &std::path::Path) -> bool {
     name.ends_with(".model.yaml") || name.ends_with(".hook.yaml") || name.ends_with(".workflow.yaml")
 }
 
-/// Find the schema path for a module
+/// Resolve a `Some(module)` arg or auto-detect from CWD.
+///
+/// `cmd_label` is used in error messages to show the user which command they
+/// were trying to run (e.g. "schema generate" vs "kotlin generate"). Returns
+/// the explicit name when provided; otherwise walks up CWD looking for a
+/// project in `metaphor.yaml`. Errors with a project list when both fail.
+pub(crate) fn resolve_module_arg(module: Option<String>, cmd_label: &str) -> Result<String> {
+    if let Some(m) = module.filter(|s| !s.is_empty()) {
+        return Ok(m);
+    }
+
+    let cwd = std::env::current_dir().context("getting current dir")?;
+    let workspace = crate::commands::workspace::Workspace::from_cwd(&cwd);
+    if let Some(ws) = workspace.as_ref() {
+        if let Some(project) = ws.project_for_cwd(&cwd) {
+            return Ok(project.name.clone());
+        }
+        let names: Vec<String> = ws.projects().iter().map(|p| p.name.clone()).collect();
+        let listing = if names.is_empty() {
+            "(metaphor.yaml has no projects)".to_string()
+        } else {
+            names.join(", ")
+        };
+        anyhow::bail!(
+            "no <MODULE> arg given and CWD does not match any workspace project. \
+             Run `{}` from inside a project dir, or pass MODULE explicitly. \
+             Available projects: {}",
+            cmd_label,
+            listing
+        );
+    }
+
+    anyhow::bail!(
+        "no <MODULE> arg given and not inside a Metaphor workspace. \
+         Run `{}` from a directory with a metaphor.yaml in its tree, \
+         or pass MODULE explicitly.",
+        cmd_label
+    );
+}
+
+/// Find the schema path for a module.
+///
+/// Resolution order:
+/// 1. Workspace lookup — if `metaphor.yaml` exists upward from CWD, match the
+///    arg against project names *and* the `module:` field declared in each
+///    project's `schema/models/index.model.yaml`. This lets users run
+///    `metaphor schema generate bersihir` (schema module name) or
+///    `metaphor schema generate bersihir-service` (project name) and have
+///    both resolve to the same `apps/bersihir-service/schema/` directory.
+/// 2. Legacy `libs/modules/...` / `modules/...` candidates relative to CWD.
+/// 3. Treat the arg as a direct path (this is the quirk that lets
+///    `metaphor schema generate schema` work when invoked from a directory
+///    that happens to have a `./schema/` subdir).
 fn find_module_schema_path(module: &str) -> Result<PathBuf> {
-    // Check common locations
+    // (1) Workspace lookup
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(ws) = crate::commands::workspace::Workspace::from_cwd(&cwd) {
+            if let Some(dir) = ws.schema_dir_for(module) {
+                return Ok(dir);
+            }
+        }
+    }
+
+    // (2) Legacy candidates
     let candidates = [
         PathBuf::from(format!("libs/modules/{}/schema", module)),
         PathBuf::from(format!("libs/modules/{}", module)),
@@ -2294,7 +2358,7 @@ fn find_module_schema_path(module: &str) -> Result<PathBuf> {
         }
     }
 
-    // If module looks like a path, use it directly
+    // (3) Direct path fallback
     let path = PathBuf::from(module);
     if path.exists() {
         return Ok(path);

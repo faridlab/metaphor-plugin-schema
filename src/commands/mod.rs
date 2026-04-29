@@ -39,10 +39,14 @@ pub enum Commands {
     /// Example: metaphor-schema generate:rust bersihir --target all
     ///
     /// Also accessible as plain `generate` (defaults to Rust target).
+    ///
+    /// When invoked from inside a workspace project directory (a subdir of any
+    /// project listed in `metaphor.yaml`), MODULE is optional and auto-detects
+    /// to the current project. Pass it explicitly to target a different module.
     #[command(name = "generate:rust", alias = "generate")]
     GenerateRust {
-        /// Module name to generate code for
-        module: String,
+        /// Module name to generate code for (auto-detected from CWD if omitted)
+        module: Option<String>,
 
         /// Generation targets (comma-separated)
         #[arg(short, long, default_value = "all")]
