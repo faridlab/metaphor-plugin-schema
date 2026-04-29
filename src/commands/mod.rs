@@ -3,6 +3,7 @@
 pub mod kotlin;
 pub mod schema;
 pub mod webapp;
+pub mod workspace;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
