@@ -207,7 +207,16 @@ The generated Kotlin code uses these libraries:
 - Type mapping: `uuid` -> `String`, `timestamp` -> `Instant`, `date` -> `LocalDate`
 - Automatic import generation
 - Enum type references with proper package resolution
-- Metadata field support for audit tracking
+- **`@audit_metadata` fields** are emitted as the `Metadata` typealias
+  (`typealias Metadata = Map<String, JsonElement?>`), not as raw `JsonElement`.
+  This lets the derived helpers (e.g. `metadata["deleted_at"]`) compile and
+  keeps DTOs / FormData / Mappers all in agreement on the type.
+- **Soft-delete derived helper.** When a model has `@soft_delete` *and* an
+  `@audit_metadata` field, the entity gains a derived
+  `val isDeleted: Boolean get() = metadata["deleted_at"] != null` helper.
+  If the schema **also** declares an explicit `is_deleted` column, the helper
+  is suppressed (the explicit column wins) so the entity has a single
+  canonical `isDeleted` property and no duplicate-declaration error.
 
 ### API Clients
 
@@ -311,3 +320,21 @@ metaphor schema generate:kotlin bucket  --output bersihir-mobile-laundry
 ```
 
 Each module generates into its own package namespace under the same output root.
+
+---
+
+## Verifying generated code
+
+After regenerating, compile against a real target — `compileKotlinMetadata`
+alone is not sufficient. The metadata-only KMP check is permissive and will
+miss e.g. duplicate-declaration errors, conflicting type signatures, and
+sealed-class hierarchy mismatches. Run a JVM/Android target compile instead:
+
+```bash
+./gradlew :shared:compileDebugKotlinAndroid
+# or, if you target iOS:
+./gradlew :shared:compileKotlinIosSimulatorArm64
+```
+
+If you set up CI for the consumer workspace, prefer one of these over the
+metadata target.

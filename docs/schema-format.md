@@ -264,9 +264,9 @@ Used in the legacy DSL format and in relation `attributes` arrays:
 | `@max(n)` | Maximum length/value | `@max(255)` |
 | `@pattern(regex)` | Regex validation pattern | `@pattern([a-z0-9-]+)` |
 | `@foreign_key(ref)` | Foreign key reference | `@foreign_key(User.id)` |
-| `@soft_delete` | Enable soft-delete on model | - |
+| `@soft_delete` | Enable soft-delete on model. On the Kotlin side, when paired with an `@audit_metadata` field, the entity gains a derived `val isDeleted: Boolean get() = metadata["deleted_at"] != null` helper. If the schema also declares an explicit `is_deleted` column, the helper is suppressed (the column wins) so there is exactly one canonical `isDeleted` property. | - |
 | `@hashed` | Field is stored hashed (e.g., passwords) | `password string @hashed` |
-| `@audit_metadata` | JSONB audit metadata field | - |
+| `@audit_metadata` | JSONB audit metadata field. On the Kotlin side this is emitted as the `Metadata` typealias (`Map<String, JsonElement?>`), not raw `JsonElement` — see [generate-kotlin.md](./generate-kotlin.md). | - |
 
 ### Foreign Key Actions
 
