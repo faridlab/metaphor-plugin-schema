@@ -1,6 +1,6 @@
 //! Kotlin type mapping and code generation utilities
 
-use crate::ast::{PrimitiveType, TypeRef};
+use crate::ast::{Field, PrimitiveType, TypeRef};
 use std::collections::HashMap;
 
 /// Kotlin type mapper for converting schema types to Kotlin types
@@ -42,6 +42,29 @@ impl KotlinTypeMapper {
             _ => type_ref,
         };
         self.to_kotlin_type_with_optional(unwrapped, false)
+    }
+
+    /// Convert a Field to its Kotlin type, applying field-attribute overrides.
+    ///
+    /// `@audit_metadata` fields use the `Metadata` typealias (Map<String, JsonElement?>)
+    /// instead of the raw `JsonElement` that the underlying `PrimitiveType::Json` would
+    /// produce — templates rely on `metadata["deleted_at"]`-style bracket access, which
+    /// requires the Map-based typealias.
+    pub fn to_kotlin_field_type(&self, field: &Field) -> String {
+        if field.has_attribute("audit_metadata") {
+            "Metadata".to_string()
+        } else {
+            self.to_kotlin_type(&field.type_ref)
+        }
+    }
+
+    /// Same as `to_kotlin_field_type` but without the optional `?` marker.
+    pub fn to_kotlin_field_type_non_nullable(&self, field: &Field) -> String {
+        if field.has_attribute("audit_metadata") {
+            "Metadata".to_string()
+        } else {
+            self.to_kotlin_type_non_nullable(&field.type_ref)
+        }
     }
 
     /// Convert a TypeRef to Kotlin type string with optional handling

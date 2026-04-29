@@ -265,8 +265,10 @@ fn generate_mapper(
                 }
             }
 
-            // Detect special types that need explicit imports
-            let type_str = generator.type_mapper.to_kotlin_type(&f.type_ref);
+            // Detect special types that need explicit imports.
+            // Use the field-aware variants so `@audit_metadata` fields are seen as `Metadata`,
+            // not `JsonElement` (the bare type mapper produces JsonElement for PrimitiveType::Json).
+            let type_str = generator.type_mapper.to_kotlin_field_type(f);
             if type_str.contains("Instant") { needs_instant = true; }
             if type_str.contains("LocalDate") { needs_local_date = true; }
             if type_str.contains("JsonElement") || type_str.contains("JsonObject") || type_str.contains("JsonArray") {
@@ -275,14 +277,14 @@ fn generate_mapper(
             if type_str.contains("Metadata") { needs_metadata = true; }
 
             {
-                let kt_type_non_nullable = generator.type_mapper.to_kotlin_type_non_nullable(&f.type_ref);
+                let kt_type_non_nullable = generator.type_mapper.to_kotlin_field_type_non_nullable(f);
                 let is_nullable = f.type_ref.is_optional();
                 let default_val = form_default_value(&kt_type_non_nullable, is_nullable);
                 let form_is_nullable = is_nullable || default_val == "null";
                 FieldMappingData {
                     name: generator.type_mapper.to_kotlin_property_name(&f.name),
                     original_name: f.name.clone(),
-                    kotlin_type: generator.type_mapper.to_kotlin_type(&f.type_ref),
+                    kotlin_type: generator.type_mapper.to_kotlin_field_type(f),
                     kotlin_type_non_nullable: kt_type_non_nullable,
                     is_nullable,
                     form_is_nullable,
@@ -429,8 +431,9 @@ fn generate_validator(
                 }
             }
 
-            // Check for special types needing imports
-            let type_str = generator.type_mapper.to_kotlin_type(&f.type_ref);
+            // Check for special types needing imports.
+            // Use the field-aware variant so `@audit_metadata` fields are recognized as `Metadata`.
+            let type_str = generator.type_mapper.to_kotlin_field_type(f);
             if type_str.contains("Instant") {
                 needs_instant = true;
             }
@@ -448,14 +451,14 @@ fn generate_validator(
             }
 
             {
-                let kt_type_non_nullable = generator.type_mapper.to_kotlin_type_non_nullable(&f.type_ref);
+                let kt_type_non_nullable = generator.type_mapper.to_kotlin_field_type_non_nullable(f);
                 let is_nullable = f.type_ref.is_optional();
                 let default_val = form_default_value(&kt_type_non_nullable, is_nullable);
                 let form_is_nullable = is_nullable || default_val == "null";
                 FieldMappingData {
                     name: generator.type_mapper.to_kotlin_property_name(&f.name),
                     original_name: f.name.clone(),
-                    kotlin_type: generator.type_mapper.to_kotlin_type(&f.type_ref),
+                    kotlin_type: generator.type_mapper.to_kotlin_field_type(f),
                     kotlin_type_non_nullable: kt_type_non_nullable,
                     is_nullable,
                     form_is_nullable,

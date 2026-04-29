@@ -219,7 +219,7 @@ impl EntityData {
 impl FieldData {
     /// Create field data from a schema field
     pub fn from_field(generator: &MobileGenerator, field: &Field) -> Result<Self> {
-        let kotlin_type = generator.type_mapper.to_kotlin_type(&field.type_ref);
+        let kotlin_type = generator.type_mapper.to_kotlin_field_type(field);
         let is_nullable = field.type_ref.is_optional();
         let kotlin_type_contains_map = kotlin_type.contains("Map<");
 
