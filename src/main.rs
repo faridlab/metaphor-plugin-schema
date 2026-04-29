@@ -40,15 +40,17 @@ fn main() -> Result<()> {
 
         // Shortcut: generate:kotlin → same as `kotlin generate`
         Commands::GenerateKotlin {
-            module, module_path, output, package, target, skip_existing, verbose,
+            module, module_path, output, output_path, package, target, skip_existing, no_deps, verbose,
         } => {
             let action = kotlin::KotlinAction::Generate {
                 module,
                 module_path,
                 output,
+                output_path,
                 package,
                 target,
                 skip_existing,
+                no_deps,
                 verbose,
             };
             kotlin::run(action)?;

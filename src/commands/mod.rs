@@ -91,19 +91,34 @@ pub enum Commands {
 
     /// Generate Kotlin Multiplatform Mobile code
     ///
-    /// Example: metaphor-schema generate:kotlin bersihir --output ./my-app
+    /// Example: metaphor-schema generate:kotlin bersihir-service --output bersihir-mobile-laundry
+    ///
+    /// Inside a Metaphor workspace (a directory containing metaphor.yaml), the
+    /// MODULE arg can be either a project name (e.g. `bersihir-service`) or a
+    /// schema `module:` value (e.g. `bersihir`). The generator also walks the
+    /// project's transitive schema-module dependencies and emits Kotlin code
+    /// for each in one shot — pass `--no-deps` to opt out.
+    ///
+    /// Output destination: pass a workspace project name via `--output`
+    /// (resolves to `<project>/shared/src/commonMain/kotlin`) OR a raw
+    /// filesystem path via `--output-path`. The two are mutually exclusive.
     #[command(name = "generate:kotlin")]
     GenerateKotlin {
-        /// Module name to generate code for
-        module: String,
+        /// Module identifier — project name or schema `module:` value
+        /// (auto-detected from CWD if omitted)
+        module: Option<String>,
 
-        /// Module base path (where libs/modules/ is located)
+        /// Module base path (legacy fallback; ignored when in a workspace)
         #[arg(long, default_value = "libs/modules")]
         module_path: PathBuf,
 
-        /// Output directory for generated code
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        /// Workspace project name (resolves to its mobile source root)
+        #[arg(short, long, conflicts_with = "output_path")]
+        output: Option<String>,
+
+        /// Raw filesystem path to write generated code to
+        #[arg(long, conflicts_with = "output")]
+        output_path: Option<PathBuf>,
 
         /// Kotlin package name (auto-detects from project if not provided)
         #[arg(short, long)]
@@ -116,6 +131,10 @@ pub enum Commands {
         /// Skip files that already exist on disk
         #[arg(long)]
         skip_existing: bool,
+
+        /// Do not also generate transitive schema-module dependencies
+        #[arg(long)]
+        no_deps: bool,
 
         /// Verbose output
         #[arg(short, long)]
