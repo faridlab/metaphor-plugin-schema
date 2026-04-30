@@ -203,7 +203,10 @@ The generated Kotlin code uses these libraries:
 
 ### Entities
 
-- Kotlin `data class` with proper serialization annotations
+- Kotlin `data class` annotated `@Serializable` (kotlinx.serialization)
+- Field names are converted to **camelCase** and used as-is on the wire — no
+  `@SerialName` annotation is emitted. The backend API serializes in camelCase,
+  so the Kotlin property name and the JSON key match by default.
 - Type mapping: `uuid` -> `String`, `timestamp` -> `Instant`, `date` -> `LocalDate`
 - Automatic import generation
 - Enum type references with proper package resolution
@@ -222,6 +225,9 @@ The generated Kotlin code uses these libraries:
 
 - Ktor HTTP client setup with JSON serialization
 - CRUD methods (create, getById, list, update, delete)
+- Base path is `"$baseUrl/api/v1/{collection}"` — the schema module is **not**
+  included in the URL. Mount each module's routes under a flat
+  `/api/v1/<collection>` namespace on the backend.
 - Error handling with sealed result types
 - Pagination support
 
