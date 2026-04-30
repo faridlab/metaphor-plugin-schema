@@ -197,7 +197,7 @@ class {{entity_name}}ApiClient(
     baseUrl: String
 ) : BaseCrudApiClient<{{entity_name}}>(httpClient, baseUrl) {
 
-    override val basePath = "$baseUrl/api/v1/{{module_lower}}/{{collection}}"
+    override val basePath = "$baseUrl/api/v1/{{collection}}"
 
     override suspend fun deserializeOne(response: HttpResponse): {{entity_name}} {
         val wrapped: BackendSingleResponse<{{entity_name}}> = response.body()
