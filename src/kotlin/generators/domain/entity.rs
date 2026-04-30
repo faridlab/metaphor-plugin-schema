@@ -58,8 +58,6 @@ pub struct FieldData {
     pub is_sensitive: bool,
     /// Whether the Kotlin type contains a Map (for @Contextual annotation)
     pub kotlin_type_contains_map: bool,
-    /// Whether @SerialName annotation is needed (name differs from original_name)
-    pub name_needs_serial_name: bool,
 }
 
 impl EntityData {
@@ -245,9 +243,7 @@ impl FieldData {
         // Detect sensitive field names (passwords, tokens, secrets)
         let is_sensitive = is_sensitive_field(&field.name);
 
-        // Convert to camelCase and check if @SerialName is needed
         let camel_case_name = generator.type_mapper.to_kotlin_property_name(&field.name);
-        let name_needs_serial_name = camel_case_name != field.name;
 
         Ok(Self {
             name: camel_case_name,
@@ -260,7 +256,6 @@ impl FieldData {
             description: None,
             is_sensitive,
             kotlin_type_contains_map,
-            name_needs_serial_name,
         })
     }
 }

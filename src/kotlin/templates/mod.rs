@@ -47,15 +47,9 @@ data class {{name}}(
     /** {{original_name}} (SENSITIVE - never log or expose) */
     val {{name}}: {{{kotlin_type}}},
 {{else if kotlin_type}}
-    {{#if name_needs_serial_name}}
-    @SerialName("{{original_name}}")
-    {{/if}}
     /** {{original_name}} */
     val {{name}}: {{{kotlin_type}}},
 {{else}}
-    {{#if name_needs_serial_name}}
-    @SerialName("{{original_name}}")
-    {{/if}}
     /** {{original_name}} */
     val {{name}}: {{{kotlin_type}}},
 {{/if}}

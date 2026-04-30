@@ -1,8 +1,8 @@
 // Tests for entity generation
 //
 // Tests verify that:
-// - @SerialName annotations are generated for snake_case fields
-// - Fields with matching names don't get annotations
+// - Snake_case schema field names are converted to camelCase Kotlin properties
+// - No @SerialName annotations are emitted (API responses use camelCase, matching property names)
 // - Template rendering produces valid Kotlin code
 
 use super::*;
@@ -10,59 +10,49 @@ use crate::ast::{Attribute, Field, Model, PrimitiveType, TypeRef};
 use pretty_assertions::assert_eq;
 
 #[test]
-fn test_field_data_needs_serial_name_for_snake_case() {
-    // Arrange
+fn test_field_data_converts_snake_case_to_camel_case() {
     let generator = MobileGenerator::new("com.test").unwrap();
     let field = Field::new("country_id", TypeRef::Primitive(PrimitiveType::String));
 
-    // Act
     let field_data = FieldData::from_field(&generator, &field).unwrap();
 
-    // Assert
     assert_eq!(field_data.name, "countryId");
     assert_eq!(field_data.original_name, "country_id");
-    assert!(field_data.name_needs_serial_name, "country_id should need SerialName");
 }
 
 #[test]
-fn test_field_data_no_serial_name_for_camel_case() {
-    // Arrange
+fn test_field_data_preserves_already_camel_case() {
     let generator = MobileGenerator::new("com.test").unwrap();
     let field = Field::new("name", TypeRef::Primitive(PrimitiveType::String));
 
-    // Act
     let field_data = FieldData::from_field(&generator, &field).unwrap();
 
-    // Assert
     assert_eq!(field_data.name, "name");
     assert_eq!(field_data.original_name, "name");
-    assert!(!field_data.name_needs_serial_name, "name should not need SerialName");
 }
 
 #[test]
 fn test_field_data_multiple_snake_case_fields() {
-    // Arrange
     let generator = MobileGenerator::new("com.test").unwrap();
 
     let test_cases = vec![
-        ("postal_code", "postalCode", true),
-        ("province_id", "provinceId", true),
-        ("city_id", "cityId", true),
-        ("district_id", "districtId", true),
-        ("user_id", "userId", true),
-        ("created_at", "createdAt", true),
-        ("updated_at", "updatedAt", true),
-        ("first_name", "firstName", true),
-        ("last_name", "lastName", true),
-        ("phone_number", "phoneNumber", true),
-        // Fields that don't need SerialName
-        ("id", "id", false),
-        ("name", "name", false),
-        ("email", "email", false),
-        ("status", "status", false),
+        ("postal_code", "postalCode"),
+        ("province_id", "provinceId"),
+        ("city_id", "cityId"),
+        ("district_id", "districtId"),
+        ("user_id", "userId"),
+        ("created_at", "createdAt"),
+        ("updated_at", "updatedAt"),
+        ("first_name", "firstName"),
+        ("last_name", "lastName"),
+        ("phone_number", "phoneNumber"),
+        ("id", "id"),
+        ("name", "name"),
+        ("email", "email"),
+        ("status", "status"),
     ];
 
-    for (original, expected_camel, needs_annotation) in test_cases {
+    for (original, expected_camel) in test_cases {
         let field = Field::new(original, TypeRef::Primitive(PrimitiveType::String));
 
         let field_data = FieldData::from_field(&generator, &field).unwrap();
@@ -72,17 +62,11 @@ fn test_field_data_multiple_snake_case_fields() {
             "Field '{}' should convert to '{}'",
             original, expected_camel
         );
-        assert_eq!(
-            field_data.name_needs_serial_name, needs_annotation,
-            "Field '{}' name_needs_serial_name should be {}",
-            original, needs_annotation
-        );
     }
 }
 
 #[test]
-fn test_entity_template_includes_serial_name_annotation() {
-    // Arrange
+fn test_entity_template_emits_no_serial_name_annotations() {
     let generator = MobileGenerator::new("com.test").unwrap();
     let model = Model {
         name: "TestEntity".to_string(),
@@ -125,34 +109,32 @@ fn test_entity_template_includes_serial_name_annotation() {
         span: Default::default(),
     };
 
-    // Act
     let entity_data =
         EntityData::from_model(&generator, &model, "com.test.entity", "com.test").unwrap();
 
-    // Render the template
     let content = generator
         .handlebars
         .render("entity", &entity_data)
         .expect("Template render failed");
 
-    // Assert - check that SerialName annotations are present
-    assert!(content.contains("@SerialName(\"country_id\")"));
-    assert!(content.contains("@SerialName(\"postal_code\")"));
+    // No @SerialName annotations — backbone-framework API responses use camelCase,
+    // which matches the Kotlin property names directly.
+    assert!(
+        !content.contains("@SerialName"),
+        "Generated entity should not contain @SerialName annotations"
+    );
 
-    // Assert - check that fields without name changes don't have SerialName
-    // The "name" field should not have @SerialName annotation
-    // Verify by checking the structure around the name field
-    let name_field_pattern = "/** name */\n    val name: String";
-    assert!(content.contains(name_field_pattern));
-
-    // Assert - verify the complete structure
+    // Properties use camelCase derived from snake_case schema names
     assert!(content.contains("val countryId: String"));
     assert!(content.contains("val postalCode: String?"));
+
+    // Schema field names are still preserved in doc comments
+    assert!(content.contains("/** country_id */"));
+    assert!(content.contains("/** postal_code */"));
 }
 
 #[test]
 fn test_entity_template_no_annotation_for_matching_names() {
-    // Arrange
     let generator = MobileGenerator::new("com.test").unwrap();
     let model = Model {
         name: "SimpleEntity".to_string(),
@@ -189,41 +171,31 @@ fn test_entity_template_no_annotation_for_matching_names() {
         span: Default::default(),
     };
 
-    // Act
     let entity_data =
         EntityData::from_model(&generator, &model, "com.test.entity", "com.test").unwrap();
 
-    // Render the template
     let content = generator
         .handlebars
         .render("entity", &entity_data)
         .expect("Template render failed");
 
-    // Assert - no @SerialName annotations should be present
     assert!(!content.contains("@SerialName"));
 }
 
 #[test]
 fn test_field_data_preserves_nullable_information() {
-    // Arrange
     let generator = MobileGenerator::new("com.test").unwrap();
 
-    // Non-nullable field
     let field_required = Field::new("country_id", TypeRef::Primitive(PrimitiveType::String));
 
-    // Nullable field
     let field_optional = Field::new(
         "postal_code",
         TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::String))),
     );
 
-    // Act
     let field_data_required = FieldData::from_field(&generator, &field_required).unwrap();
     let field_data_optional = FieldData::from_field(&generator, &field_optional).unwrap();
 
-    // Assert
     assert!(!field_data_required.is_nullable);
     assert!(field_data_optional.is_nullable);
-    assert!(field_data_required.name_needs_serial_name);
-    assert!(field_data_optional.name_needs_serial_name);
 }
