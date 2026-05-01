@@ -138,8 +138,16 @@ pub enum GenerationTarget {
     Entities,
     /// Enums (sealed classes)
     Enums,
-    /// Repository interfaces
+    /// Repository interfaces (domain layer)
     Repositories,
+    /// Offline-first repository implementations (infrastructure layer)
+    ///
+    /// Generates one `Offline<Entity>Repository.kt` per model that wraps the
+    /// matching `<Entity>ApiClient` with cache-first reads, cache-aware writes
+    /// (delete invalidates lists), and offline fallback. Subclasses opt into
+    /// delta-sync by overriding `fetchListSinceFromApi` in a companion
+    /// `*RepositoryCustom.kt` file marked with `// <<< CUSTOM`.
+    OfflineRepositories,
     /// Use cases (application layer)
     UseCases,
     /// Application services (application layer)
@@ -174,6 +182,7 @@ impl GenerationTarget {
             Self::Entities => "entities",
             Self::Enums => "enums",
             Self::Repositories => "repositories",
+            Self::OfflineRepositories => "offlinerepositories",
             Self::UseCases => "usecases",
             Self::AppServices => "appservices",
             Self::ApiClients => "apiclients",
@@ -200,6 +209,7 @@ impl GenerationTarget {
             GenerationTarget::Entities,
             GenerationTarget::Enums,
             GenerationTarget::Repositories,
+            GenerationTarget::OfflineRepositories,
             GenerationTarget::UseCases,
             GenerationTarget::AppServices,
             GenerationTarget::ApiClients,

@@ -209,6 +209,77 @@ class {{entity_name}}ApiClient(
 }
 "#;
 
+/// Offline-first repository template — wraps an API client with cache-first
+/// reads, cache-aware writes, and offline fallback by extending
+/// `OfflineFirstRepository<T>`. Hooks (`fetchOneFromApi`, `fetchListFromApi`,
+/// `deleteFromApi`, JSON serialize/deserialize) are wired directly to the
+/// matching `<Entity>ApiClient`.
+///
+/// Delta-sync is intentionally NOT generated. To opt in, extend the API
+/// client's `getAll` to accept an `updatedSince: String?` parameter and
+/// override `fetchListSinceFromApi` in a companion
+/// `Offline<Entity>RepositoryCustom.kt` file marked with `// <<< CUSTOM`.
+/// The base class falls back to plain TTL caching when the override is absent.
+pub const OFFLINE_REPOSITORY_TEMPLATE: &str = r#"package {{package}}
+
+import {{entity_package}}.{{entity_name}}
+import {{api_package}}.{{entity_name}}ApiClient
+import {{base_package}}.domain.types.Result
+import {{base_package}}.infrastructure.cache.CacheTTL
+import {{base_package}}.infrastructure.database.dao.CacheDao
+import {{base_package}}.infrastructure.network.ConnectivityMonitor
+import {{base_package}}.infrastructure.pagination.PaginatedApiResponse
+import {{base_package}}.infrastructure.repository.OfflineFirstRepository
+import kotlinx.serialization.encodeToString
+
+/**
+ * Offline-first repository for [{{entity_name}}].
+ *
+ * Wraps [{{entity_name}}ApiClient] with cache-first reads, cache-aware writes
+ * (delete invalidates the per-id and list caches), and offline fallback —
+ * the inherited [OfflineFirstRepository] handles all of that.
+ *
+ * ## TTL
+ * Defaults to [CacheTTL.DEFAULT]. Override per-entity in a companion
+ * `Offline{{entity_name}}RepositoryCustom.kt` file (or extend [CacheTTL] with
+ * a domain-specific constant) once you know how often this entity changes.
+ *
+ * ## Delta-sync
+ * Delta-sync is opt-in. To enable cheap "what changed since last cache?"
+ * queries, extend [{{entity_name}}ApiClient.getAll] with an
+ * `updatedSince: String?` parameter, then override [fetchListSinceFromApi]
+ * in a companion `Offline{{entity_name}}RepositoryCustom.kt` file. Without
+ * the override, reads fall back to plain TTL caching.
+ *
+ * ## Filtered reads
+ * Per-screen filter helpers (e.g. `getAllFiltered(outletId = ...)`) live in a
+ * companion `Offline{{entity_name}}RepositoryCustom.kt` file alongside the
+ * delta-sync override.
+ *
+ * Generated from Backbone schema — extend behavior in a custom partial
+ * marked with `// <<< CUSTOM` so future regenerations don't clobber it.
+ */
+class Offline{{entity_name}}Repository(
+    private val api: {{entity_name}}ApiClient,
+    cacheDao: CacheDao,
+    connectivityMonitor: ConnectivityMonitor,
+) : OfflineFirstRepository<{{entity_name}}>(
+    entityType = "{{collection}}",
+    ttl = CacheTTL.DEFAULT,
+    cacheDao = cacheDao,
+    connectivityMonitor = connectivityMonitor,
+) {
+    override suspend fun fetchOneFromApi(id: String): Result<{{entity_name}}> = api.getById(id)
+    override suspend fun fetchListFromApi(page: Int, limit: Int, sortBy: String, sortDesc: Boolean) =
+        api.getAll(page = page, limit = limit, sortBy = sortBy, sortDesc = sortDesc)
+    override suspend fun deleteFromApi(id: String): Result<Unit> = api.delete(id)
+    override fun serializeOne(item: {{entity_name}}): String = json.encodeToString(item)
+    override fun deserializeOne(jsonStr: String): {{entity_name}} = json.decodeFromString(jsonStr)
+    override fun serializeList(response: PaginatedApiResponse<{{entity_name}}>): String = json.encodeToString(response)
+    override fun deserializeList(jsonStr: String): PaginatedApiResponse<{{entity_name}}> = json.decodeFromString(jsonStr)
+}
+"#;
+
 /// SQLDelight schema template
 pub const SQLDELIGHT_SCHEMA_TEMPLATE: &str = r#"-- {{entity_name}} SQLDelight Schema
 -- Generated from Backbone schema

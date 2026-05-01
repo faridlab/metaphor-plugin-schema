@@ -60,6 +60,7 @@ impl MobileGenerator {
 
         // Infrastructure templates
         handlebars.register_template_string("api_client", templates::API_CLIENT_TEMPLATE)?;
+        handlebars.register_template_string("offline_repository", templates::OFFLINE_REPOSITORY_TEMPLATE)?;
         handlebars.register_template_string("sqldelight_schema", templates::SQLDELIGHT_SCHEMA_TEMPLATE)?;
         handlebars.register_template_string("sqldelight_queries", templates::SQLDELIGHT_QUERIES_TEMPLATE)?;
 
@@ -162,6 +163,9 @@ impl MobileGenerator {
         // Generate infrastructure layer
         if targets_to_generate.contains(&GenerationTarget::ApiClients) {
             result.merge(infrastructure::generate_api_clients(self, schema, output_dir)?);
+        }
+        if targets_to_generate.contains(&GenerationTarget::OfflineRepositories) {
+            result.merge(infrastructure::generate_offline_repositories(self, schema, output_dir)?);
         }
         if targets_to_generate.contains(&GenerationTarget::Database) {
             result.merge(infrastructure::generate_database(self, schema, output_dir)?);
@@ -409,6 +413,8 @@ pub struct GenerationResult {
     pub enums_count: usize,
     /// Number of repositories processed
     pub repositories_count: usize,
+    /// Number of offline-first repositories processed
+    pub offline_repositories_count: usize,
     /// Number of use cases processed
     pub usecases_count: usize,
     /// Number of services processed
@@ -434,6 +440,7 @@ impl GenerationResult {
         self.entities_count += other.entities_count;
         self.enums_count += other.enums_count;
         self.repositories_count += other.repositories_count;
+        self.offline_repositories_count += other.offline_repositories_count;
         self.usecases_count += other.usecases_count;
         self.services_count += other.services_count;
         self.mappers_count += other.mappers_count;
