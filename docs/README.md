@@ -9,7 +9,7 @@ Comprehensive documentation for the Metaphor schema-driven code generator.
 | Pipeline | Command | Output | Targets |
 |----------|---------|--------|---------|
 | **Rust Server** | `metaphor schema generate` | Rust, SQL, Proto, gRPC, REST | 38 targets |
-| **Kotlin Mobile** | `metaphor schema generate:kotlin` | Kotlin Multiplatform (KMP) | 16 targets |
+| **Kotlin Mobile** | `metaphor schema generate:kotlin` | Kotlin Multiplatform (KMP) | 17 targets |
 | **Web App** | `metaphor schema generate:webapp` | TypeScript + React | 14 targets |
 
 ## Architecture
@@ -22,7 +22,7 @@ Comprehensive documentation for the Metaphor schema-driven code generator.
   │ *.workflow   │──┼───>│ Parser │───>│ Resolver │───>│ Generators  │
   │   .yaml      │  │    └────────┘    └──────────┘    ├─────────────┤
   │              │  │         │              │          │ Rust (38)   │
-  │ *.model      │──┤    Lexer +        Type &         │ Kotlin (16) │
+  │ *.model      │──┤    Lexer +        Type &         │ Kotlin (17) │
   │   .schema    │──┘    YAML parse    Reference       │ Webapp (14) │
   └──────────────┘                     Resolution      └─────────────┘
 ```
@@ -37,7 +37,7 @@ Comprehensive documentation for the Metaphor schema-driven code generator.
 | [CLI Reference](cli-reference.md) | Every command, every flag, every option |
 | [Schema Format](schema-format.md) | YAML and legacy DSL syntax, types, attributes |
 | [Rust Generation](generate-rust.md) | 38 server-side targets (proto, rust, sql, handler, grpc, ...) |
-| [Kotlin Generation](generate-kotlin.md) | 16 KMP mobile targets (entities, api-clients, view-models, ...) |
+| [Kotlin Generation](generate-kotlin.md) | 17 KMP mobile targets (entities, api-clients, offline-repositories, view-models, ...) |
 | [Webapp Generation](generate-webapp.md) | 14 TypeScript + React targets (hooks, forms, pages, ...) |
 | [DDD Guide](ddd-guide.md) | Entities, value objects, domain services, event sourcing, authorization |
 
@@ -76,7 +76,7 @@ libs/modules/sapiens/
 ### Generation Pipelines
 
 - **`metaphor schema generate`** / **`generate:rust`** -- Server-side Rust code with 38 targets across data, business logic, API, and infrastructure layers
-- **`metaphor schema generate:kotlin`** -- Kotlin Multiplatform Mobile with 16 targets (Ktor, SQLDelight, Decompose, Compose)
+- **`metaphor schema generate:kotlin`** -- Kotlin Multiplatform Mobile with 17 targets (Ktor, SQLDelight, Decompose, Compose)
 - **`metaphor schema generate:webapp`** -- TypeScript + React with 14 targets (React Query, Zod, CRUD pages, Clean Architecture)
 
 ### Type System

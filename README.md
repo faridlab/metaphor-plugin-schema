@@ -7,7 +7,7 @@ Schema-driven code generator for Rust, Kotlin Multiplatform, and TypeScript + Re
 `metaphor-schema` parses schema definition files (YAML or legacy DSL) and generates production-ready code across three platforms:
 
 - **Rust Server** -- 38 targets: structs, SQL migrations, REST handlers, gRPC services, repositories, domain services, CQRS, event sourcing, and more
-- **Kotlin Mobile** -- 16 targets: data classes, API clients, SQLDelight schemas, ViewModels, Compose components, navigation
+- **Kotlin Mobile** -- 17 targets: data classes, API clients, offline-first repositories, SQLDelight schemas, ViewModels, Compose components, navigation
 - **Web App** -- 14 targets: React Query hooks, Zod schemas, form components, CRUD pages, Clean Architecture layers
 
 ## Quick Start
@@ -95,7 +95,7 @@ entities:
 | [CLI Reference](docs/cli-reference.md) | Every command, every flag, every option |
 | [Schema Format](docs/schema-format.md) | YAML and legacy DSL syntax, types, attributes |
 | [Rust Generation](docs/generate-rust.md) | 38 server-side generation targets |
-| [Kotlin Generation](docs/generate-kotlin.md) | 16 Kotlin Multiplatform targets |
+| [Kotlin Generation](docs/generate-kotlin.md) | 17 Kotlin Multiplatform targets |
 | [Webapp Generation](docs/generate-webapp.md) | 14 TypeScript + React targets |
 | [DDD Guide](docs/ddd-guide.md) | Entities, value objects, domain services, event sourcing, authorization |
 

@@ -86,6 +86,7 @@ metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 | `mappers` | Application | Data mappers between layers |
 | `validators` | Application | Input validation logic |
 | `api-clients` | Infrastructure | Ktor HTTP API clients |
+| `offline-repositories` | Infrastructure | Offline-first repository implementations wrapping `*ApiClient` (cache-first reads, cache-aware writes, offline fallback) |
 | `database` | Infrastructure | SQLDelight database schemas and queries |
 | `sync` | Infrastructure | Offline sync managers |
 | `view-models` | Presentation | MVI ViewModels (Decompose) |
@@ -113,6 +114,8 @@ shared/src/commonMain/kotlin/{package}/
   │   └── validator/       # Validators (validators target)
   ├── infrastructure/
   │   ├── api/             # Ktor clients (api-clients target)
+  │   ├── repository/
+  │   │   └── offline/     # Offline<Entity>Repository.kt (offline-repositories target)
   │   ├── database/        # SQLDelight schemas (database target)
   │   └── sync/            # Sync managers (sync target)
   └── presentation/
@@ -230,6 +233,33 @@ The generated Kotlin code uses these libraries:
   `/api/v1/<collection>` namespace on the backend.
 - Error handling with sealed result types
 - Pagination support
+
+### Offline-First Repositories
+
+One `Offline<Entity>Repository.kt` per model that wraps the matching
+`<Entity>ApiClient` by extending `OfflineFirstRepository<T>`. The base class
+handles cache-first reads, cache-aware writes (delete invalidates per-id and
+list caches), and offline fallback — generated subclasses just wire the API
+hooks (`fetchOneFromApi`, `fetchListFromApi`, `deleteFromApi`) and
+serialization helpers.
+
+- Lives at `infrastructure/repository/offline/` — **shared across modules**,
+  not under a per-module folder, so all `Offline*Repository.kt` files share
+  one DI lookup location.
+- `entityType` is the model's `collection_name()` (snake_case_plural).
+- TTL defaults to `CacheTTL.DEFAULT`. Tune per-entity by extending `CacheTTL`
+  with a domain-specific constant.
+- **Delta-sync is opt-in.** No `fetchListSinceFromApi` override is generated;
+  the base class falls back to TTL caching unless you provide one. To enable
+  it, extend `<Entity>ApiClient.getAll` with an `updatedSince: String?`
+  parameter and override `fetchListSinceFromApi` in a companion
+  `Offline<Entity>RepositoryCustom.kt` file marked with `// <<< CUSTOM`.
+- **Filter helpers** (e.g. `getAllFiltered(outletId = ...)`) belong in the
+  same `*RepositoryCustom.kt` companion alongside the delta-sync override.
+- The `// <<< CUSTOM` marker is honored by the writer — files containing it
+  are preserved untouched on regeneration.
+- Skip per-model with `generators.disabled: [offlinerepositories]` in the
+  schema, or whitelist-only with `generators.enabled: [offlinerepositories]`.
 
 ### Database (SQLDelight)
 
