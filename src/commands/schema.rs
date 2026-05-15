@@ -973,6 +973,25 @@ fn execute_generate(
                 content.len()
             ));
         } else {
+            // Same-identity check for unstable-timestamp filenames (migrations).
+            // Migration files are emitted with a fresh timestamp on every regen,
+            // so the exact-path `exists()` check below would always miss them
+            // and write a duplicate. Treat any sibling file with the same
+            // `_<identity>.up|down.sql` suffix as "already present".
+            if is_unstable_timestamped_migration(&full_path)
+                && migration_identity_already_exists(&full_path)
+                && !force
+            {
+                pb.println(format!(
+                    "  {} {} (identity already migrated under a different timestamp)",
+                    "Skipping:".yellow(),
+                    full_path.display()
+                ));
+                skipped += 1;
+                pb.inc(1);
+                continue;
+            }
+
             // Check if file exists
             if full_path.exists() && !force {
                 pb.println(format!(
@@ -2124,6 +2143,73 @@ fn merge_seed_order(generated_content: &str, existing_path: &Path) -> Result<Str
     Ok(result)
 }
 
+/// Returns true when `path` is a migration file whose timestamp prefix is
+/// regenerated on every run (and therefore won't match an existing file's
+/// path even when the same logical migration already exists on disk).
+///
+/// Pattern: lives under a `migrations/` directory, filename of the form
+/// `<14-digit-timestamp>_<identity>.up.sql` or `<...>.down.sql`.
+fn is_unstable_timestamped_migration(path: &Path) -> bool {
+    // Must be inside a directory literally named "migrations".
+    let parent_name = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str());
+    if parent_name != Some("migrations") {
+        return false;
+    }
+
+    let name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return false,
+    };
+    if !(name.ends_with(".up.sql") || name.ends_with(".down.sql")) {
+        return false;
+    }
+    // Need at least: 14-digit timestamp + '_' + 1 char of identity + extension.
+    if name.len() < 16 {
+        return false;
+    }
+    let (prefix, rest) = name.split_at(14);
+    if !prefix.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    rest.starts_with('_')
+}
+
+/// For a CREATE-TABLE migration filename like
+/// `20260426220110_create_provider_staff_table.up.sql`,
+/// returns true if any sibling file in the same directory has the same
+/// `_create_<table>_table.<up|down>.sql` suffix under a different timestamp.
+fn migration_identity_already_exists(path: &Path) -> bool {
+    let parent = match path.parent() {
+        Some(d) => d,
+        None => return false,
+    };
+    let name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return false,
+    };
+    // Strip the timestamp prefix: "20260426220110_create_provider_staff_table.up.sql"
+    // → "create_provider_staff_table.up.sql"
+    let suffix = match name.splitn(2, '_').nth(1) {
+        Some(s) => s,
+        None => return false,
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    entries.flatten().any(|e| {
+        let other = e.file_name();
+        let other = match other.to_str() {
+            Some(s) => s,
+            None => return false,
+        };
+        other != name && other.ends_with(suffix)
+    })
+}
+
 #[cfg(test)]
 mod merge_tests {
     use super::*;
@@ -2236,6 +2322,107 @@ mod merge_tests {
 
         // Should not add the "Newly added seeds" comment when no new seeds
         assert!(!result.contains("Newly added seeds"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration filename identity (de-duplication on regen with new timestamp)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_unstable_timestamped_migration_recognises_create_table_up() {
+        let p = PathBuf::from("/x/migrations/20260426220110_create_provider_staff_table.up.sql");
+        assert!(is_unstable_timestamped_migration(&p));
+    }
+
+    #[test]
+    fn is_unstable_timestamped_migration_recognises_create_table_down() {
+        let p = PathBuf::from("/x/migrations/20260426220110_create_provider_staff_table.down.sql");
+        assert!(is_unstable_timestamped_migration(&p));
+    }
+
+    #[test]
+    fn is_unstable_timestamped_migration_recognises_audit_triggers() {
+        // audit_triggers migrations also get a fresh timestamp on every regen.
+        let p = PathBuf::from("/x/migrations/20260426220007_add_audit_triggers.up.sql");
+        assert!(is_unstable_timestamped_migration(&p));
+    }
+
+    #[test]
+    fn is_unstable_timestamped_migration_requires_migrations_parent_dir() {
+        // Same filename pattern but outside `migrations/` → not a migration.
+        let p = PathBuf::from("/x/somewhere_else/20260426220110_create_foo_table.up.sql");
+        assert!(!is_unstable_timestamped_migration(&p));
+    }
+
+    #[test]
+    fn is_unstable_timestamped_migration_rejects_non_migration_file() {
+        let p = PathBuf::from("/x/src/domain/entity/provider_staff.rs");
+        assert!(!is_unstable_timestamped_migration(&p));
+    }
+
+    #[test]
+    fn is_unstable_timestamped_migration_rejects_short_or_non_numeric_prefix() {
+        // Not 14 digits
+        assert!(!is_unstable_timestamped_migration(&PathBuf::from(
+            "/x/migrations/2026_create_foo_table.up.sql"
+        )));
+        // Letters in the prefix
+        assert!(!is_unstable_timestamped_migration(&PathBuf::from(
+            "/x/migrations/20260426220a10_create_foo_table.up.sql"
+        )));
+    }
+
+    #[test]
+    fn migration_identity_already_exists_finds_sibling_with_different_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Existing on disk under one timestamp
+        std::fs::write(
+            dir.join("20260426220135_create_provider_staff_table.up.sql"),
+            "-- existing\n",
+        )
+        .unwrap();
+        // New path the generator is about to write under a different timestamp
+        let new_path = dir.join("20260426220110_create_provider_staff_table.up.sql");
+        assert!(migration_identity_already_exists(&new_path));
+    }
+
+    #[test]
+    fn migration_identity_already_exists_returns_false_when_no_sibling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Empty directory — no migration for this table yet
+        let new_path = dir.join("20260426220110_create_provider_staff_table.up.sql");
+        assert!(!migration_identity_already_exists(&new_path));
+    }
+
+    #[test]
+    fn migration_identity_already_exists_distinguishes_tables() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Existing migration for a DIFFERENT table
+        std::fs::write(
+            dir.join("20260426220135_create_provider_staff_table.up.sql"),
+            "-- existing\n",
+        )
+        .unwrap();
+        // Trying to write a migration for a different table — must not be blocked
+        let new_path = dir.join("20260426220110_create_staff_earnings_table.up.sql");
+        assert!(!migration_identity_already_exists(&new_path));
+    }
+
+    #[test]
+    fn migration_identity_distinguishes_up_and_down() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Only the .up.sql exists on disk; writing .down.sql should still be allowed
+        std::fs::write(
+            dir.join("20260426220135_create_provider_staff_table.up.sql"),
+            "-- existing\n",
+        )
+        .unwrap();
+        let new_down = dir.join("20260426220110_create_provider_staff_table.down.sql");
+        assert!(!migration_identity_already_exists(&new_down));
     }
 }
 
