@@ -256,6 +256,14 @@ import kotlinx.serialization.encodeToString
  * companion `Offline{{entity_name}}RepositoryCustom.kt` file alongside the
  * delta-sync override.
  *
+ * ## Stale-while-revalidate (SWR)
+ * Inherits `observeAll(page, limit, sortBy, sortDesc)` from
+ * [OfflineFirstRepository] for free — list screens can use it directly to
+ * render cached data instantly while the server is asked for changes.
+ * If you add a parameterized `getAllFiltered` in `*RepositoryCustom.kt`,
+ * **also add a matching `observeAllFiltered` next to it** (5-line wrapper
+ * around `observeWithCache(...)`) so screens get SWR for that filter shape too.
+ *
  * Generated from Backbone schema — extend behavior in a custom partial
  * marked with `// <<< CUSTOM` so future regenerations don't clobber it.
  */
