@@ -128,9 +128,14 @@ impl HandlerGenerator {
         writeln!(output).unwrap();
 
         // Optional auth import
+        // NOTE: backbone_auth re-exports two distinct AuthContext structs at the
+        // crate root and in `middleware`. Only the middleware one carries
+        // `user_id` / `roles` / `permissions`, which is what handlers need.
         writeln!(output, "// Auth integration (optional)").unwrap();
         writeln!(output, "#[cfg(feature = \"auth\")]").unwrap();
-        writeln!(output, "use backbone_auth::{{AuthContext, AuthMiddleware}};").unwrap();
+        writeln!(output, "use backbone_auth::middleware::AuthContext;").unwrap();
+        writeln!(output, "#[cfg(feature = \"auth\")]").unwrap();
+        writeln!(output, "use backbone_auth::AuthMiddleware;").unwrap();
         writeln!(output).unwrap();
 
 
@@ -364,7 +369,9 @@ impl HandlerGenerator {
         writeln!(output, "/// is responsible for extracting and validating tokens, then providing").unwrap();
         writeln!(output, "/// an `AuthContext` via request extensions.").unwrap();
         writeln!(output, "#[cfg(feature = \"auth\")]").unwrap();
-        writeln!(output, "pub fn create_protected_{}_routes<A: AuthMiddleware + 'static>(", model_snake).unwrap();
+        // `Send + Sync` are required because `auth: Arc<A>` is captured by the
+        // async `middleware::from_fn` closure that runs on the tokio runtime.
+        writeln!(output, "pub fn create_protected_{}_routes<A: AuthMiddleware + Send + Sync + 'static>(", model_snake).unwrap();
         writeln!(output, "    service: Arc<{}Service>,", model.name).unwrap();
         writeln!(output, "    auth: Arc<A>,").unwrap();
         writeln!(output, ") -> Router {{").unwrap();
@@ -376,7 +383,15 @@ impl HandlerGenerator {
         writeln!(output, "        .layer(middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {{").unwrap();
         writeln!(output, "            let auth = auth_layer.clone();").unwrap();
         writeln!(output, "            async move {{").unwrap();
-        writeln!(output, "                match auth.authenticate(&req).await {{").unwrap();
+        // `AuthMiddleware::authenticate` takes a token string, not a request.
+        // Pull the bearer token out of the Authorization header here so the
+        // generated code matches the trait signature.
+        writeln!(output, "                let token = req.headers()").unwrap();
+        writeln!(output, "                    .get(axum::http::header::AUTHORIZATION)").unwrap();
+        writeln!(output, "                    .and_then(|h| h.to_str().ok())").unwrap();
+        writeln!(output, "                    .and_then(|raw| raw.strip_prefix(\"Bearer \").or_else(|| raw.strip_prefix(\"bearer \")))").unwrap();
+        writeln!(output, "                    .unwrap_or(\"\");").unwrap();
+        writeln!(output, "                match auth.authenticate(token).await {{").unwrap();
         writeln!(output, "                    Ok(ctx) => {{").unwrap();
         writeln!(output, "                        req.extensions_mut().insert(ctx);").unwrap();
         writeln!(output, "                        next.run(req).await").unwrap();
@@ -421,7 +436,10 @@ impl HandlerGenerator {
             writeln!(output, "pub async fn {}_transition(", transition_snake).unwrap();
             writeln!(output, "    axum::extract::State(service): axum::extract::State<Arc<{}Service>>,", model.name).unwrap();
             writeln!(output, "    axum::extract::Path(id): axum::extract::Path<String>,").unwrap();
-            writeln!(output, "    #[cfg(feature = \"auth\")] auth: axum::Extension<AuthContext>,").unwrap();
+            // Destructure the Extension so `auth.permissions` / `auth.roles`
+            // resolve directly to the inner AuthContext fields. `axum::Extension`
+            // does not impl `Deref<Target = T>`.
+            writeln!(output, "    #[cfg(feature = \"auth\")] axum::Extension(auth): axum::Extension<AuthContext>,").unwrap();
             writeln!(output, ") -> impl axum::response::IntoResponse {{").unwrap();
             writeln!(output, "    use axum::{{http::StatusCode, Json}};").unwrap();
             writeln!(output).unwrap();
@@ -439,8 +457,10 @@ impl HandlerGenerator {
             writeln!(output, "    {{").unwrap();
             // Permission-based check: use transition's allowed_roles() method
             writeln!(output, "        let allowed_roles = {}Transition::{}.allowed_roles();", model.name, to_pascal_case(&transition.name)).unwrap();
-            writeln!(output, "        let has_specific_perm = auth.has_permission(\"{}:transition:{}\");", model_snake, transition_snake).unwrap();
-            writeln!(output, "        let has_update_perm = auth.has_permission(\"{}:update\");", model_snake).unwrap();
+            // `AuthContext` exposes raw `permissions: Vec<String>` — no
+            // `has_permission` method exists on the framework type.
+            writeln!(output, "        let has_specific_perm = auth.permissions.iter().any(|p| p == \"{}:transition:{}\");", model_snake, transition_snake).unwrap();
+            writeln!(output, "        let has_update_perm = auth.permissions.iter().any(|p| p == \"{}:update\");", model_snake).unwrap();
             if !transition.allowed_roles.is_empty() {
                 writeln!(output, "        let has_role = auth.roles.iter().any(|r| allowed_roles.contains(&r.as_str()));").unwrap();
                 writeln!(output, "        if !has_specific_perm && !has_update_perm && !has_role {{").unwrap();
