@@ -214,10 +214,12 @@ impl ConfigGenerator {
         writeln!(output, "use std::path::Path;").unwrap();
         writeln!(output).unwrap();
 
-        // Main config struct
+        // Main config struct. Name is `{Pascal}ModuleConfig` (not `{Pascal}Config`)
+        // to avoid colliding with domain-level config types many projects already
+        // ship under `{Pascal}Config`. See also `src/config/generated.rs` path.
         writeln!(output, "/// Main configuration for {} module", pascal_name).unwrap();
         writeln!(output, "#[derive(Debug, Clone, Serialize, Deserialize)]").unwrap();
-        writeln!(output, "pub struct {}Config {{", pascal_name).unwrap();
+        writeln!(output, "pub struct {}ModuleConfig {{", pascal_name).unwrap();
         writeln!(output, "    pub server: ServerConfig,").unwrap();
         writeln!(output, "    pub database: DatabaseConfig,").unwrap();
         writeln!(output, "    pub module: ModuleConfig,").unwrap();
@@ -293,7 +295,7 @@ impl ConfigGenerator {
         writeln!(output).unwrap();
 
         // Config loading implementation
-        writeln!(output, "impl {}Config {{", pascal_name).unwrap();
+        writeln!(output, "impl {}ModuleConfig {{", pascal_name).unwrap();
         writeln!(output, "    /// Load configuration from YAML files").unwrap();
         writeln!(output, "    ///").unwrap();
         writeln!(output, "    /// Loads configuration with environment-specific overrides:").unwrap();
@@ -419,9 +421,16 @@ impl Generator for ConfigGenerator {
         let prod_yml = self.generate_prod_yml(schema)?;
         output.add_file(PathBuf::from("config/application-prod.yml"), prod_yml);
 
-        // Generate Rust configuration types
+        // Generate Rust configuration types. Path is `src/config/generated.rs`
+        // (not `src/config.rs`) so that consumers who maintain a `src/config/`
+        // directory with their own hand-written `mod.rs` and domain-specific
+        // config types can co-exist without an E0761 collision.
+        //
+        // We deliberately do NOT emit `src/config/mod.rs` — that file is
+        // consumer-owned. A fresh project should add it with at least
+        // `pub mod generated; pub use generated::*;` plus any domain config.
         let config_rs = self.generate_config_rs(schema)?;
-        output.add_file(PathBuf::from("src/config.rs"), config_rs);
+        output.add_file(PathBuf::from("src/config/generated.rs"), config_rs);
 
         Ok(output)
     }
@@ -499,10 +508,14 @@ mod tests {
         let generator = ConfigGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        assert!(output.files.contains_key(&PathBuf::from("src/config.rs")));
+        // Path is `src/config/generated.rs` so the generator does not collide
+        // with a consumer-managed `src/config/mod.rs` (which is intentionally
+        // NOT emitted — consumer owns the mod.rs and chooses how to expose the
+        // generated types).
+        assert!(output.files.contains_key(&PathBuf::from("src/config/generated.rs")));
 
-        let config_rs = output.files.get(&PathBuf::from("src/config.rs")).unwrap();
-        assert!(config_rs.contains("pub struct OrdersConfig"));
+        let config_rs = output.files.get(&PathBuf::from("src/config/generated.rs")).unwrap();
+        assert!(config_rs.contains("pub struct OrdersModuleConfig"));
         assert!(config_rs.contains("pub struct ServerConfig"));
         assert!(config_rs.contains("pub struct DatabaseConfig"));
     }
