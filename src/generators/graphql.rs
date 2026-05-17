@@ -552,7 +552,8 @@ impl GraphqlGenerator {
         writeln!(output, "use backbone_core::GenericGraphQLResolver;").unwrap();
         writeln!(output, "use crate::presentation::dto::{{Create{n}Dto, Update{n}Dto}};",
             n = model_name).unwrap();
-        writeln!(output, "use crate::application::service::{n}Service;", n = model_name).unwrap();
+        // Note: `{n}Service` is already imported earlier in this file (top imports).
+        // Re-importing here would trigger E0252 "name defined multiple times".
         writeln!(output).unwrap();
 
         writeln!(output, "/// GraphQL resolver for {} entities.", model_name).unwrap();
@@ -783,12 +784,15 @@ impl GraphqlGenerator {
             module_snake, model_snake
         ).unwrap();
         writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        // Framework exposes `soft_delete` and `hard_delete`, not bare `delete`.
+        // Default to `soft_delete` so the `deleted_at` audit trail is preserved
+        // (modules with `soft_delete: false` should override via a custom resolver).
         if use_typed_id {
             writeln!(output, "        let typed_id: {}Id = id.parse()", model_name).unwrap();
             writeln!(output, "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;", model_name).unwrap();
-            writeln!(output, "        service.delete(typed_id).await").unwrap();
+            writeln!(output, "        service.soft_delete(typed_id).await").unwrap();
         } else {
-            writeln!(output, "        service.delete(&id).await").unwrap();
+            writeln!(output, "        service.soft_delete(&id).await").unwrap();
         }
         writeln!(output, "            .map_err(|e| Error::new(e.to_string()))").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -829,14 +833,16 @@ impl GraphqlGenerator {
         }
         writeln!(output).unwrap();
 
-        // Re-export module-level composed types from server
+        // Re-export module-level composed types from server. The `Schema`
+        // suffix is unconditional now (matches `module::generate_graphql`)
+        // to keep the merged root from clashing with a per-entity
+        // `{Pascal}Query` / `{Pascal}Mutation` of the same name when a model
+        // happens to share the module's name.
         let pascal_name = to_pascal_case(&schema.schema.name);
-        let has_name_conflict = schema.schema.models.iter().any(|m| m.name == pascal_name);
-        let root_suffix = if has_name_conflict { "Schema" } else { "" };
         writeln!(
             output,
-            "pub use server::{{{}{}Query, {}{}Mutation}};",
-            pascal_name, root_suffix, pascal_name, root_suffix
+            "pub use server::{{{}SchemaQuery, {}SchemaMutation}};",
+            pascal_name, pascal_name
         )
         .unwrap();
 
