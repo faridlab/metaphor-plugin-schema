@@ -1666,6 +1666,38 @@ fn insert_custom_blocks(result_lines: &mut Vec<String>, custom_blocks: &[(Option
         };
 
         if let Some(pos) = insert_pos {
+            // The merger sees `(anchor, block)` but has no context for whether
+            // the CUSTOM block was originally INSIDE a container (struct/enum
+            // fields) or a SIBLING of a function. We use a small heuristic on
+            // the anchor itself:
+            //   - Trailing `,` → anchor was a struct/enum/array element →
+            //     CUSTOM was inside the container → insert AT pos (just before
+            //     the close brace).
+            //   - No trailing `,` → anchor was likely the last statement of a
+            //     fn body → CUSTOM is a SIBLING that should follow the
+            //     close brace, not precede it. Skip the close braces forward.
+            let anchor_inside_container = anchor
+                .as_ref()
+                .map(|a| a.trim_end().ends_with(','))
+                .unwrap_or(false);
+
+            let mut pos = pos;
+            if !anchor_inside_container {
+                while pos < result_lines.len() {
+                    let line = result_lines[pos].trim();
+                    let is_close_brace_only =
+                        line == "}" || line == "};" || line == "})" || line == "});";
+                    if is_close_brace_only {
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if pos < result_lines.len() && result_lines[pos].trim().is_empty() {
+                    pos += 1;
+                }
+            }
+
             // Check if a custom block placeholder already exists at this position
             let has_custom_at_pos = pos < result_lines.len()
                 && is_custom_start_marker(&result_lines[pos]);
