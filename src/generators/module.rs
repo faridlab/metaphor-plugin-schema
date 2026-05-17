@@ -248,6 +248,14 @@ impl ModuleGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
+        // Explicit empty CUSTOM placeholder for builder extensions. Without it,
+        // the merge anchor-after fallback inserts the user's `with_*` methods
+        // BEFORE the close brace of `with_database` (anchor = `        self`),
+        // breaking the file with `... self // <<< CUSTOM ... }` patterns.
+        writeln!(output, "    // <<< CUSTOM - custom builder methods").unwrap();
+        writeln!(output, "    // END CUSTOM").unwrap();
+        writeln!(output).unwrap();
+
         writeln!(output, "    /// Build the module with configured dependencies").unwrap();
         writeln!(output, "    pub fn build(self) -> anyhow::Result<{}Module> {{", pascal_name).unwrap();
         writeln!(output, "        let db_pool = self.db_pool").unwrap();
@@ -481,10 +489,13 @@ impl ModuleGenerator {
         }
         writeln!(output).unwrap();
 
-        // Merged Query root
+        // Merged Query root. Uses `{Pascal}SchemaQuery` (not `{Pascal}Query`)
+        // because when a model named `{Pascal}` exists in the schema, its
+        // per-entity `{Pascal}Query` clashes with the merged root and creates
+        // an E0072 "recursive type has infinite size" error.
         writeln!(output, "/// Merged Query root for {} module", pascal_name).unwrap();
         writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
-        write!(output, "pub struct {}Query(", pascal_name).unwrap();
+        write!(output, "pub struct {}SchemaQuery(", pascal_name).unwrap();
         for (i, model) in schema.schema.models.iter().enumerate() {
             if i > 0 { write!(output, ", ").unwrap(); }
             if i > 0 && i % 5 == 0 { writeln!(output).unwrap(); write!(output, "    ").unwrap(); }
@@ -493,10 +504,10 @@ impl ModuleGenerator {
         writeln!(output, ");").unwrap();
         writeln!(output).unwrap();
 
-        // Merged Mutation root
+        // Merged Mutation root — same naming reasoning as the Query root above.
         writeln!(output, "/// Merged Mutation root for {} module", pascal_name).unwrap();
         writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
-        write!(output, "pub struct {}Mutation(", pascal_name).unwrap();
+        write!(output, "pub struct {}SchemaMutation(", pascal_name).unwrap();
         for (i, model) in schema.schema.models.iter().enumerate() {
             if i > 0 { write!(output, ", ").unwrap(); }
             if i > 0 && i % 5 == 0 { writeln!(output).unwrap(); write!(output, "    ").unwrap(); }
@@ -521,9 +532,9 @@ impl ModuleGenerator {
 
         // build_schema function
         writeln!(output, "/// Build the GraphQL schema for {} module (standalone)", pascal_name).unwrap();
-        writeln!(output, "pub fn build_schema(module: &crate::{}Module) -> Schema<{}Query, {}Mutation, EmptySubscription> {{",
+        writeln!(output, "pub fn build_schema(module: &crate::{}Module) -> Schema<{}SchemaQuery, {}SchemaMutation, EmptySubscription> {{",
             pascal_name, pascal_name, pascal_name).unwrap();
-        writeln!(output, "    let builder = Schema::build({}Query::default(), {}Mutation::default(), EmptySubscription);",
+        writeln!(output, "    let builder = Schema::build({}SchemaQuery::default(), {}SchemaMutation::default(), EmptySubscription);",
             pascal_name, pascal_name).unwrap();
         writeln!(output, "    inject_services(builder, module).finish()").unwrap();
         writeln!(output, "}}").unwrap();
@@ -667,7 +678,7 @@ impl ModuleGenerator {
     }
 
     /// Generate presentation/mod.rs
-    fn generate_presentation_mod(&self, _schema: &ResolvedSchema) -> String {
+    fn generate_presentation_mod(&self, schema: &ResolvedSchema) -> String {
         let mut output = String::new();
 
         writeln!(output, "//! Presentation layer").unwrap();
@@ -676,18 +687,35 @@ impl ModuleGenerator {
         writeln!(output).unwrap();
         writeln!(output, "pub mod dto;").unwrap();
         writeln!(output, "pub mod http;").unwrap();
-        // gRPC module is emitted unconditionally — main.rs references it directly.
-        writeln!(output, "pub mod grpc;").unwrap();
-        writeln!(output).unwrap();
-        // GraphQL module is feature-gated since it depends on optional async-graphql.
-        writeln!(output, "#[cfg(feature = \"graphql\")]").unwrap();
-        writeln!(output, "pub mod graphql;").unwrap();
+        // gRPC + GraphQL modules are gated on their respective feature flag AND
+        // on the generator being enabled in module config. Skipping the
+        // declaration when disabled prevents `file not found for module`
+        // errors against the orphan directory.
+        if !is_generator_disabled(schema, "grpc") {
+            writeln!(output, "#[cfg(feature = \"grpc\")]").unwrap();
+            writeln!(output, "pub mod grpc;").unwrap();
+        }
+        if !is_generator_disabled(schema, "graphql") {
+            writeln!(output, "#[cfg(feature = \"graphql\")]").unwrap();
+            writeln!(output, "pub mod graphql;").unwrap();
+        }
         writeln!(output).unwrap();
         writeln!(output, "// <<< CUSTOM").unwrap();
         writeln!(output, "// END CUSTOM").unwrap();
 
         output
     }
+}
+
+/// Returns true when `name` appears in the module-level `config.generators.disabled`
+/// list. Used by ModuleGenerator to gate cross-cutting emissions (presentation/mod.rs
+/// module declarations, grpc/graphql composition stubs) so that disabling a
+/// per-target generator also suppresses references to its output.
+fn is_generator_disabled(schema: &ResolvedSchema, name: &str) -> bool {
+    schema.schema.generators_config.as_ref()
+        .and_then(|cfg| cfg.disabled.as_ref())
+        .map(|list| list.iter().any(|d| d.eq_ignore_ascii_case(name)))
+        .unwrap_or(false)
 }
 
 impl Default for ModuleGenerator {
@@ -710,13 +738,20 @@ impl Generator for ModuleGenerator {
         let routes_content = self.generate_routes(schema)?;
         output.add_file(PathBuf::from("src/presentation/http/routes/generated.rs"), routes_content);
 
-        // Generate gRPC registration
-        let grpc_content = self.generate_grpc(schema)?;
-        output.add_file(PathBuf::from("src/presentation/grpc/server.rs"), grpc_content);
+        // Cross-cutting emissions (gRPC + GraphQL composition) only run when the
+        // corresponding generator is enabled in the module config. Otherwise we
+        // would write orphan composition stubs that reference non-existent
+        // per-entity modules. The presentation/mod.rs writer below honors the
+        // same rule for `pub mod grpc;` / `pub mod graphql;`.
+        if !is_generator_disabled(schema, "grpc") {
+            let grpc_content = self.generate_grpc(schema)?;
+            output.add_file(PathBuf::from("src/presentation/grpc/server.rs"), grpc_content);
+        }
 
-        // Generate GraphQL schema composition (server.rs only — entity files from GraphqlGenerator)
-        let graphql_content = self.generate_graphql(schema)?;
-        output.add_file(PathBuf::from("src/presentation/graphql/server.rs"), graphql_content);
+        if !is_generator_disabled(schema, "graphql") {
+            let graphql_content = self.generate_graphql(schema)?;
+            output.add_file(PathBuf::from("src/presentation/graphql/server.rs"), graphql_content);
+        }
 
         // Generate layer mod.rs files
         output.add_file(
