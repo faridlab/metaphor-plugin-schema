@@ -1505,6 +1505,7 @@ impl RustGenerator {
             writeln!(output, "use std::str::FromStr;").unwrap();
         }
         writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(output, "use utoipa::ToSchema;").unwrap();
         writeln!(output).unwrap();
 
@@ -1786,6 +1787,7 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "use chrono::{{DateTime, Utc}};").unwrap();
         writeln!(mod_content, "use serde::{{Deserialize, Serialize}};").unwrap();
         writeln!(mod_content, "use uuid::Uuid;").unwrap();
+        writeln!(mod_content, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(mod_content, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(mod_content, "use utoipa::ToSchema;").unwrap();
         writeln!(mod_content).unwrap();

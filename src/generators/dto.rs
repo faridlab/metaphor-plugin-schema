@@ -108,6 +108,7 @@ impl DtoGenerator {
 
         // OpenAPI support (feature-gated)
         writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(output, "use utoipa::ToSchema;").unwrap();
         writeln!(output).unwrap();
 
@@ -879,6 +880,7 @@ impl DtoGenerator {
         writeln!(output, "// Common pagination types").unwrap();
         writeln!(output, "use serde::Serialize;").unwrap();
         writeln!(output).unwrap();
+        writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(output, "use utoipa::ToSchema;").unwrap();
         writeln!(output).unwrap();
