@@ -40,6 +40,7 @@ Comprehensive documentation for the Metaphor schema-driven code generator.
 | [Kotlin Generation](generate-kotlin.md) | 17 KMP mobile targets (entities, api-clients, offline-repositories, view-models, ...) |
 | [Webapp Generation](generate-webapp.md) | 14 TypeScript + React targets (hooks, forms, pages, ...) |
 | [DDD Guide](ddd-guide.md) | Entities, value objects, domain services, event sourcing, authorization |
+| [Changelog](../CHANGELOG.md) | Per-version history of fixes, features, and breaking changes |
 
 ## Key Concepts
 

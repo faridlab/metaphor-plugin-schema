@@ -98,6 +98,7 @@ entities:
 | [Kotlin Generation](docs/generate-kotlin.md) | 17 Kotlin Multiplatform targets |
 | [Webapp Generation](docs/generate-webapp.md) | 14 TypeScript + React targets |
 | [DDD Guide](docs/ddd-guide.md) | Entities, value objects, domain services, event sourcing, authorization |
+| [Changelog](CHANGELOG.md) | Per-version history of fixes, features, and breaking changes |
 
 ## Development
 
