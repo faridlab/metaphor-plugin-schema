@@ -161,6 +161,12 @@ generators:
   event-store: false
 ```
 
+> **`grpc` / `graphql` flow into module wiring.** When `grpc` or
+> `graphql` is disabled, the `module` target also drops the matching
+> router-mount / service-registration / `MergedObject!` entries from
+> the generated `lib.rs`, so the module compiles without dangling
+> references to a transport that wasn't generated.
+
 ---
 
 ## Output Directory Structure
@@ -182,6 +188,8 @@ libs/modules/{module}/
       ├── migration/       # SQL migrations
       ├── proto/           # Protocol Buffer definitions
       ├── config/          # Configuration
+      │   ├── mod.rs       #   hand-written re-exports (preserved across regen)
+      │   └── generated.rs #   the `ModuleConfig` struct + loaders (regen target)
       ├── validator/       # Validation logic
       ├── auth/            # Authentication/authorization
       ├── cqrs/            # CQRS commands and queries
@@ -246,7 +254,10 @@ Generates Axum REST handlers with:
 - Bulk operation endpoints
 - Request/response DTOs
 - Error handling
-- Authentication middleware integration
+- Authentication middleware integration via `middleware::AuthContext`
+  extracted from `Extension<AuthContext>` (the bearer token is read from
+  the `Authorization` header inside the handler). All async dependencies
+  carry `Send + Sync` bounds so handlers compose with Axum's `Router`.
 
 ### `grpc` -- gRPC Services
 
@@ -256,6 +267,24 @@ Generates Tonic gRPC services with:
 - Request/response message mapping
 - Error code mapping
 
+### `graphql` -- GraphQL Schema & Resolvers
+
+Generates `async-graphql` schema objects and resolvers with:
+- One `Query` and one `Mutation` resolver per entity
+- Field selection via `async-graphql` derive macros on the entity DTOs
+- **`soft_delete` mutations** when the model implements `SoftDeletable`
+  — the generator emits `soft_delete<Entity>` (sets `deleted_at`) and
+  `restore<Entity>` instead of a hard `delete<Entity>`. Hard `delete`
+  is only emitted for models without soft-delete.
+- **Deduped `Service` import** in the resolver module so re-exported
+  services aren't pulled in twice when a module has multiple entities.
+- **Schema suffix on merged roots** — the per-module merged roots are
+  always named `<…>SchemaQuery` / `<…>SchemaMutation`, even when the
+  module name already ends in `Query`/`Mutation`. This lets the host
+  service combine modules with `MergedObject!((SchemaQuery, …))`
+  without colliding on the unsuffixed `Query`/`Mutation` types that
+  individual entity resolvers expose.
+
 ### `openapi` -- OpenAPI Specifications
 
 Generates OpenAPI 3.0 specs with:
@@ -264,12 +293,121 @@ Generates OpenAPI 3.0 specs with:
 - Request/response body schemas
 - Use `--split` flag to generate one file per entity
 
+> **Feature-gated imports** — `use utoipa::ToSchema` lines emitted into
+> `entity/` and `dto/` modules are wrapped in `#[cfg(feature = "openapi")]`,
+> so a module that opts out of the `openapi` cargo feature still compiles
+> without pulling `utoipa` into its dependency graph.
+
 ### `dto` -- Data Transfer Objects
 
 Generates request/response DTOs with:
 - Create, Update, and Response variants
 - Field filtering (omit auto-generated fields from Create DTOs)
 - Nested DTO support for relations
+- `use utoipa::ToSchema` imports are emitted under
+  `#[cfg(feature = "openapi")]` so DTO modules compile without the
+  `openapi` feature enabled.
+
+### `config` -- Module Configuration
+
+Generates a per-module configuration struct.
+
+- Written to **`src/config/generated.rs`** (so a hand-written
+  `src/config/mod.rs` can re-export it without being clobbered on regen).
+- The struct is named **`ModuleConfig`** (renamed from the previous
+  `Config` to avoid collisions when consumers re-export multiple
+  modules into one `use crate::config::Config` namespace).
+- Includes loader helpers that read env vars + `application.yml`.
+
+### `module` -- Module Wiring (`lib.rs` / `mod.rs`)
+
+Generates the module's public re-exports and the `with_database` /
+service-registration plumbing used by the host backend service.
+
+- **Respects `generators.disabled`** — when `grpc` or `graphql` is
+  disabled for the module, the corresponding wiring (router mount, gRPC
+  service registration, GraphQL root merge) is omitted from the generated
+  `lib.rs` rather than emitted-and-broken.
+- Inserts an empty `// <<< CUSTOM` placeholder immediately after the
+  `with_database(...)` call so consumers have a stable, merge-safe slot
+  for extra setup (custom indexes, seed bootstraps, etc.).
+- Merged GraphQL roots are exported as **`SchemaQuery`** /
+  **`SchemaMutation`** (the `Schema` suffix is always appended, even when
+  the module name already ends in `Query`/`Mutation`), so the host
+  service can `MergedObject!((SchemaQuery, …))` without name clashes.
+
+---
+
+## Preserving Custom Code on Regeneration
+
+Rust generators are **merge-aware**. Files containing `// <<< CUSTOM`
+markers (or paired `// <<< CUSTOM METHODS START >>>` /
+`// <<< CUSTOM METHODS END >>>` blocks) are merged with the freshly
+generated output instead of being overwritten.
+
+### Single-line marker
+
+```rust
+// File: libs/modules/sapiens/src/lib.rs
+pub mod entity;
+pub mod handler;
+
+// <<< CUSTOM
+pub mod my_extra_module;
+// END CUSTOM
+```
+
+On regeneration, the merger:
+
+1. Re-emits the canonical module contents.
+2. Scans the existing file for `// <<< CUSTOM` blocks, capturing each
+   block plus its **anchor line** (the nearest preceding non-empty,
+   non-marker line).
+3. Re-inserts each block into the regenerated content at the matching
+   anchor.
+
+### Inside-container vs after-container heuristic
+
+The same anchor can mean *"keep me inside this struct/enum/use-list"* or
+*"keep me below this module item"*. The merger looks at the **first
+real content line of the CUSTOM block** to decide:
+
+| Block content begins with                                                                  | Placement                          |
+|--------------------------------------------------------------------------------------------|------------------------------------|
+| A full statement (ends with `;`), or `pub mod`, `pub use`, `pub fn`, `impl`, `mod`, `use`, `fn`, `struct`, `enum`, `trait`, `type`, `const`, `static`, `#[…]` | **After** any containing `};` (module / sibling scope) |
+| A field-like fragment (e.g. `pub b: i32,` or an enum variant)                              | **Inside** the enclosing container |
+
+This is why a `// <<< CUSTOM` block holding `pub mod admin;` survives a
+regen of `lib.rs` while a `// <<< CUSTOM` block adding `Foo,` to a
+`pub use crate::dto::{…};` list keeps its position inside the braces.
+
+### Paired blocks
+
+`// <<< CUSTOM METHODS START >>>` / `// <<< CUSTOM METHODS END >>>` are
+preserved **verbatim** between the markers — no per-line filtering, no
+content cap. Use them for impl-block extensions that can include nested
+`{}` blocks (e.g. large `matches!` macros).
+
+### What is merge-aware
+
+| File pattern                              | Strategy                                                |
+|-------------------------------------------|---------------------------------------------------------|
+| `config/application*.yml`                 | YAML merge — user values (e.g. `database.url`) always win |
+| `seed_order.yml`                          | Append new seeds to existing list                       |
+| SQL seed files                            | Preserve custom data after the marker                   |
+| Any `.rs` file with `// <<< CUSTOM`       | Block-aware Rust merge (anchor + placement heuristic)   |
+| Migration files (`migrations/*.{up,down}.sql`) | Identity-based dedup (see below)                   |
+
+### Migration dedup by identity
+
+Migration filenames are timestamped on every regen
+(`20260426220110_create_provider_staff_table.up.sql`), so a naive
+`exists()` check would always miss and write a duplicate. The generator
+treats any sibling under `migrations/` with the same
+`_<identity>.{up,down}.sql` suffix — under **any** timestamp — as
+"already migrated" and skips it (unless `--force` is passed). This keeps
+re-running `metaphor schema generate` after a non-schema-shape change
+idempotent.
 
 ---
 
