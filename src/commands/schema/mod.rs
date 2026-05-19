@@ -5,8 +5,10 @@ mod manifest;
 mod merge;
 mod migrations;
 mod module_loader;
+mod validate;
 
 pub(crate) use discovery::resolve_module_arg;
+use validate::execute_validate;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -555,60 +557,6 @@ fn print_hook_index(index: &YamlHookIndexSchema, format: &OutputFormat) {
     }
 }
 
-fn execute_validate(module: &str, warnings: bool) -> Result<()> {
-    println!(
-        "{} module: {}",
-        "Validating".green().bold(),
-        module.cyan()
-    );
-
-    if warnings {
-        println!("  (including warnings)");
-    }
-
-    // Find schema path
-    let schema_path = find_module_schema_path(module)?;
-    let schema_files = find_schema_files(&schema_path)?;
-
-    if schema_files.is_empty() {
-        println!("{}", "No schema files found".yellow());
-        return Ok(());
-    }
-
-    // Build module schema
-    let (module_schema, parse_errors) = build_module_schema(module, &schema_files)?;
-
-    if !parse_errors.is_empty() {
-        for error in &parse_errors {
-            println!("  {} {}", "Parse error:".red().bold(), error);
-        }
-        anyhow::bail!("Parsing failed with {} error(s)", parse_errors.len());
-    }
-
-    // Run resolver/validator
-    match resolve_schema(&module_schema) {
-        Ok(_resolved) => {
-            println!("  {} All schemas are valid", "✓".green().bold());
-        }
-        Err(errors) => {
-            for err in &errors {
-                println!("  {} {}", "Error:".red().bold(), err);
-            }
-            println!();
-            println!(
-                "{} {} error(s)",
-                "Validation failed:".red().bold(),
-                errors.len()
-            );
-            anyhow::bail!("Validation failed with {} error(s)", errors.len());
-        }
-    }
-
-    println!();
-    println!("{} No issues found", "Validation passed:".green().bold());
-
-    Ok(())
-}
 
 fn execute_generate(
     module: &str,
