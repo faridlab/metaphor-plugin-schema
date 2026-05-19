@@ -131,9 +131,13 @@ let service = Arc::new(Service::new(repo));
         assert!(svc_pos < custom_pos, "custom block should come after anchor line");
     }
 
+    /// Regression: an earlier implementation capped paired CUSTOM blocks
+    /// at 200 lines, which silently truncated legitimate large blocks
+    /// (e.g. multi-line `matches!` macros). Commit 11723ed removed the cap
+    /// once a paired `END CUSTOM` is confirmed. This test pins that
+    /// behaviour: every line between the markers survives the merge.
     #[test]
-    fn test_missing_end_custom_truncation() {
-        // END CUSTOM exists but is beyond 200 lines, triggering truncation
+    fn test_large_paired_custom_block_preserved_in_full() {
         let mut existing = String::from("let x = 1;\n// <<< CUSTOM\n");
         for i in 0..250 {
             existing.push_str(&format!("let line_{} = {};\n", i, i));
@@ -143,8 +147,16 @@ let service = Arc::new(Service::new(repo));
         let (_tmp, path) = write_temp(&existing);
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
-        let custom_lines: Vec<&str> = result.lines().filter(|l| l.starts_with("let line_")).collect();
-        assert!(custom_lines.len() <= 200, "should truncate at 200 lines, got {}", custom_lines.len());
+        let custom_lines: Vec<&str> = result
+            .lines()
+            .filter(|l| l.starts_with("let line_"))
+            .collect();
+        assert_eq!(
+            custom_lines.len(),
+            250,
+            "all 250 lines inside a paired CUSTOM block should be preserved verbatim, got {}",
+            custom_lines.len()
+        );
     }
 
     #[test]

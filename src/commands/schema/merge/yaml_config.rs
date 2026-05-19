@@ -137,15 +137,20 @@ mod tests {
         assert_eq!(
             server
                 .get(&serde_yaml::Value::String("host".to_string()))
+                .unwrap()
+                .as_str()
                 .unwrap(),
-            &serde_yaml::Value::String("localhost".to_string())
+            "localhost"
         );
-        // User's port (3000) wins over generated (8080)
+        // User's port (3000) wins over generated (8080).
+        // YAML parses unquoted integers as Number, not String — compare numerically.
         assert_eq!(
             server
                 .get(&serde_yaml::Value::String("port".to_string()))
+                .unwrap()
+                .as_i64()
                 .unwrap(),
-            &serde_yaml::Value::String("3000".to_string())
+            3000
         );
         assert!(server
             .get(&serde_yaml::Value::String("ssl".to_string()))
