@@ -175,6 +175,34 @@ generators:
   cqrs: true                           # Explicit opt-in for a specific target
 ```
 
+**Resolution rules:**
+
+- `enabled` and `disabled` are mutually exclusive — pick one mode per file.
+- Per-target booleans (`cqrs: true`, `event-store: false`) override the
+  `enabled` / `disabled` lists, so you can use a list as the baseline
+  and toggle individual targets on top.
+- Target names match the canonical names from the per-platform docs
+  (e.g. [generate-rust.md](generate-rust.md) target tables). Aliases
+  (`gql` for `graphql`, `migration` for `sql`, etc.) are accepted.
+
+**Cross-target side effects:**
+
+Some Rust targets emit wiring that depends on whether sibling targets
+were generated. The `module` target (which writes `lib.rs`) tracks the
+effective enabled set and **drops** the router-mount, gRPC service
+registration, and `MergedObject!` entries when `grpc` or `graphql` is
+disabled — so the module still compiles when only a subset of
+transports is in use. The full list of cross-target dependencies is in
+[generate-rust.md → module](generate-rust.md#module----module-wiring-librs--modrs).
+
+See the per-platform docs for the full target catalog:
+
+| Platform | Target list |
+|----------|-------------|
+| Rust server | [generate-rust.md § Generation Targets](generate-rust.md#generation-targets) |
+| Kotlin mobile | [generate-kotlin.md § Targets](generate-kotlin.md) |
+| Webapp (TS+React) | [generate-webapp.md § Targets](generate-webapp.md) |
+
 ---
 
 ## Primitive Types

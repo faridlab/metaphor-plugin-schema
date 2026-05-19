@@ -115,7 +115,7 @@ metaphor schema generate [MODULE] [OPTIONS]
 | `--target`, `-t` | string | `all` | Comma-separated generation targets (see [generate-rust.md](generate-rust.md)) |
 | `--output`, `-o` | path | module root | Output directory |
 | `--dry-run` | flag | - | Show what would be generated without writing files |
-| `--force`, `-f` | flag | - | Overwrite existing files |
+| `--force`, `-f` | flag | - | Overwrite existing files. Also bypasses the **migration identity dedup** check (re-emits a fresh-timestamp `<…>_create_<table>_table.{up,down}.sql` even when a same-identity migration already exists). |
 | `--split` | flag | - | Split output into multiple files (e.g., one OpenAPI file per entity) |
 | `--changed` | flag | - | Only generate for schemas that changed (git-aware) |
 | `--base` | string | `HEAD` | Git reference for change detection (e.g., `main`, `origin/main`, `HEAD~3`) |
