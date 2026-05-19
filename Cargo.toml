@@ -42,6 +42,7 @@ anyhow = "1"
 
 # File system
 walkdir = "2"
+globset = "0.4"
 notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.4"
 
