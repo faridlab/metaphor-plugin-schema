@@ -4,10 +4,12 @@ mod discovery;
 mod manifest;
 mod merge;
 mod migrations;
+mod diff;
 mod module_loader;
 mod validate;
 
 pub(crate) use discovery::resolve_module_arg;
+use diff::execute_diff;
 use validate::execute_validate;
 
 use anyhow::{Context, Result};
@@ -1154,96 +1156,6 @@ fn execute_generate(
     Ok(())
 }
 
-fn execute_diff(module: &str, base: &str) -> Result<()> {
-    println!(
-        "{} for module: {} (comparing against {})",
-        "Showing diff".green().bold(),
-        module.cyan(),
-        base.yellow()
-    );
-
-    // Find schema path
-    let schema_path = find_module_schema_path(module)?;
-    let schema_files = find_schema_files(&schema_path)?;
-
-    if schema_files.is_empty() {
-        println!("{}", "No schema files found".yellow());
-        return Ok(());
-    }
-
-    // Build module schema
-    let (module_schema, _) = build_module_schema(module, &schema_files)?;
-
-    // Resolve schemas
-    let resolved = resolve_schema(&module_schema)
-        .map_err(|_| anyhow::anyhow!("Schema validation failed"))?;
-
-    // Generate all code
-    let targets = GenerationTarget::all();
-    let generated = generate_all_with_options(&resolved, &targets, &GenerationOptions::default())?;
-
-    // Determine output directory (module root)
-    let output_dir = schema_path
-        .parent()
-        .unwrap_or(&schema_path)
-        .to_path_buf();
-
-    println!();
-    let mut changes = 0;
-
-    for (path, new_content) in &generated.files {
-        let full_path = output_dir.join(path);
-
-        if !full_path.exists() {
-            println!("  {} {}", "New file:".green(), full_path.display());
-            changes += 1;
-            continue;
-        }
-
-        let existing_content = fs::read_to_string(&full_path).unwrap_or_default();
-
-        if existing_content != *new_content {
-            println!("  {} {}", "Modified:".yellow(), full_path.display());
-
-            // Show simple line count diff
-            let old_lines = existing_content.lines().count();
-            let new_lines = new_content.lines().count();
-            let diff = new_lines as i64 - old_lines as i64;
-
-            if diff > 0 {
-                println!(
-                    "    {} lines, {} lines",
-                    format!("+{}", diff).green(),
-                    "-0".to_string().red()
-                );
-            } else if diff < 0 {
-                println!(
-                    "    {} lines, {} lines",
-                    "+0".green(),
-                    format!("{}", diff).red()
-                );
-            } else {
-                println!("    Content changed (same line count)");
-            }
-
-            changes += 1;
-        }
-    }
-
-    if changes == 0 {
-        println!("  {} Generated code is up to date", "✓".green());
-    } else {
-        println!();
-        println!(
-            "{} {} file(s) would change",
-            "Summary:".cyan().bold(),
-            changes
-        );
-        println!("  Run {} to update", "backbone schema generate".yellow());
-    }
-
-    Ok(())
-}
 
 /// Watch schema files and regenerate on changes
 fn execute_watch(module: &str, target: &str, output: Option<PathBuf>) -> Result<()> {
