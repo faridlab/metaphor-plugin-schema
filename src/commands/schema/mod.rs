@@ -1,5 +1,7 @@
 //! Schema command implementations
 
+mod manifest;
+
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use colored::Colorize;
@@ -18,45 +20,8 @@ use crate::parser::{
     HookParseResult, YamlHookIndexSchema, ModelParseResult, YamlField,
 };
 use crate::resolver::resolve_schema;
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use indexmap::IndexMap;
-use serde::Deserialize;
-
-/// Codegen manifest loaded from `metaphor.codegen.yaml` at the output root.
-///
-/// Declares which files the generator must NEVER touch (`user_owned`). Files
-/// matching any user_owned glob are skipped entirely — the generator does not
-/// read, merge, or write them. This is the contract that lets application code
-/// own files outside the generator's scope without losing them every regen.
-#[derive(Debug, Default, Deserialize)]
-struct CodegenManifest {
-    #[serde(default)]
-    user_owned: Vec<String>,
-}
-
-/// Load `metaphor.codegen.yaml` from `output_dir` and compile its
-/// `user_owned` patterns into a GlobSet. Returns an empty GlobSet when the
-/// manifest is missing — preserving today's behavior for repos that haven't
-/// adopted the manifest yet.
-fn load_user_owned_globs(output_dir: &Path) -> Result<GlobSet> {
-    let manifest_path = output_dir.join("metaphor.codegen.yaml");
-    if !manifest_path.exists() {
-        return Ok(GlobSet::empty());
-    }
-    let raw = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-    let manifest: CodegenManifest = serde_yaml::from_str(&raw)
-        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
-    let mut builder = GlobSetBuilder::new();
-    for pattern in &manifest.user_owned {
-        let glob = Glob::new(pattern)
-            .with_context(|| format!("Invalid user_owned glob in metaphor.codegen.yaml: {}", pattern))?;
-        builder.add(glob);
-    }
-    builder
-        .build()
-        .with_context(|| "Failed to compile user_owned glob set")
-}
+use manifest::load_user_owned_globs;
 
 #[derive(Subcommand, Debug)]
 pub enum SchemaAction {
