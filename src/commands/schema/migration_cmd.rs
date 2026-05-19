@@ -18,7 +18,9 @@
 //! - `status` is read-only and exits with an error (non-zero) when drift
 //!   is detected — useful as a CI gate.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(feature = "database")]
+use anyhow::Context;
 use colored::Colorize;
 use std::fs;
 use std::path::{Path, PathBuf};
