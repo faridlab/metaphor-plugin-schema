@@ -794,6 +794,15 @@ impl SqlGenerator {
             deferred_by_model.entry(model_idx).or_default().insert(rel_idx);
         }
 
+        // Set of enum names known to the schema — used below to identify
+        // which `TypeRef::Custom(...)` fields are enums (vs models / VOs).
+        let enum_by_name: std::collections::HashMap<&str, &EnumDef> = schema
+            .schema
+            .enums
+            .iter()
+            .map(|e| (e.name.as_str(), e))
+            .collect();
+
         // 3. Per-model paired migrations
         for &model_idx in &order {
             let model = &schema.schema.models[model_idx];
@@ -801,7 +810,27 @@ impl SqlGenerator {
             let ts = Self::timestamp_for(counter);
             counter += 1;
 
-            let mut up = self.generate_table(model)?;
+            // Prepend `CREATE TYPE ... IF NOT EXISTS` blocks for every enum
+            // this table's fields reference. Makes the per-model migration
+            // self-contained: a new enum declared alongside a new model
+            // gets created on the next non-`--force` regen (the consolidated
+            // `create_enums.up.sql` would otherwise be skipped because it
+            // already exists, silently dropping the new enum). The DO-block
+            // in `generate_enum` is idempotent so this is safe to re-run.
+            let mut up = String::new();
+            let mut seen_enums: std::collections::HashSet<&str> =
+                std::collections::HashSet::new();
+            for field in &model.fields {
+                if let Some(enum_name) = extract_custom_type_name(&field.type_ref) {
+                    if let Some(enum_def) = enum_by_name.get(enum_name) {
+                        if seen_enums.insert(enum_name) {
+                            up.push_str(&self.generate_enum(enum_def)?);
+                            up.push('\n');
+                        }
+                    }
+                }
+            }
+            up.push_str(&self.generate_table(model)?);
             let inline_fks = self.generate_foreign_keys_filtered(
                 model,
                 schema,
@@ -1164,6 +1193,17 @@ impl SqlGenerator {
         Ok(())
     }
 
+}
+
+/// Extract the leaf custom type name from a `TypeRef`, descending through
+/// `Optional` and `Array` wrappers. Returns `None` for primitives, maps, and
+/// cross-module refs (those can't reference a locally-defined enum).
+fn extract_custom_type_name(type_ref: &TypeRef) -> Option<&str> {
+    match type_ref {
+        TypeRef::Custom(name) => Some(name.as_str()),
+        TypeRef::Optional(inner) | TypeRef::Array(inner) => extract_custom_type_name(inner),
+        _ => None,
+    }
 }
 
 fn get_relation_target_table(type_ref: &TypeRef, schema: &crate::ast::ModuleSchema) -> String {
