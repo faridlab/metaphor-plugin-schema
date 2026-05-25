@@ -258,7 +258,10 @@ pub(super) fn build_module_schema(
                         }
                     }
                 }
-                Err(e) => errors.push(format!("{}: {}", filename, e)),
+                // `{:#}` walks the anyhow chain so serde's "unknown field
+                // `foo`, expected one of ..." surfaces instead of being hidden
+                // behind the generic top-level context.
+                Err(e) => errors.push(format!("{}: {:#}", filename, e)),
             }
         } else if filename.ends_with(".hook.yaml") {
             match parse_yaml_hook_flexible(&content) {

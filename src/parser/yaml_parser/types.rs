@@ -91,11 +91,22 @@ pub struct YamlModelSchema {
     pub traits: IndexMap<String, YamlRepositoryTrait>,
 }
 
-/// A model definition in YAML
+/// A model definition in YAML.
+///
+/// Parsed with `deny_unknown_fields` so misplaced keys fail loudly instead
+/// of being silently dropped — e.g. writing `disabled:` at the top level
+/// of a model when it belongs under `config.generators.disabled` will
+/// now produce a parse error pointing at the offending model, instead of
+/// being silently ignored and only manifesting later as "why isn't my
+/// per-model gating working?".
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct YamlModel {
     /// Model name
     pub name: String,
+    /// Free-form description (informational; ignored by codegen).
+    #[serde(default)]
+    pub description: Option<String>,
     /// Database collection/table name
     #[serde(default)]
     pub collection: Option<String>,
@@ -135,6 +146,7 @@ pub struct YamlModel {
 /// alongside without breaking existing schemas because every field is
 /// optional.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct YamlModelEntryConfig {
     /// Generator configuration scoped to this single model.
     #[serde(default)]
