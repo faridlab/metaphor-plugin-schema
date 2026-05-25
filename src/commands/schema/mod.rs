@@ -3,6 +3,7 @@
 mod changed;
 mod diff;
 mod discovery;
+mod doctor;
 mod generate;
 mod manifest;
 mod merge;
@@ -16,6 +17,7 @@ mod watch;
 pub(crate) use discovery::resolve_module_arg;
 use changed::execute_changed;
 use diff::execute_diff;
+use doctor::execute_doctor;
 use generate::execute_generate;
 use migration_cmd::{execute_migration, execute_status};
 use parse::execute_parse;
@@ -227,6 +229,22 @@ pub enum SchemaAction {
         #[arg(long, env = "DATABASE_URL")]
         database_url: Option<String>,
     },
+
+    /// Check hand-written aggregator files against the current schema
+    ///
+    /// Scans every `.rs` file listed under `user_owned:` in
+    /// `metaphor.codegen.yaml` for references to handler-route functions
+    /// (`create_<name>_routes`) that the generator won't emit — either
+    /// because the model opted out via `config.generators.disabled` or
+    /// because the model was renamed/removed.
+    ///
+    /// Run this BEFORE `metaphor schema generate -f` to know what you'll
+    /// need to fix by hand. Read-only; never writes files. Exits non-zero
+    /// when drift is found, so it slots into CI as a guard.
+    Doctor {
+        /// Module name (auto-detected from CWD if omitted)
+        module: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, clap::ValueEnum)]
@@ -283,6 +301,10 @@ pub fn execute(action: SchemaAction) -> Result<()> {
             module,
             database_url,
         } => execute_status(&module, database_url),
+        SchemaAction::Doctor { module } => {
+            let module = resolve_module_arg(module, "schema doctor")?;
+            execute_doctor(&module)
+        }
     }
 }
 
