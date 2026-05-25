@@ -17,6 +17,7 @@ Complete reference for all `metaphor schema` commands, flags, and options.
 | `metaphor schema migration` | Generate database migrations from schema changes |
 | `metaphor schema changed` | Show which schema files have changed (git-aware) |
 | `metaphor schema status` | Show schema drift between definitions and database |
+| `metaphor schema doctor` | Find hand-written references to handlers the generator won't emit |
 
 ---
 
@@ -475,6 +476,69 @@ metaphor schema status sapiens
 
 # Check against specific database
 metaphor schema status sapiens --database-url postgres://localhost/mydb
+```
+
+---
+
+## `metaphor schema doctor`
+
+Find drift between hand-written aggregator/composer files and the
+current schema. Specifically, scans every `.rs` file under `src/` and
+`tests/` for references to handler-route symbols that the generator
+won't emit because the model opted out via per-model
+`config.generators.disabled: [handler, …]` (or because the model was
+renamed/removed).
+
+Read-only; never writes files. Exits non-zero when drift is found, so
+it slots into CI as a guard. Run it **before** `metaphor schema
+generate -f` to know up-front which hand-written imports and
+`.merge(...)` calls you'll need to delete.
+
+```bash
+metaphor schema doctor [MODULE]
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `MODULE` | Module name (auto-detected from CWD if omitted) |
+
+### Detection
+
+For every model whose `Handler` target is disabled, the doctor builds
+the set of forbidden symbol names:
+
+- `create_<name>_routes`
+- `create_<name>_read_routes`
+- `create_<name>_write_routes`
+- `create_protected_<name>_routes`
+- `create_<name>_transition_routes`
+
+Any reference to one of these names in a non-comment line is reported
+as drift, tagged by whether the containing file matches a `user_owned`
+glob in `metaphor.codegen.yaml`:
+
+- **user-owned** — you must delete the import / `.merge(...)` call.
+- **generator-managed (re-emit will overwrite)** — likely stale from a
+  pre-fix regen; `metaphor schema generate -f` will heal it.
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | No drift detected |
+| `1` | Drift found (report printed to stdout) |
+| `2` | Schema load/parse failure |
+
+### Examples
+
+```bash
+# Check drift in the current module
+metaphor schema doctor
+
+# Check a specific module
+metaphor schema doctor sapiens
 ```
 
 ---

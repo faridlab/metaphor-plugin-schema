@@ -47,6 +47,9 @@ metaphor schema changed sapiens
 
 # Check schema drift against database
 metaphor schema status sapiens
+
+# Find hand-written references to handlers the generator won't emit
+metaphor schema doctor sapiens
 ```
 
 ## Schema Example

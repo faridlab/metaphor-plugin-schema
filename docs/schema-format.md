@@ -63,6 +63,7 @@ Define data models that map to database tables and Rust structs:
 ```yaml
 models:
   - name: Order
+    description: Customer order with line items and lifecycle status
     collection: orders          # Database table name
     soft_delete: true           # Enable soft-delete (adds deleted_at field)
     fields:
@@ -102,6 +103,14 @@ models:
       - fields: [email]
         unique: true
 ```
+
+> **Strict parsing.** Model entries reject unknown top-level keys.
+> Misplacing per-model generator gating (`disabled: [...]` written at
+> the model root instead of under `config.generators.disabled`) now
+> fails parse with `unknown field 'disabled', expected one of …`
+> instead of being silently ignored. See
+> [Generators Configuration](#generators-configuration) for the correct
+> shape.
 
 ### Field Properties
 
