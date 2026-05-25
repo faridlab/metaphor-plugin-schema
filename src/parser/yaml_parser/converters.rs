@@ -276,8 +276,14 @@ impl YamlModel {
             model.indexes.push(yaml_idx.into_index());
         }
 
-        // Propagate per-model generator config (disabled blacklist + enabled whitelist)
-        if let Some(gen_cfg) = self.generators {
+        // Propagate per-model generator config (disabled blacklist + enabled whitelist).
+        // Accept either the direct `generators:` field or the wrapped
+        // `config.generators:` shape (the latter mirrors the index-file
+        // module config). Direct form wins when both are present.
+        let gen_cfg = self
+            .generators
+            .or_else(|| self.config.and_then(|c| c.generators));
+        if let Some(gen_cfg) = gen_cfg {
             if let Some(disabled) = gen_cfg.disabled {
                 model.disabled_generators = disabled;
             }

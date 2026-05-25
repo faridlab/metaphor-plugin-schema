@@ -121,6 +121,24 @@ pub struct YamlModel {
     /// Per-model generator overrides (e.g. disable viewmodels for this entity)
     #[serde(default)]
     pub generators: Option<GeneratorsConfig>,
+    /// Per-model wrapped config — mirrors the `config:` block accepted on
+    /// index files. When both `generators:` and `config.generators:` are set,
+    /// the direct `generators:` field wins. Allows users to write the
+    /// nested shape they already use at the module level.
+    #[serde(default)]
+    pub config: Option<YamlModelEntryConfig>,
+}
+
+/// Per-entity `config:` block accepted under a single model entry.
+///
+/// Today only `generators` is carried through; other fields can be added
+/// alongside without breaking existing schemas because every field is
+/// optional.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct YamlModelEntryConfig {
+    /// Generator configuration scoped to this single model.
+    #[serde(default)]
+    pub generators: Option<GeneratorsConfig>,
 }
 
 /// A field definition in YAML
