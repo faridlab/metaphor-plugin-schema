@@ -13,9 +13,19 @@
 //! - `grpc.rs` - gRPC service registration
 
 use super::{GenerateError, GeneratedOutput, Generator};
+use crate::ast::Model;
 use crate::resolver::ResolvedSchema;
 use std::fmt::Write;
 use std::path::PathBuf;
+
+/// True iff the Handler generator would emit a handler file for `model`
+/// (i.e. the model hasn't opted out via `config.generators.disabled: handler`
+/// or a whitelist that excludes `handler`). Used to skip handler-route refs
+/// in the generated module-aggregator code so it doesn't reference functions
+/// that were never emitted.
+fn handler_emitted(model: &Model) -> bool {
+    !super::model_skips_target(model, super::GenerationTarget::Handler)
+}
 
 /// Generates module registration code from schema
 pub struct ModuleGenerator;
@@ -209,13 +219,13 @@ impl ModuleGenerator {
         writeln!(output, "    /// Returns an Axum Router with all 12 Backbone CRUD endpoints per entity.").unwrap();
         writeln!(output, "    pub fn routes(&self) -> Router {{").unwrap();
         writeln!(output, "        use presentation::http::{{").unwrap();
-        for model in &schema.schema.models {
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             writeln!(output, "            create_{}_routes,", to_snake_case(&model.name)).unwrap();
         }
         writeln!(output, "        }};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        Router::new()").unwrap();
-        for model in &schema.schema.models {
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
             writeln!(output, "            .merge(create_{}_routes(self.{}_service.clone()))",
                 snake_name, snake_name).unwrap();
@@ -325,7 +335,7 @@ impl ModuleGenerator {
 
         // Import handler route functions and service types
         writeln!(output, "use super::{{").unwrap();
-        for model in &schema.schema.models {
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
             writeln!(output, "    {}_handler::create_{}_routes,",
                 snake_name, snake_name).unwrap();
@@ -369,7 +379,7 @@ impl ModuleGenerator {
         writeln!(output, "pub fn configure_routes(services: HttpServices) -> Router {{").unwrap();
         writeln!(output, "    Router::new()").unwrap();
 
-        for model in &schema.schema.models {
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
             writeln!(output, "        // {} routes (12 Backbone endpoints)", model.name).unwrap();
             writeln!(output, "        .merge(create_{}_routes(services.{}))", snake_name, snake_name).unwrap();
@@ -383,7 +393,7 @@ impl ModuleGenerator {
         writeln!(output, "pub mod individual {{").unwrap();
         writeln!(output, "    use super::*;").unwrap();
         writeln!(output).unwrap();
-        for model in &schema.schema.models {
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
             writeln!(output, "    pub fn {}_routes(service: Arc<{}Service>) -> Router {{",
                 snake_name, model.name).unwrap();

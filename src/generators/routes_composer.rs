@@ -65,10 +65,19 @@ impl RoutesComposerGenerator {
         writeln!(output, "use std::sync::Arc;").unwrap();
         writeln!(output).unwrap();
 
-        // Import handler route functions
+        // Import handler route functions. Models that disabled the
+        // Handler generator emit no `create_{name}_routes` function, so
+        // skip them here to avoid generating an import that won't resolve.
         writeln!(output, "// Import handlers").unwrap();
         writeln!(output, "use crate::presentation::http::{{").unwrap();
-        let imports: Vec<String> = schema.schema.models.iter()
+        let routed_models: Vec<&crate::ast::Model> = schema
+            .schema
+            .models
+            .iter()
+            .filter(|m| !super::model_skips_target(m, super::GenerationTarget::Handler))
+            .collect();
+        let imports: Vec<String> = routed_models
+            .iter()
             .map(|m| format!("create_{}_routes", to_snake_case(&m.name)))
             .collect();
         for (i, import) in imports.iter().enumerate() {
@@ -106,7 +115,7 @@ impl RoutesComposerGenerator {
         writeln!(output, "pub fn create_stateless_routes(module: &crate::{}Module) -> Router<()> {{", pascal_name).unwrap();
         writeln!(output, "    Router::new()").unwrap();
 
-        for model in &schema.schema.models {
+        for model in &routed_models {
             let snake_name = to_snake_case(&model.name);
             // Add CRUD routes (includes all 16 endpoints including trash operations)
             writeln!(output, "        .merge(create_{}_routes(module.{}_service.clone()))", snake_name, snake_name).unwrap();
