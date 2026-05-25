@@ -5,6 +5,27 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-05-25
+
+### Added
+
+- **Per-model generator overrides.** Individual model entries now honour
+  `enabled` / `disabled` lists, either as a direct `generators:` field or
+  wrapped under `config.generators:` to mirror the file-level shape.
+  Models that opt out of a target are dropped wholesale — no file emitted
+  and no entry in the generated parent `mod.rs`. See
+  [docs/schema-format.md § Generators Configuration](docs/schema-format.md#generators-configuration).
+
+### Fixed
+
+- **SQL per-model migrations are now self-contained for enums.** Each
+  table migration prepends `CREATE TYPE ... IF NOT EXISTS` for every
+  enum its fields reference. Previously a new enum declared alongside a
+  new model could be silently skipped on non-`--force` regens because
+  the consolidated `create_enums.up.sql` already existed.
+- **Rust generator** emitted a duplicate `#[cfg(feature = "openapi")]`
+  attribute above the `utoipa::ToSchema` import in some files.
+
 ## [0.2.0] — 2026-05-20
 
 ### Added
