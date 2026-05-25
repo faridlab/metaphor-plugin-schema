@@ -471,6 +471,27 @@ pub fn generate_all_with_options(
     // Apply generators config from schema (enabled/disabled targets)
     let targets = filter_targets_by_config(targets, &schema.schema.generators_config);
 
+    // Per-model gating: produce a filtered schema view per target so models
+    // that disable the target (via `config.generators.disabled:` or limit it
+    // via `config.generators.enabled:` in their YAML) are skipped wholesale —
+    // no file emitted, no entry in the parent mod.rs.
+    let schema_for = |target: GenerationTarget| -> std::borrow::Cow<'_, ResolvedSchema> {
+        let needs_filter = schema
+            .schema
+            .models
+            .iter()
+            .any(|m| model_skips_target(m, target));
+        if !needs_filter {
+            return std::borrow::Cow::Borrowed(schema);
+        }
+        let mut cloned = schema.clone();
+        cloned
+            .schema
+            .models
+            .retain(|m| !model_skips_target(m, target));
+        std::borrow::Cow::Owned(cloned)
+    };
+
     // Define target batches to avoid race conditions with model resolution
     let batches = [
         // Batch 1: Data Layer - fundamental data structures
@@ -530,47 +551,49 @@ pub fn generate_all_with_options(
 
         for target in batch_targets {
             if targets.contains(target) {
+                let view = schema_for(*target);
+                let s = view.as_ref();
                 let generator_output = match target {
-                    GenerationTarget::Proto => ProtoGenerator::new().generate(schema)?,
-                    GenerationTarget::Rust => RustGenerator::new().generate(schema)?,
-                    GenerationTarget::Sql => SqlGenerator::new().generate(schema)?,
-                    GenerationTarget::Repository => RepositoryGenerator::new().generate(schema)?,
-                    GenerationTarget::RepositoryTrait => RepositoryTraitGenerator::new().generate(schema)?,
-                    GenerationTarget::Service => ServiceGenerator::new().generate(schema)?,
-                    GenerationTarget::DomainService => DomainServiceGenerator::new().generate(schema)?,
-                    GenerationTarget::UseCase => UseCaseGenerator::new().generate(schema)?,
-                    GenerationTarget::Auth => AuthGenerator::new().generate(schema)?,
-                    GenerationTarget::Events => EventsGenerator::new().generate(schema)?,
-                    GenerationTarget::StateMachine => StateMachineGenerator::new().generate(schema)?,
-                    GenerationTarget::Validator => ValidatorGenerator::new().generate(schema)?,
-                    // TODO: GenerationTarget::Permission => PermissionGenerator::new().generate(schema)?,
-                    GenerationTarget::Handler => HandlerGenerator::new().generate(schema)?,
-                    GenerationTarget::Grpc => GrpcGenerator::new().generate(schema)?,
-                    GenerationTarget::Graphql => GraphqlGenerator::new().generate(schema)?,
-                    GenerationTarget::OpenApi => OpenApiGenerator::new().with_split(options.split).generate(schema)?,
-                    GenerationTarget::Trigger => TriggerGenerator::new().generate(schema)?,
-                    GenerationTarget::Flow => FlowGenerator::new().generate(schema)?,
-                    GenerationTarget::Module => ModuleGenerator::new().generate(schema)?,
-                    GenerationTarget::Config => ConfigGenerator::new().generate(schema)?,
-                    GenerationTarget::ValueObject => ValueObjectGenerator::new().generate(schema)?,
-                    GenerationTarget::Specification => SpecificationGenerator::new().generate(schema)?,
-                    GenerationTarget::Cqrs => CqrsGenerator::new().generate(schema)?,
-                    GenerationTarget::Computed => ComputedGenerator::new().generate(schema)?,
-                    GenerationTarget::Projection => ProjectionGenerator::new().generate(schema)?,
-                    GenerationTarget::EventStore => EventStoreGenerator::new().generate(schema)?,
-                    GenerationTarget::Export => ExportGenerator::new().generate(schema)?,
-                    GenerationTarget::Integration => IntegrationGenerator::new().generate(schema)?,
-                    GenerationTarget::EventSubscription => EventSubscriptionGenerator::new().generate(schema)?,
-                    GenerationTarget::Dto => DtoGenerator::new().generate(schema)?,
-                    GenerationTarget::Versioning => VersioningGenerator::new().generate(schema)?,
-                    GenerationTarget::BulkOperations => BulkOperationsGenerator::new().generate(schema)?,
-                    GenerationTarget::Seeder => SeederGenerator::new().generate(schema)?,
-                    GenerationTarget::IntegrationTest => IntegrationTestGenerator::new().generate(schema)?,
-                    GenerationTarget::AuditTriggers => AuditTriggersGenerator::new().generate(schema)?,
+                    GenerationTarget::Proto => ProtoGenerator::new().generate(s)?,
+                    GenerationTarget::Rust => RustGenerator::new().generate(s)?,
+                    GenerationTarget::Sql => SqlGenerator::new().generate(s)?,
+                    GenerationTarget::Repository => RepositoryGenerator::new().generate(s)?,
+                    GenerationTarget::RepositoryTrait => RepositoryTraitGenerator::new().generate(s)?,
+                    GenerationTarget::Service => ServiceGenerator::new().generate(s)?,
+                    GenerationTarget::DomainService => DomainServiceGenerator::new().generate(s)?,
+                    GenerationTarget::UseCase => UseCaseGenerator::new().generate(s)?,
+                    GenerationTarget::Auth => AuthGenerator::new().generate(s)?,
+                    GenerationTarget::Events => EventsGenerator::new().generate(s)?,
+                    GenerationTarget::StateMachine => StateMachineGenerator::new().generate(s)?,
+                    GenerationTarget::Validator => ValidatorGenerator::new().generate(s)?,
+                    // TODO: GenerationTarget::Permission => PermissionGenerator::new().generate(s)?,
+                    GenerationTarget::Handler => HandlerGenerator::new().generate(s)?,
+                    GenerationTarget::Grpc => GrpcGenerator::new().generate(s)?,
+                    GenerationTarget::Graphql => GraphqlGenerator::new().generate(s)?,
+                    GenerationTarget::OpenApi => OpenApiGenerator::new().with_split(options.split).generate(s)?,
+                    GenerationTarget::Trigger => TriggerGenerator::new().generate(s)?,
+                    GenerationTarget::Flow => FlowGenerator::new().generate(s)?,
+                    GenerationTarget::Module => ModuleGenerator::new().generate(s)?,
+                    GenerationTarget::Config => ConfigGenerator::new().generate(s)?,
+                    GenerationTarget::ValueObject => ValueObjectGenerator::new().generate(s)?,
+                    GenerationTarget::Specification => SpecificationGenerator::new().generate(s)?,
+                    GenerationTarget::Cqrs => CqrsGenerator::new().generate(s)?,
+                    GenerationTarget::Computed => ComputedGenerator::new().generate(s)?,
+                    GenerationTarget::Projection => ProjectionGenerator::new().generate(s)?,
+                    GenerationTarget::EventStore => EventStoreGenerator::new().generate(s)?,
+                    GenerationTarget::Export => ExportGenerator::new().generate(s)?,
+                    GenerationTarget::Integration => IntegrationGenerator::new().generate(s)?,
+                    GenerationTarget::EventSubscription => EventSubscriptionGenerator::new().generate(s)?,
+                    GenerationTarget::Dto => DtoGenerator::new().generate(s)?,
+                    GenerationTarget::Versioning => VersioningGenerator::new().generate(s)?,
+                    GenerationTarget::BulkOperations => BulkOperationsGenerator::new().generate(s)?,
+                    GenerationTarget::Seeder => SeederGenerator::new().generate(s)?,
+                    GenerationTarget::IntegrationTest => IntegrationTestGenerator::new().generate(s)?,
+                    GenerationTarget::AuditTriggers => AuditTriggersGenerator::new().generate(s)?,
                     // Framework compliance generators
-                    GenerationTarget::AppState => AppStateGenerator::new().generate(schema)?,
-                    GenerationTarget::RoutesComposer => RoutesComposerGenerator::new().generate(schema)?,
-                    GenerationTarget::HandlersModule => HandlersModuleGenerator::new().generate(schema)?,
+                    GenerationTarget::AppState => AppStateGenerator::new().generate(s)?,
+                    GenerationTarget::RoutesComposer => RoutesComposerGenerator::new().generate(s)?,
+                    GenerationTarget::HandlersModule => HandlersModuleGenerator::new().generate(s)?,
                 };
                 batch_output.merge(generator_output);
             }
@@ -730,6 +753,31 @@ pub fn parse_targets(s: &str) -> Vec<GenerationTarget> {
     s.split(',')
         .filter_map(|t| GenerationTarget::from_str(t.trim()))
         .collect()
+}
+
+/// True when a single model opts out of (or fails to opt in to) `target`
+/// via its YAML `config.generators.enabled` / `config.generators.disabled`.
+///
+/// Matching is alias-aware: any string `from_str()` accepts (e.g. `handler`,
+/// `handlers`, `rest`) resolves to the canonical [`GenerationTarget`] before
+/// comparison.
+pub(crate) fn model_skips_target(
+    model: &crate::ast::Model,
+    target: GenerationTarget,
+) -> bool {
+    // Whitelist mode: if enabled is non-empty, only listed targets pass.
+    if !model.enabled_generators.is_empty() {
+        let allowed = model
+            .enabled_generators
+            .iter()
+            .any(|s| GenerationTarget::from_str(s) == Some(target));
+        return !allowed;
+    }
+    // Blacklist mode: skip iff target is listed.
+    model
+        .disabled_generators
+        .iter()
+        .any(|s| GenerationTarget::from_str(s) == Some(target))
 }
 
 /// Filter targets based on module-level generators config.
