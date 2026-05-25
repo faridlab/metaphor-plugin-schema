@@ -5,6 +5,39 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-05-25
+
+### Added
+
+- **`metaphor schema doctor`.** New read-only subcommand that scans every
+  `.rs` file under the consumer root for references to handler-route
+  symbols (`create_<name>_routes`, `create_<name>_read_routes`,
+  `create_protected_<name>_routes`, …) that the generator won't emit
+  because the model opted out via `config.generators.disabled: [handler,
+  …]`. Findings are tagged `user-owned` (the caller must edit) vs
+  `generator-managed` (next `generate -f` will heal). Exits non-zero on
+  drift so it slots into CI. See
+  [docs/cli-reference.md § `metaphor schema doctor`](docs/cli-reference.md#metaphor-schema-doctor).
+- **Model-level `description:` field.** Optional free-form string on
+  every model. Informational only — ignored by all generators today,
+  but reserved so schemas can carry intent without tripping the new
+  strict parser.
+
+### Changed
+
+- **Strict model parsing (`deny_unknown_fields`).** `YamlModel` and the
+  per-model `config:` block now reject unknown keys at parse time. The
+  common foot-gun this catches: writing `disabled: [handler]` at the
+  top level of a model when it belongs under `config.generators.disabled`.
+  Previously the misplaced key was silently dropped and only surfaced
+  later as "why isn't per-model gating working?". Now the parse fails
+  with `unknown field 'disabled', expected one of …` pointing at the
+  offending model.
+- **Parse errors expose the full anyhow chain.** Module loader now
+  formats schema-file errors with `{:#}` so serde's inner message
+  (e.g. the `unknown field` line above) surfaces instead of being
+  hidden behind the generic top-level context.
+
 ## [0.2.2] — 2026-05-25
 
 ### Fixed
