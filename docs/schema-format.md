@@ -195,6 +195,31 @@ disabled — so the module still compiles when only a subset of
 transports is in use. The full list of cross-target dependencies is in
 [generate-rust.md → module](generate-rust.md#module----module-wiring-librs--modrs).
 
+**Per-model overrides:**
+
+Individual model entries accept the same `enabled` / `disabled` lists,
+either as a direct `generators:` field or wrapped under `config:` to
+mirror the file-level shape:
+
+```yaml
+models:
+  audit_log:
+    generators:
+      disabled: [cqrs, graphql]   # skip CQRS + GraphQL for this one model
+    fields: { ... }
+
+  read_only_view:
+    config:
+      generators:
+        enabled: [rust, sql]      # only emit the data layer for this entity
+    fields: { ... }
+```
+
+When both forms appear on the same entry, the direct `generators:` field
+wins. Models that opt out of a target are dropped wholesale from that
+target's output — no file is written and no entry appears in the
+generated parent `mod.rs`.
+
 See the per-platform docs for the full target catalog:
 
 | Platform | Target list |
