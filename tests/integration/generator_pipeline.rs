@@ -220,14 +220,21 @@ fn test_domain_service_generator_from_ast() {
         schema.domain_services.push(yaml_svc.into_domain_service(name));
     }
 
+    // The generator emits one domain-policy file per model (PermitAllPolicy alias or a
+    // scaffold when the model declares domain rules), so a model must be present.
+    let mut model = Model::new("User");
+    model.collection = Some("users".to_string());
+    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    schema.models.push(model);
+
     let resolved = create_resolved_schema(schema);
     let generator = DomainServiceGenerator::new();
     let output = generator.generate(&resolved)
         .expect("DomainServiceGenerator should succeed");
 
-    // Generator should produce domain service files
-    assert!(!output.files.is_empty(),
-        "DomainServiceGenerator should produce output for domain services");
+    // Generator should produce a per-model domain policy file (plus mod.rs)
+    assert!(output.files.contains_key(&PathBuf::from("src/domain/services/user_domain_policy.rs")),
+        "DomainServiceGenerator should produce a domain policy file for the User model");
 }
 
 #[test]
@@ -357,15 +364,22 @@ fn test_auth_generator_with_roles_and_policies() {
     auth_config.policies = policies;
     schema.authorization = Some(auth_config);
 
+    // The generator emits a per-model `{model}_auth.rs` (Policy + Guard), so a model
+    // must be present for it to produce output.
+    let mut model = Model::new("Document");
+    model.collection = Some("documents".to_string());
+    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    model.fields.push(Field::new("owner_id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    schema.models.push(model);
+
     let resolved = create_resolved_schema(schema);
     let generator = AuthGenerator::new();
     let output = generator.generate(&resolved)
         .expect("AuthGenerator should handle complex auth config");
 
-    // Verify output was generated
-    // The auth generator produces permission-related files
-    assert!(!output.files.is_empty(),
-        "AuthGenerator should produce output for auth config");
+    // The auth generator produces a per-model auth file (Policy + Guard) plus mod.rs
+    assert!(output.files.contains_key(&PathBuf::from("src/application/auth/document_auth.rs")),
+        "AuthGenerator should produce an auth file for the Document model");
 }
 
 // =============================================================================
