@@ -125,12 +125,19 @@ fn parse_android_namespace(content: &str) -> Option<String> {
     // Look for: namespace = "com.bersihir.shared"
     let namespace_pattern = regex::Regex::new(r#"namespace\s*=\s*"([^"]+)""#).ok()?;
 
+    // Module/platform qualifier segments that sit on top of the shared base package
+    // in a KMP gradle setup (e.g. `com.example.shared`, `com.example.mobile`).
+    const MODULE_SUFFIXES: &[&str] = &[
+        ".shared", ".android", ".mobile", ".ios", ".desktop",
+        ".web", ".jvm", ".js", ".native", ".common",
+    ];
+
     namespace_pattern.captures(content).map(|caps| {
         let full_namespace = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        // Strip ".shared" suffix if present
-        let base = full_namespace
-            .strip_suffix(".shared")
-            .or_else(|| full_namespace.strip_suffix(".android"))
+        // Strip a known module/platform suffix if present to recover the base package.
+        let base = MODULE_SUFFIXES
+            .iter()
+            .find_map(|suffix| full_namespace.strip_suffix(suffix))
             .unwrap_or(full_namespace);
         base.to_string()
     })
@@ -242,6 +249,8 @@ fn base_package_from(full_package: &str) -> String {
 ///
 /// # Examples
 /// ```
+/// use metaphor_schema::kotlin::resolve_package;
+///
 /// let pkg = resolve_package("com.bersihir", "sapiens", "domain");
 /// assert_eq!(pkg, "com.bersihir.domain.sapiens");
 ///

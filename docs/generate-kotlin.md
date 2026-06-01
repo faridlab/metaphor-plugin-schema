@@ -131,7 +131,11 @@ shared/src/commonMain/kotlin/{package}/
 
 When `--package` is not provided, the tool auto-detects the Kotlin package name from your project in this order:
 
-1. **`build.gradle.kts`** -- Reads the `namespace` declaration
+1. **`build.gradle.kts`** -- Reads the `namespace` declaration. A trailing
+   module/platform segment is stripped to recover the shared base package
+   (recognized suffixes: `.shared`, `.android`, `.mobile`, `.ios`,
+   `.desktop`, `.web`, `.jvm`, `.js`, `.native`, `.common`) — e.g.
+   `namespace = "com.example.mobile"` resolves to `com.example`.
 2. **SQLDelight config** -- Reads the package from SQLDelight setup
 3. **Existing Kotlin files** -- Scans for `package` declarations in existing source files
 4. **Fallback** -- Uses a default package based on the project name
