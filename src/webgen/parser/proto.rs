@@ -120,6 +120,16 @@ impl ProtoParser {
 
 /// Convert to snake_case
 pub fn to_snake_case(s: &str) -> String {
+    // Mixed-case acronyms that the general casing rules below cannot split correctly:
+    // "OAuth" is structurally identical to a CamelCase word like "AModel" (upper, upper,
+    // lower...), so it would otherwise become "o_auth". Normalize them to a single
+    // capitalized token first so they collapse into one lowercase word (e.g. "oauth").
+    const KNOWN_ACRONYMS: &[(&str, &str)] = &[("OAuth", "Oauth")];
+    let normalized = KNOWN_ACRONYMS
+        .iter()
+        .fold(s.to_string(), |acc, (from, to)| acc.replace(from, to));
+    let s = normalized.as_str();
+
     let mut result = String::new();
     let chars: Vec<char> = s.chars().collect();
 

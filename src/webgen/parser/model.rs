@@ -329,6 +329,7 @@ impl ModelParser {
         let mut args = Vec::new();
         let mut current = String::new();
         let mut in_quotes = false;
+        let mut quote_char = '"';
         let mut escape_next = false;
 
         for ch in args_str.chars() {
@@ -337,7 +338,12 @@ impl ModelParser {
                 escape_next = false;
             } else if ch == '\\' {
                 escape_next = true;
-            } else if ch == '"' {
+            } else if (ch == '"' || ch == '\'') && (!in_quotes || ch == quote_char) {
+                // Treat both single- and double-quoted strings as delimiters; track the
+                // opening quote so the matching closer (not the other kind) ends the string.
+                if !in_quotes {
+                    quote_char = ch;
+                }
                 in_quotes = !in_quotes;
             } else if ch == ',' && !in_quotes {
                 args.push(current.trim().to_string());
