@@ -819,23 +819,24 @@ mod tests {
 
         let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
 
-        // Should use backbone-core patterns
-        assert!(handler.contains("CrudService"));
-        assert!(handler.contains("BackboneCrudHandler"));
-        // ApiResponse is only imported for models with state machine transitions
+        // Should use backbone-core patterns: routes are wired through BackboneCrudHandler
+        // over the entity's service (the per-entity CrudService adapter is no longer
+        // generated — backbone-core provides a blanket impl).
+        assert!(handler.contains("BackboneCrudHandler::<UserService"));
         assert!(handler.contains("backbone_core::http"));
     }
 
     #[test]
-    fn test_handler_implements_crud_service() {
+    fn test_handler_wires_service_through_backbone_handler() {
         let schema = create_test_schema();
         let generator = HandlerGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
         let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
 
-        // Should implement CrudService trait
-        assert!(handler.contains("impl CrudService<User, CreateUserDto, UpdateUserDto> for UserCrudService"));
+        // CRUD endpoints are wired by BackboneCrudHandler parameterized over the entity's
+        // service and DTOs (replaces the old hand-written CrudService adapter impl).
+        assert!(handler.contains("BackboneCrudHandler::<UserService, User, CreateUserDto, UpdateUserDto, UserResponseDto>::routes"));
     }
 
     #[test]
@@ -870,19 +871,9 @@ mod tests {
         assert!(handler.contains("BackboneCrudHandler::<UserService, User, CreateUserDto, UpdateUserDto, UserResponseDto>::write_routes"));
     }
 
-    #[test]
-    fn test_handler_supports_events() {
-        let schema = create_test_schema();
-        let generator = HandlerGenerator::new();
-        let output = generator.generate(&schema).unwrap();
-
-        let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
-
-        // Should have event support (feature-gated)
-        assert!(handler.contains("#[cfg(feature = \"events\")]"));
-        assert!(handler.contains("pub enum UserEvent"));
-        assert!(handler.contains("DomainEvent for UserEvent"));
-    }
+    // Note: domain event enums (UserEvent, DomainEvent impl, feature gating) are emitted
+    // by the dedicated events generator (src/generators/events.rs), not the handler
+    // generator, and are covered by that generator's own tests.
 
     #[test]
     fn test_pluralize() {

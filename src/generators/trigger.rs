@@ -819,10 +819,10 @@ mod tests {
 
         let triggers = output.files.get(&PathBuf::from("src/application/triggers/order_triggers.rs")).unwrap();
 
-        assert!(triggers.contains("pub enum OrderTriggerEvent"));
-        assert!(triggers.contains("BeforeCreate"));
-        assert!(triggers.contains("AfterCreate"));
-        assert!(triggers.contains("OnTransition"));
+        // The per-entity event type is now a type alias to the shared TriggerEvent enum
+        // (the old hand-rolled per-entity enum was removed in favor of composition).
+        assert!(triggers.contains("pub type OrderTriggerEvent"));
+        assert!(triggers.contains("= TriggerEvent;"));
     }
 
     #[test]
@@ -833,9 +833,11 @@ mod tests {
 
         let triggers = output.files.get(&PathBuf::from("src/application/triggers/order_triggers.rs")).unwrap();
 
-        assert!(triggers.contains("pub struct OrderTriggerRegistry"));
-        assert!(triggers.contains("fn register(&mut self"));
-        assert!(triggers.contains("fn execute(&self"));
+        // The registry is now a type alias over the shared TriggerRegistry<Order>, built
+        // by a generated free function rather than per-entity register/execute methods.
+        assert!(triggers.contains("pub type OrderTriggerRegistry"));
+        assert!(triggers.contains("pub fn order_trigger_registry()"));
+        assert!(triggers.contains("TriggerRegistry::build"));
     }
 
     #[test]

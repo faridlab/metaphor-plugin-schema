@@ -700,25 +700,28 @@ mod tests {
 
         // Should define TABLE_NAME constant
         assert!(repo_content.contains("pub const TABLE_NAME: &str = \"users\";"));
-        // Should use TABLE_NAME in constructor
-        assert!(repo_content.contains("PostgresRepository::new(pool, TABLE_NAME)"));
+        // Should use TABLE_NAME in the constructor (now wrapping GenericCrudRepository)
+        assert!(repo_content.contains("backbone_orm::GenericCrudRepository::new(pool, TABLE_NAME)"));
     }
 
     #[test]
-    fn test_repository_uses_database_operations() {
+    fn test_repository_wraps_generic_crud_repository() {
         let schema = create_test_schema();
         let generator = RepositoryGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
         let repo_content = output.files.get(&PathBuf::from("src/infrastructure/persistence/user_repository.rs")).unwrap();
 
-        // Should import backbone-orm types
-        assert!(repo_content.contains("use backbone_orm::repository::"));
-        assert!(repo_content.contains("DatabaseOperations"));
-        assert!(repo_content.contains("PostgresRepository"));
+        // Repository is now a thin newtype over GenericCrudRepository, exposing the
+        // underlying CRUD surface via Deref (test model has a `deleted_at` field → SoftDelete).
+        assert!(repo_content.contains("pub struct UserRepository("));
+        assert!(repo_content.contains("backbone_orm::GenericCrudRepository<User, backbone_orm::SoftDelete>"));
+        assert!(repo_content.contains("impl std::ops::Deref for UserRepository"));
 
-        // Should wrap PostgresRepository
-        assert!(repo_content.contains("inner: PostgresRepository<User>"));
+        // backbone-orm operation types are re-exported from the persistence module.
+        let mod_content = output.files.get(&PathBuf::from("src/infrastructure/persistence/mod.rs")).unwrap();
+        assert!(mod_content.contains("DatabaseOperations"));
+        assert!(mod_content.contains("PostgresRepository"));
     }
 
     #[test]
@@ -729,8 +732,9 @@ mod tests {
 
         let repo_content = output.files.get(&PathBuf::from("src/infrastructure/persistence/user_repository.rs")).unwrap();
 
-        // Should use &str for IDs, not Uuid
-        assert!(repo_content.contains("id: &str"));
+        // Text-keyed finders take &str (e.g. find_by_email), and no Uuid-typed id is emitted —
+        // string IDs are handled by the wrapped GenericCrudRepository.
+        assert!(repo_content.contains("email: &str"));
         assert!(!repo_content.contains("id: Uuid"));
     }
 
@@ -742,11 +746,9 @@ mod tests {
 
         let repo_content = output.files.get(&PathBuf::from("src/infrastructure/persistence/user_repository.rs")).unwrap();
 
-        // Should have soft delete methods
-        assert!(repo_content.contains("pub async fn soft_delete"));
-        assert!(repo_content.contains("pub async fn restore"));
-        assert!(repo_content.contains("pub async fn list_deleted"));
-        assert!(repo_content.contains("pub async fn empty_trash"));
+        // Soft-delete methods (soft_delete, restore, list_deleted, empty_trash) are provided
+        // by the impl_crud_repository! macro instantiated with the soft_delete variant.
+        assert!(repo_content.contains("backbone_core::impl_crud_repository!(UserRepository, User, soft_delete);"));
     }
 
     #[test]
@@ -755,12 +757,11 @@ mod tests {
         let generator = RepositoryGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let repo_content = output.files.get(&PathBuf::from("src/infrastructure/persistence/user_repository.rs")).unwrap();
-
-        // Should use backbone-orm pagination types
-        assert!(repo_content.contains("PaginationParams"));
-        assert!(repo_content.contains("PaginatedResult"));
-        assert!(repo_content.contains("pub async fn list_paginated"));
+        // Pagination methods come via Deref to GenericCrudRepository; the param/result
+        // types are re-exported from the persistence module.
+        let mod_content = output.files.get(&PathBuf::from("src/infrastructure/persistence/mod.rs")).unwrap();
+        assert!(mod_content.contains("PaginationParams"));
+        assert!(mod_content.contains("PaginatedResult"));
     }
 
     #[test]

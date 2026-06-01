@@ -1954,15 +1954,15 @@ mod tests {
             "Expected transition_to() method in payment.rs"
         );
         assert!(
-            payment_file.contains("PaymentStateMachine::new(self.status)"),
-            "Expected PaymentStateMachine::new call"
+            payment_file.contains("PaymentStateMachine::from_state(current)"),
+            "Expected PaymentStateMachine::from_state call"
         );
         assert!(
-            payment_file.contains("sm.transition(new_state)"),
-            "Expected sm.transition call"
+            payment_file.contains("sm.transition_to_state(new_state)"),
+            "Expected sm.transition_to_state call"
         );
         assert!(
-            payment_file.contains("use crate::domain::state_machine::PaymentStateMachine"),
+            payment_file.contains("use crate::domain::state_machine::{PaymentStateMachine"),
             "Expected PaymentStateMachine import"
         );
     }
