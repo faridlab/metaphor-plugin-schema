@@ -300,6 +300,12 @@ fn generate_mapper(
         .filter(|t| t != "Metadata")
         .collect();
 
+    // True when any non-PK field is required by the entity but optional on the
+    // form (form_is_nullable && !is_nullable). Those fields call `.required(...)`
+    // in toEntity, so the mapper must import the `required` helper.
+    let needs_required = fields.iter()
+        .any(|f| f.form_is_nullable && !f.is_nullable && !f.is_primary_key);
+
     // Prepare template data
     let mapper_data = MapperData {
         base_package: base_package.clone(),
@@ -313,6 +319,7 @@ fn generate_mapper(
         needs_local_date,
         needs_json_element,
         needs_metadata,
+        needs_required,
         fields,
     };
 
@@ -363,6 +370,8 @@ struct MapperData {
     needs_json_element: bool,
     #[serde(skip_serializing_if = "is_not")]
     needs_metadata: bool,
+    #[serde(skip_serializing_if = "is_not")]
+    needs_required: bool,
     fields: Vec<FieldMappingData>,
 }
 
@@ -550,5 +559,58 @@ fn form_default_value(kotlin_type_non_nullable: &str, is_nullable: bool) -> Stri
         t if t.starts_with("List<") => "emptyList()".to_string(),
         t if t.starts_with("Map<") => "emptyMap()".to_string(),
         _ => "null".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Field;
+    use tempfile::tempdir;
+
+    fn read_generated(dir: &Path, package_name: &str, relative: &str) -> String {
+        let pkg_path = package_name.replace('.', "/");
+        let path = dir.join("kotlin").join(pkg_path).join(relative);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("expected file {}: {}", path.display(), e))
+    }
+
+    /// Regression: a field that is required by the entity but nullable on the
+    /// FormData (here a required enum, whose form default is `null`) must be
+    /// asserted with the catchable `.required("field")` helper — NOT a raw `!!`,
+    /// which throws an uncaught NPE and crashes the app on a partially-filled form.
+    #[test]
+    fn mapper_emits_required_helper_not_double_bang() {
+        let generator = MobileGenerator::new("com.test").unwrap();
+        let mut model = Model::new("Order");
+        model
+            .fields
+            .push(Field::new("status", TypeRef::Custom("OrderStatus".to_string())));
+        let mut schema = ModuleSchema::new("orders");
+        schema.models = vec![model];
+        let dir = tempdir().unwrap();
+
+        generate_mappers(&generator, &schema, dir.path()).unwrap();
+        let content = read_generated(
+            dir.path(),
+            "com.test",
+            "application/orders/mappers/OrderMapper.kt",
+        );
+
+        assert!(
+            content.contains("status = formData.status.required(\"status\")"),
+            "expected .required() guard for required enum field; got:\n{}",
+            content
+        );
+        assert!(
+            content.contains("import com.test.core.mapper.required"),
+            "expected the `required` helper import; got:\n{}",
+            content
+        );
+        assert!(
+            !content.contains("formData.status!!"),
+            "must not emit raw !! (uncaught NPE crash path); got:\n{}",
+            content
+        );
     }
 }

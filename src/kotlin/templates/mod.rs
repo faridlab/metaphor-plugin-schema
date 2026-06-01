@@ -527,6 +527,9 @@ pub const MAPPER_TEMPLATE: &str = r#"package {{package}}
 import {{entity_package}}.{{entity_name}}
 import {{base_package}}.core.mapper.BaseEntityMapper
 import {{base_package}}.core.mapper.ListDTO
+{{#if needs_required}}
+import {{base_package}}.core.mapper.required
+{{/if}}
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 {{#if needs_instant}}
@@ -598,7 +601,7 @@ class {{entity_name}}Mapper : BaseEntityMapper<{{entity_name}}, {{entity_name}}D
 {{#if is_primary_key}}
         {{name}} = "", // Assigned by backend
 {{else}}
-        {{name}} = formData.{{name}}{{#if form_is_nullable}}{{#unless is_nullable}}!!{{/unless}}{{/if}},
+        {{name}} = formData.{{name}}{{#if form_is_nullable}}{{#unless is_nullable}}.required("{{name}}"){{/unless}}{{/if}},
 {{/if}}
 {{/each}}
     )
