@@ -5,6 +5,23 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] — 2026-06-01
+
+### Fixed
+
+- **Kotlin mappers no longer emit a crash-prone `!!` for required-but-
+  optional-on-form fields.** When a field is required by the entity
+  (`!is_nullable`) but nullable on the generated `FormData`
+  (`form_is_nullable`) — most commonly a required enum, whose form default is
+  `null` — `toEntity` previously asserted it with a raw `formData.field!!`,
+  which throws an **uncaught** `NullPointerException` and crashes the app when
+  the user submits a partially-filled form. The mapper now emits
+  `formData.field.required("field")`, a catchable, message-bearing validation
+  helper the UI can surface. The `import {base}.core.mapper.required` is added
+  only when at least one field needs it (gated by a new `needs_required` flag).
+  See [`kotlin/generators/application/mod.rs`](src/kotlin/generators/application/mod.rs)
+  and [`kotlin/templates/mod.rs`](src/kotlin/templates/mod.rs).
+
 ## [0.2.5] — 2026-06-01
 
 ### Fixed

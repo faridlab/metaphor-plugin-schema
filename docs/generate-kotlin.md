@@ -272,6 +272,21 @@ serialization helpers.
 - Migration support
 - Offline-first data access
 
+### Mappers
+
+One `<Entity>Mapper.kt` per model translating between the entity, its DTO, and
+its `FormData`. Extends `BaseEntityMapper<Entity, EntityDTO>`.
+
+- **Required-but-optional-on-form fields use the catchable `required("field")`
+  helper, not `!!`.** When a field is required by the entity (`!is_nullable`)
+  but optional on the `FormData` (`form_is_nullable`) — e.g. a required enum,
+  whose form default is `null` — `toEntity` asserts it with
+  `formData.field.required("field")` instead of a raw `formData.field!!`. A bare
+  `!!` throws an uncaught `NullPointerException` and crashes the app on a
+  partially-filled form; `required(...)` raises a catchable, message-bearing
+  validation error the UI can surface. The `core.mapper.required` import is
+  emitted only when at least one field needs it.
+
 ### ViewModels
 
 - MVI (Model-View-Intent) architecture
