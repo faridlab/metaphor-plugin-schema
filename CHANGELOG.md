@@ -5,6 +5,51 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] — 2026-06-01
+
+### Fixed
+
+- **Generated `lib.rs` now raises the macro recursion limit
+  (RUST-GEN-001).** `generate_lib_rs` emits a crate-level
+  `#![recursion_limit = "1024"]` inner attribute (mirroring the
+  user-owned `main.rs`) immediately after the header doc-comments. Deeply
+  nested `serde_json::json!{}` literals in generated domain policies
+  exceed Rust's default limit of 128 when the crate is compiled as a
+  **library** — which is what integration tests in `tests/**` link — so
+  `cargo build` / `cargo check --bin` passed while `cargo test
+  --test …` failed with *"recursion limit reached while expanding
+  `$crate::json_internal!`"*. See
+  [`module.rs::generate_lib_rs`](src/generators/module.rs).
+- **`to_snake_case` keeps mixed-case acronyms intact.** `"OAuthProvider"`
+  now converts to `oauth_provider` instead of `o_auth_provider`. `OAuth`
+  is structurally identical to a CamelCase word (upper, upper, lower…),
+  so it cannot be split correctly by casing rules alone; it is normalized
+  via a small known-acronym table before conversion. Other acronyms
+  (`MFADevice` → `mfa_device`, `HTTPRequest` → `http_request`, etc.) are
+  unchanged. See [`webgen/parser/proto.rs`](src/webgen/parser/proto.rs).
+- **Single-quoted attribute argument strings are unquoted.** The webapp
+  model parser only treated double quotes as string delimiters, so
+  `@default('value')` parsed to `'value'` (quotes retained). Both single-
+  and double-quoted strings are now recognized, with the opening quote
+  tracked so the matching closer ends the string. See
+  [`webgen/parser/model.rs`](src/webgen/parser/model.rs).
+- **Kotlin android `namespace` base-package detection covers more module
+  suffixes.** `parse_android_namespace` previously stripped only
+  `.shared` / `.android`, so `namespace = "com.example.mobile"` resolved
+  to `com.example.mobile` instead of the base `com.example`. The
+  recognized module/platform suffixes now also include `.mobile`, `.ios`,
+  `.desktop`, `.web`, `.jvm`, `.js`, `.native`, and `.common`. See
+  [`kotlin/package_detector.rs`](src/kotlin/package_detector.rs).
+
+### Internal
+
+- Refreshed generator unit/integration tests that had drifted from the
+  current code-gen output (BackboneCrudHandler wiring, `GenericCrudRepository`
+  newtype + `impl_crud_repository!` macro, trigger/registry type aliases,
+  `from_state` state-machine construction, model-driven domain-policy and
+  auth generators) and fixed the `resolve_package` doctest import. No
+  change to generated output.
+
 ## [0.2.4] — 2026-05-25
 
 ### Fixed
