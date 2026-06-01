@@ -61,6 +61,13 @@ impl ModuleGenerator {
         writeln!(output, "//! - Workflow orchestrator").unwrap();
         writeln!(output).unwrap();
 
+        // Raise the macro recursion limit: generated json!{} literals in domain
+        // policies exceed the default 128 when this crate is compiled as a library
+        // (e.g. linked by integration tests). The user-owned main.rs sets this; the
+        // lib crate needs its own copy. See KNOWN_ISSUES.md RUST-GEN-001.
+        writeln!(output, "#![recursion_limit = \"1024\"]").unwrap();
+        writeln!(output).unwrap();
+
         // Module declarations
         writeln!(output, "// Generated modules").unwrap();
         writeln!(output, "pub mod domain;").unwrap();
@@ -850,6 +857,7 @@ mod tests {
         assert!(output.files.contains_key(&PathBuf::from("src/lib.rs")));
 
         let lib_content = output.files.get(&PathBuf::from("src/lib.rs")).unwrap();
+        assert!(lib_content.contains("#![recursion_limit = \"1024\"]"));
         assert!(lib_content.contains("pub struct OrdersModule"));
         assert!(lib_content.contains("pub struct OrdersModuleBuilder"));
         assert!(lib_content.contains("user_service: Arc<UserService>"));
@@ -861,9 +869,9 @@ mod tests {
         let generator = ModuleGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        assert!(output.files.contains_key(&PathBuf::from("src/presentation/http/routes.rs")));
+        assert!(output.files.contains_key(&PathBuf::from("src/presentation/http/routes/generated.rs")));
 
-        let routes_content = output.files.get(&PathBuf::from("src/presentation/http/routes.rs")).unwrap();
+        let routes_content = output.files.get(&PathBuf::from("src/presentation/http/routes/generated.rs")).unwrap();
         // Check for Axum Router usage
         assert!(routes_content.contains("use axum::Router;"));
         // Check for route and service imports
@@ -883,7 +891,7 @@ mod tests {
         let generator = ModuleGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let routes_content = output.files.get(&PathBuf::from("src/presentation/http/routes.rs")).unwrap();
+        let routes_content = output.files.get(&PathBuf::from("src/presentation/http/routes/generated.rs")).unwrap();
         // Routes now use BackboneCrudHandler which includes all 12 endpoints
         // The documentation mentions soft delete routes
         assert!(routes_content.contains("/trash"));

@@ -328,6 +328,12 @@ service-registration plumbing used by the host backend service.
   disabled for the module, the corresponding wiring (router mount, gRPC
   service registration, GraphQL root merge) is omitted from the generated
   `lib.rs` rather than emitted-and-broken.
+- **Raises the macro recursion limit.** The generated `lib.rs` carries a
+  crate-level `#![recursion_limit = "1024"]` inner attribute. Generated
+  domain policies contain deeply nested `serde_json::json!{}` literals
+  that overflow Rust's default limit of 128 when the crate is compiled as
+  a **library** (e.g. linked by integration tests under `tests/**`); the
+  bin crate sets the same attribute in its hand-written `main.rs`.
 - Inserts an empty `// <<< CUSTOM` placeholder immediately after the
   `with_database(...)` call so consumers have a stable, merge-safe slot
   for extra setup (custom indexes, seed bootstraps, etc.).
