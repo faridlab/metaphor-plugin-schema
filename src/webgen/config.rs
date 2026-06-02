@@ -34,6 +34,11 @@ pub enum Target {
     Application,
     /// Generate infrastructure layer (API clients, repository implementations)
     Infrastructure,
+    /// Generate PURE, framework-free domain contracts (entity types, Zod schemas,
+    /// enums, DTOs, repository ports). No React/Mantine/TanStack. Opt-in only —
+    /// never included by `all`. Consumed by webapps that hand-write their own
+    /// (Mantine/TanStack) phenotype on top of the generated genotype.
+    Contracts,
 }
 
 impl Target {
@@ -54,6 +59,7 @@ impl Target {
             "presentation" | "ui" => Some(Self::Presentation),
             "application" | "app" | "usecases" => Some(Self::Application),
             "infrastructure" | "infra" | "api" => Some(Self::Infrastructure),
+            "contracts" | "pure" | "genotype" => Some(Self::Contracts),
             _ => None,
         }
     }
@@ -109,6 +115,7 @@ impl Target {
             Self::Presentation => "presentation",
             Self::Application => "application",
             Self::Infrastructure => "infrastructure",
+            Self::Contracts => "domain",
         }
     }
 
@@ -124,6 +131,7 @@ impl Target {
             | Self::Presentation
             | Self::Application
             | Self::Infrastructure
+            | Self::Contracts
         )
     }
 }
@@ -146,8 +154,24 @@ pub struct Config {
     /// Proto modules directory (default: libs/modules)
     pub modules_dir: PathBuf,
 
+    /// Explicit schema directory override. When set, this is used directly as
+    /// the schema root (containing `models/`, `hooks/`, …) instead of deriving
+    /// it from `modules_dir/{module}/schema`. Lets the logical module name stay
+    /// clean (e.g. `bersihir`) while the schema lives elsewhere (e.g.
+    /// `apps/bersihir-service/schema`).
+    pub schema_dir_override: Option<PathBuf>,
+
     /// Domain import path pattern (default: @webapp/domain/{module})
     pub domain_import_pattern: String,
+
+    /// Import root alias used by generated application/infrastructure code when
+    /// referencing the generated tree (default: `@webapp`). Set to the alias the
+    /// consuming app exposes for its generated folder, e.g. `@/generated`.
+    pub import_root: String,
+
+    /// Whether to also emit gRPC clients (nice-grpc-web). Off by default; the
+    /// REST API client is always generated. Enable only for gRPC-web backends.
+    pub enable_grpc: bool,
 
     /// Dry run - show what would be generated without writing files
     pub dry_run: bool,
@@ -166,7 +190,10 @@ impl Config {
             entity_filter: None,
             output_dir: PathBuf::from("apps/webapp/src"),
             modules_dir: PathBuf::from("libs/modules"),
+            schema_dir_override: None,
             domain_import_pattern: "@webapp/domain/{module}".to_string(),
+            import_root: "@webapp".to_string(),
+            enable_grpc: false,
             dry_run: false,
             force: false,
         }
@@ -199,6 +226,24 @@ impl Config {
     /// Set modules directory
     pub fn with_modules_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.modules_dir = dir.into();
+        self
+    }
+
+    /// Set an explicit schema directory override
+    pub fn with_schema_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.schema_dir_override = dir;
+        self
+    }
+
+    /// Set the import root alias for generated app/infrastructure imports
+    pub fn with_import_root(mut self, root: impl Into<String>) -> Self {
+        self.import_root = root.into();
+        self
+    }
+
+    /// Enable/disable gRPC client generation
+    pub fn with_grpc(mut self, enable: bool) -> Self {
+        self.enable_grpc = enable;
         self
     }
 
@@ -244,7 +289,10 @@ impl Config {
 
     /// Get the schema directory for this module
     pub fn schema_dir(&self) -> PathBuf {
-        self.modules_dir.join(&self.module).join("schema")
+        match &self.schema_dir_override {
+            Some(dir) => dir.clone(),
+            None => self.modules_dir.join(&self.module).join("schema"),
+        }
     }
 
     /// Get the domain import path for this module
