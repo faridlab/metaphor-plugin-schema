@@ -34,8 +34,7 @@ impl EntityGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_dir = self.config.output_dir
-            .join("domain")
-            .join(&self.config.module)
+            .join(&self.config.module).join("domain")
             .join("entity");
 
         if !self.config.dry_run {
@@ -69,12 +68,18 @@ impl EntityGenerator {
         Ok(result)
     }
 
-    /// Check if entity uses a specific enum
+    /// Check if entity uses a specific enum (unwrapping Optional/Array wrappers
+    /// so `Status?` and `Tag[]` still trigger enum-file generation).
     fn entity_uses_enum(&self, entity: &EntityDefinition, enum_name: &str) -> bool {
-        entity.fields.iter().any(|f| {
-            matches!(&f.type_name, crate::webgen::ast::entity::FieldType::Enum(name) if name == enum_name) ||
-            matches!(&f.type_name, crate::webgen::ast::entity::FieldType::Custom(name) if name == enum_name)
-        })
+        fn references(ft: &crate::webgen::ast::entity::FieldType, target: &str) -> bool {
+            use crate::webgen::ast::entity::FieldType;
+            match ft {
+                FieldType::Enum(name) | FieldType::Custom(name) => name == target,
+                FieldType::Array(inner) | FieldType::Optional(inner) => references(inner, target),
+                _ => false,
+            }
+        }
+        entity.fields.iter().any(|f| references(&f.type_name, enum_name))
     }
 
     /// Generate the entity TypeScript content
@@ -85,31 +90,26 @@ impl EntityGenerator {
         // Collect imports
         let imports = self.generate_imports(entity, enums);
 
-        // Generate interface fields
-        let interface_fields = self.generate_interface_fields(entity);
-
         // Generate factory defaults
-        let factory_defaults = self.generate_factory_defaults(entity);
+        let factory_defaults = self.generate_factory_defaults(entity, enums);
 
         // Generate relation types if any
         let relation_types = self.generate_relation_types(entity);
 
+        // The canonical entity type is the Zod-inferred type from the schema
+        // file (single source of truth). This file imports it and adds runtime
+        // helpers (factory, type guard) plus the "with relations" view.
         format!(
 r#"/**
- * {entity_pascal} Entity Type
+ * {entity_pascal} Entity Helpers
  *
- * Generated from schema definition.
+ * Generated from schema definition. The canonical `{entity_pascal}` type is
+ * defined in `./{entity_pascal}.schema` (inferred from its Zod schema).
  * @module {module}/entity/{entity_pascal}
  */
 
+import type {{ {entity_pascal} }} from './{entity_pascal}.schema';
 {imports}
-
-/**
- * {entity_pascal} entity interface
- */
-export interface {entity_pascal} {{
-{interface_fields}
-}}
 {relation_types}
 /**
  * Create a new {entity_pascal} with default values
@@ -130,7 +130,7 @@ export function is{entity_pascal}(value: unknown): value is {entity_pascal} {{
 
   const obj = value as Record<string, unknown>;
   return (
-    typeof obj.id === 'string'
+    typeof obj.{pk} === 'string'
   );
 }}
 
@@ -151,7 +151,7 @@ export function clone{entity_pascal}(
  * Compare two {entity_pascal} entities by ID
  */
 export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): boolean {{
-  return a.id === b.id;
+  return a.{pk} === b.{pk};
 }}
 
 // <<< CUSTOM: Add custom entity utilities here
@@ -159,9 +159,9 @@ export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): b
 "#,
             entity_pascal = entity_pascal,
             entity_camel = entity_camel,
+            pk = Self::primary_key(entity),
             module = self.config.module,
             imports = imports,
-            interface_fields = interface_fields,
             factory_defaults = factory_defaults,
             relation_types = relation_types,
         )
@@ -178,11 +178,21 @@ export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): b
             }
         }
 
-        // Check for relation imports
+        // Check for relation imports. Skip cross-module/qualified targets
+        // (e.g. `Sapiens.User`) — they aren't generated as local files in this
+        // module and are rendered as `unknown` in the relations interface.
+        let self_pascal = to_pascal_case(&entity.name);
         for relation in &entity.relations {
+            if !Self::is_local_relation(&relation.target_entity) {
+                continue;
+            }
             let target_pascal = to_pascal_case(&relation.target_entity);
+            if target_pascal == self_pascal {
+                continue; // avoid self-import
+            }
+            // The canonical entity type lives in the sibling `.schema` file.
             imports.push(format!(
-                "import type {{ {} }} from './{}';",
+                "import type {{ {} }} from './{}.schema';",
                 target_pascal, target_pascal
             ));
         }
@@ -196,56 +206,58 @@ export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): b
         }
     }
 
+    /// The entity's primary-key field name: the field marked `@id`, else a
+    /// field literally named `id`, else the first field (fallback).
+    pub fn primary_key(entity: &EntityDefinition) -> String {
+        entity
+            .fields
+            .iter()
+            .find(|f| f.attributes.iter().any(|a| a.name == "id"))
+            .or_else(|| entity.fields.iter().find(|f| f.name == "id"))
+            .or_else(|| entity.fields.first())
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "id".to_string())
+    }
+
+    /// Whether a relation target is a local (same-module) entity that is
+    /// generated as a sibling file. Qualified names (`Module.Entity`) refer to
+    /// other modules and are not imported here.
+    fn is_local_relation(target: &str) -> bool {
+        !target.contains('.')
+    }
+
     /// Get enum name if field type is an enum
     fn get_enum_name(field_type: &crate::webgen::ast::entity::FieldType, enums: &[EnumDefinition]) -> Option<String> {
+        use crate::webgen::ast::entity::FieldType;
         match field_type {
-            crate::webgen::ast::entity::FieldType::Enum(name) => Some(name.clone()),
-            crate::webgen::ast::entity::FieldType::Custom(name) => {
+            // Only treat as a (locally generated) enum if it is in our enum set,
+            // so we never emit an import for a file we don't generate.
+            FieldType::Enum(name) | FieldType::Custom(name) => {
                 if enums.iter().any(|e| &e.name == name) {
                     Some(name.clone())
                 } else {
                     None
                 }
             }
-            crate::webgen::ast::entity::FieldType::Array(inner) => Self::get_enum_name(inner, enums),
-            crate::webgen::ast::entity::FieldType::Optional(inner) => Self::get_enum_name(inner, enums),
+            FieldType::Array(inner) => Self::get_enum_name(inner, enums),
+            FieldType::Optional(inner) => Self::get_enum_name(inner, enums),
             _ => None,
         }
     }
 
-    /// Generate interface field definitions
-    fn generate_interface_fields(&self, entity: &EntityDefinition) -> String {
-        let mut fields = Vec::new();
-
-        for field in &entity.fields {
-            let ts_type = self.type_mapper.to_typescript_type(&field.type_name, field.optional);
-            let optional_mark = if field.optional { "?" } else { "" };
-
-            // Add JSDoc comment if description exists
-            if let Some(desc) = &field.description {
-                fields.push(format!("  /** {} */", desc));
-            }
-
-            // Add readonly for ID field
-            if field.name == "id" {
-                fields.push(format!("  readonly {}{}: {};", field.name, optional_mark, ts_type));
-            } else {
-                fields.push(format!("  {}{}: {};", field.name, optional_mark, ts_type));
-            }
-        }
-
-        fields.join("\n")
-    }
-
     /// Generate factory default values
-    fn generate_factory_defaults(&self, entity: &EntityDefinition) -> String {
+    fn generate_factory_defaults(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
         let mut defaults = Vec::new();
 
         for field in &entity.fields {
             let default_val = if let Some(ref default) = field.default_value {
-                self.format_default_value(default, &field.type_name)
+                self.format_default_value(default, &field.type_name, enums)
             } else if field.optional {
                 "null".to_string()
+            } else if let Some(enum_name) = Self::enum_type_name(&field.type_name, enums) {
+                // Required enum without a schema default → use the first variant so
+                // the factory yields a valid enum member (not `'' as Enum`).
+                Self::first_enum_member(&enum_name, enums)
             } else {
                 self.type_mapper.default_value_for_type(&field.type_name)
             };
@@ -259,28 +271,83 @@ export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): b
         defaults.join("\n")
     }
 
-    /// Format a default value for TypeScript
-    fn format_default_value(&self, value: &str, field_type: &crate::webgen::ast::entity::FieldType) -> String {
+    /// Resolve the enum type name for a field type, if it refers to a known enum.
+    fn enum_type_name(
+        field_type: &crate::webgen::ast::entity::FieldType,
+        enums: &[EnumDefinition],
+    ) -> Option<String> {
+        use crate::webgen::ast::entity::FieldType;
         match field_type {
-            crate::webgen::ast::entity::FieldType::String |
-            crate::webgen::ast::entity::FieldType::Text |
-            crate::webgen::ast::entity::FieldType::Email |
-            crate::webgen::ast::entity::FieldType::Phone |
-            crate::webgen::ast::entity::FieldType::Url => {
+            FieldType::Enum(name) => Some(name.clone()),
+            FieldType::Custom(name) if enums.iter().any(|e| &e.name == name) => Some(name.clone()),
+            FieldType::Optional(inner) => Self::enum_type_name(inner, enums),
+            _ => None,
+        }
+    }
+
+    /// `EnumName.FirstVariant`, or a safe cast if the enum has no variants.
+    fn first_enum_member(enum_name: &str, enums: &[EnumDefinition]) -> String {
+        match enums
+            .iter()
+            .find(|e| e.name == enum_name)
+            .and_then(|e| e.variants.first())
+        {
+            Some(v) => format!("{}.{}", enum_name, v.name),
+            None => format!("'' as unknown as {}", enum_name),
+        }
+    }
+
+    /// Format a schema `@default(...)` value as a TypeScript expression.
+    fn format_default_value(
+        &self,
+        value: &str,
+        field_type: &crate::webgen::ast::entity::FieldType,
+        enums: &[EnumDefinition],
+    ) -> String {
+        use crate::webgen::ast::entity::FieldType;
+
+        // Runtime-function defaults (uuid/now/…) → idiomatic runtime expression.
+        if TypeMapper::is_function_default(value) {
+            return self.type_mapper.default_value_for_type(field_type);
+        }
+
+        match field_type {
+            FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone
+            | FieldType::Url | FieldType::Uuid | FieldType::Ip | FieldType::Date
+            | FieldType::Time | FieldType::DateTime => {
                 if value.starts_with('"') || value.starts_with('\'') {
                     value.to_string()
                 } else {
                     format!("'{}'", value)
                 }
             }
-            crate::webgen::ast::entity::FieldType::Bool => {
+            FieldType::Bool => {
                 if value == "true" || value == "false" {
                     value.to_string()
                 } else {
                     "false".to_string()
                 }
             }
-            _ => value.to_string(),
+            FieldType::Int | FieldType::Float | FieldType::Decimal => {
+                if value.parse::<f64>().is_ok() { value.to_string() } else { "0".to_string() }
+            }
+            FieldType::Json => {
+                // The TS type for Json is `Record<string, unknown>`; an array
+                // default would not be assignable, so coerce to an object.
+                if value.starts_with('{') { value.to_string() } else { "{}".to_string() }
+            }
+            FieldType::Array(_) => {
+                if value.starts_with('[') { value.to_string() } else { "[]".to_string() }
+            }
+            FieldType::Enum(name) => format!("{}.{}", name, value),
+            FieldType::Custom(name) if enums.iter().any(|e| &e.name == name) => {
+                format!("{}.{}", name, value)
+            }
+            FieldType::Custom(name) if TypeMapper::is_numeric_scalar(name) => {
+                if value.parse::<f64>().is_ok() { value.to_string() } else { "0".to_string() }
+            }
+            FieldType::Custom(_) => "{}".to_string(),
+            FieldType::Optional(inner) => self.format_default_value(value, inner, enums),
         }
     }
 
@@ -294,8 +361,14 @@ export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): b
         let mut relation_fields = Vec::new();
 
         for relation in &entity.relations {
-            let target_pascal = to_pascal_case(&relation.target_entity);
             let relation_name = to_camel_case(&relation.name);
+
+            // Cross-module/qualified targets aren't generated locally → `unknown`.
+            let target_pascal = if Self::is_local_relation(&relation.target_entity) {
+                to_pascal_case(&relation.target_entity)
+            } else {
+                "unknown".to_string()
+            };
 
             let relation_type = if relation.relation_type.is_many() {
                 format!("{}[]", target_pascal)
@@ -435,8 +508,11 @@ mod tests {
         };
 
         let content = generator.generate_entity_content(&entity, &[]);
-        assert!(content.contains("export interface User"));
-        assert!(content.contains("readonly id: string"));
-        assert!(content.contains("email: string"));
+        // The canonical type now lives in the schema file; this helper file
+        // imports it and provides runtime helpers (factory, guards).
+        assert!(content.contains("import type { User } from './User.schema';"));
+        assert!(content.contains("export function createUser"));
+        assert!(content.contains("export function isUser"));
+        assert!(!content.contains("export interface User {"));
     }
 }
