@@ -73,10 +73,10 @@ impl UseCaseGenerator {
                 r#"
 
 const soft = makeSoftDeleteUseCases('{entity_upper}', get{entity_pascal}Service);
-export const softDelete{entity_pascal}UseCase = soft.softDelete;
+export const list{entity_pascal}DeletedUseCase = soft.listDeleted;
 export const restore{entity_pascal}UseCase = soft.restore;
-export const permanentDelete{entity_pascal}UseCase = soft.permanentDelete;
-export const list{entity_pascal}DeletedUseCase = soft.listDeleted;"#,
+export const emptyTrash{entity_pascal}UseCase = soft.emptyTrash;
+export const permanentDelete{entity_pascal}UseCase = soft.permanentDelete;"#,
                 entity_pascal = entity_pascal,
                 entity_upper = entity_upper,
             )
@@ -105,6 +105,8 @@ export const patch{entity_pascal}UseCase = crud.patch;
 export const delete{entity_pascal}UseCase = crud.remove;
 export const get{entity_pascal}ByIdUseCase = crud.getById;
 export const list{entity_pascal}UseCase = crud.list;
+export const bulkCreate{entity_pascal}UseCase = crud.bulkCreate;
+export const upsert{entity_pascal}UseCase = crud.upsert;
 
 /** All {entity_pascal} use cases as one object. */
 export const {entity_camel}UseCases = crud;{soft_block}

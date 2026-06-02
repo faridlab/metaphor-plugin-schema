@@ -96,6 +96,10 @@ export interface CrudService<T, C, U, Q = unknown, F = unknown> {
   update(id: string, input: U): Promise<T>;
   patch(id: string, input: Partial<U>): Promise<T>;
   delete(id: string): Promise<void>;
+  /** Create multiple entities in one request (POST /bulk). */
+  bulkCreate(inputs: C[]): Promise<T[]>;
+  /** Update if exists, else insert (POST /upsert). */
+  upsert(input: C): Promise<T>;
   exists(id: string): Promise<boolean>;
   count(filters?: F): Promise<number>;
 }
@@ -156,6 +160,8 @@ export interface CrudRepository<T, C, U, Q = unknown, F = unknown> {
   delete(id: string): Promise<DeleteResult>;
   exists(id: string): Promise<boolean>;
   count(filters?: F): Promise<number>;
+  bulkCreate(inputs: C[]): Promise<T[]>;
+  upsert(input: C): Promise<T>;
   createMany(inputs: C[]): Promise<BatchResult>;
   deleteMany(ids: string[]): Promise<BatchResult>;
 }
@@ -311,6 +317,26 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
     );
     return res.count;
   }
+
+  async bulkCreate(inputs: C[]): Promise<T[]> {
+    return handle<T[]>(
+      await httpRequest(this.url('/bulk'), {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(inputs),
+      }),
+    );
+  }
+
+  async upsert(input: C): Promise<T> {
+    return handle<T>(
+      await httpRequest(this.url('/upsert'), {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(input),
+      }),
+    );
+  }
 }
 
 export abstract class SoftDeleteCrudApiClient<T, C, U, Q = unknown, F = unknown>
@@ -344,7 +370,7 @@ export abstract class SoftDeleteCrudApiClient<T, C, U, Q = unknown, F = unknown>
 
   async emptyTrash(): Promise<{ deleted: number }> {
     return handle<{ deleted: number }>(
-      await httpRequest(this.url('/trash'), { method: 'DELETE', headers: this.headers() }),
+      await httpRequest(this.url('/empty'), { method: 'DELETE', headers: this.headers() }),
     );
   }
 
@@ -415,9 +441,17 @@ export abstract class BaseRepositoryImpl<T, C, U, Q = unknown, F = unknown>
     return { success: true, id };
   }
 
+  bulkCreate(inputs: C[]): Promise<T[]> {
+    return this.service.bulkCreate(inputs);
+  }
+
+  upsert(input: C): Promise<T> {
+    return this.service.upsert(input);
+  }
+
   async createMany(inputs: C[]): Promise<BatchResult> {
-    const results = await Promise.all(inputs.map((i) => this.service.create(i)));
-    return { success: true, count: results.length, ids: results.map((e) => String(e[this.pk])) };
+    const created = await this.service.bulkCreate(inputs);
+    return { success: true, count: created.length, ids: created.map((e) => String(e[this.pk])) };
   }
 
   async deleteMany(ids: string[]): Promise<BatchResult> {
@@ -508,6 +542,20 @@ export function makeCrudUseCases<T, C, U, Q, F>(
         return fail(`LIST_${label}_FAILED`, msg(e));
       }
     },
+    bulkCreate: async (inputs: C[], _ctx?: UseCaseContext): Promise<UseCaseResult<T[]>> => {
+      try {
+        return ok(await getService().bulkCreate(inputs));
+      } catch (e) {
+        return fail(`BULK_CREATE_${label}_FAILED`, msg(e));
+      }
+    },
+    upsert: async (input: C, _ctx?: UseCaseContext): Promise<UseCaseResult<T>> => {
+      try {
+        return ok(await getService().upsert(input));
+      } catch (e) {
+        return fail(`UPSERT_${label}_FAILED`, msg(e));
+      }
+    },
   };
 }
 
@@ -516,12 +564,11 @@ export function makeSoftDeleteUseCases<T, C, U, Q, F>(
   getService: () => SoftDeleteCrudService<T, C, U, Q, F>,
 ) {
   return {
-    softDelete: async (id: string): Promise<UseCaseResult<void>> => {
+    listDeleted: async (params?: Q, filters?: F): Promise<UseCaseResult<PaginatedResponse<T>>> => {
       try {
-        await getService().delete(id);
-        return { success: true };
+        return ok(await getService().getDeleted(params, filters));
       } catch (e) {
-        return fail(`SOFT_DELETE_${label}_FAILED`, msg(e));
+        return fail(`LIST_DELETED_${label}_FAILED`, msg(e));
       }
     },
     restore: async (id: string): Promise<UseCaseResult<T>> => {
@@ -531,19 +578,19 @@ export function makeSoftDeleteUseCases<T, C, U, Q, F>(
         return fail(`RESTORE_${label}_FAILED`, msg(e));
       }
     },
+    emptyTrash: async (): Promise<UseCaseResult<{ deleted: number }>> => {
+      try {
+        return ok(await getService().emptyTrash());
+      } catch (e) {
+        return fail(`EMPTY_TRASH_${label}_FAILED`, msg(e));
+      }
+    },
     permanentDelete: async (id: string): Promise<UseCaseResult<void>> => {
       try {
         await getService().permanentDelete(id);
         return { success: true };
       } catch (e) {
         return fail(`PERMANENT_DELETE_${label}_FAILED`, msg(e));
-      }
-    },
-    listDeleted: async (params?: Q, filters?: F): Promise<UseCaseResult<PaginatedResponse<T>>> => {
-      try {
-        return ok(await getService().getDeleted(params, filters));
-      } catch (e) {
-        return fail(`LIST_DELETED_${label}_FAILED`, msg(e));
       }
     },
   };
@@ -568,6 +615,8 @@ export function makeCrudAppService<T, C, U, Q, F>(getService: () => CrudService<
     update: (id: string, input: U): Promise<T> => getService().update(id, input),
     patch: (id: string, input: Partial<U>): Promise<T> => getService().patch(id, input),
     remove: (id: string): Promise<void> => getService().delete(id),
+    bulkCreate: (inputs: C[]): Promise<T[]> => getService().bulkCreate(inputs),
+    upsert: (input: C): Promise<T> => getService().upsert(input),
   };
 }
 "#;
