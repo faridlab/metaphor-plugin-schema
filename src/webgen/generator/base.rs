@@ -93,6 +93,11 @@ impl Generator {
                     // Infrastructure layer uses YAML schema parsing via EnhancedGenerator
                     self.generate_infrastructure_layer(&mut result)?;
                 }
+                Target::Contracts => {
+                    // Pure, framework-free contracts (entity types, Zod, enums,
+                    // DTOs, repository ports) from YAML model schemas.
+                    self.generate_contracts_layer(&mut result)?;
+                }
             }
         }
 
@@ -767,6 +772,74 @@ impl Generator {
             result.dry_run_files.extend(domain_result.dry_run_files);
         } else {
             result.files_generated.extend(domain_result.files_generated);
+        }
+
+        Ok(())
+    }
+
+    /// Generate pure, framework-free domain contracts from YAML model schemas.
+    ///
+    /// A slim subset of the `domain` target: entity types, Zod schemas, enums,
+    /// DTOs, and repository ports only — no React/TanStack/MUI coupling.
+    fn generate_contracts_layer(&self, result: &mut GenerationResult) -> Result<()> {
+        use crate::webgen::generators::ContractsGenerator;
+        use crate::webgen::ast::HookSchema;
+
+        let schema_dir = self.config.schema_dir();
+        let models_dir = schema_dir.join("models");
+        let hooks_dir = schema_dir.join("hooks");
+
+        if !models_dir.exists() {
+            return Ok(());
+        }
+
+        let model_files = self.find_yaml_files(&models_dir, "model")?;
+        if model_files.is_empty() {
+            return Ok(());
+        }
+
+        let mut all_entities = Vec::new();
+        let mut all_enums = Vec::new();
+
+        for model_file in &model_files {
+            match ModelParser::parse_file(model_file) {
+                Ok(schema) => {
+                    all_entities.extend(schema.models);
+                    all_enums.extend(schema.enums);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                }
+            }
+        }
+
+        if all_entities.is_empty() {
+            return Ok(());
+        }
+
+        // Hook schemas enrich Zod validation only (no framework coupling).
+        let mut all_hooks: Vec<HookSchema> = Vec::new();
+        if hooks_dir.exists() {
+            let hook_files = self.find_yaml_files(&hooks_dir, "hook")?;
+            for hook_file in &hook_files {
+                match HookParser::parse_file(hook_file) {
+                    Ok(hook) => all_hooks.push(hook),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse hook {}: {}", hook_file.display(), e);
+                    }
+                }
+            }
+        }
+
+        let contracts_generator = ContractsGenerator::new(self.config.clone());
+        let contracts_result = contracts_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+
+        result.entities_found = contracts_result.entity_count;
+
+        if self.config.dry_run {
+            result.dry_run_files.extend(contracts_result.dry_run_files);
+        } else {
+            result.files_generated.extend(contracts_result.files_generated);
         }
 
         Ok(())

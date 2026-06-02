@@ -9,6 +9,7 @@
 //! - Infrastructure: API clients, repository implementations
 
 pub mod domain;
+pub mod contracts;
 pub mod application;
 pub mod presentation;
 pub mod infrastructure;
@@ -28,6 +29,9 @@ pub use domain::{
     SpecificationGenerator,
     TypeMapper,
 };
+
+// Contracts layer re-export (pure, framework-free genotype)
+pub use contracts::ContractsGenerator;
 
 // Application layer re-exports
 pub use application::{
