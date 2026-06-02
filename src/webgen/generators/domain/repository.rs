@@ -27,8 +27,7 @@ impl RepositoryGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let repo_dir = self.config.output_dir
-            .join("domain")
-            .join(&self.config.module)
+            .join(&self.config.module).join("domain")
             .join("repository");
 
         if !self.config.dry_run {

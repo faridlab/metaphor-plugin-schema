@@ -36,8 +36,7 @@ impl EntitySchemaGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_dir = self.config.output_dir
-            .join("domain")
-            .join(&self.config.module)
+            .join(&self.config.module).join("domain")
             .join("entity");
 
         if !self.config.dry_run {
@@ -98,9 +97,10 @@ impl EntitySchemaGenerator {
 // ============================================================================
 
 /**
- * IP address validation schema (supports both IPv4 and IPv6)
+ * IP address validation schema (supports both IPv4 and IPv6).
+ * Module-local to avoid barrel collisions across entity schema files.
  */
-export const ipSchema = z.string().refine(
+const ipSchema = z.string().refine(
   (val) => {
     // IPv4 regex pattern
     const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
@@ -281,14 +281,17 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
                     .map(|v| format!("'{}'", v.name))
                     .collect();
 
+                // `{name}` and `{name}Values` are kept module-local to avoid
+                // colliding with the standalone enum file (`{name}.ts`) at the
+                // barrel. Only the zod schema is exported (used by filters).
                 schemas.push(format!(
 r#"
 /**
- * {name} enum values
+ * {name} enum values (local — canonical export lives in ./{name})
  */
-export const {name}Values = [{variants}] as const;
-export type {name} = typeof {name}Values[number];
-export const {name_camel}Schema = z.enum({name}Values);
+const {name}Values = [{variants}] as const;
+type {name} = typeof {name}Values[number];
+const {name_camel}Schema = z.enum({name}Values);
 "#,
                     name = enum_def.name,
                     name_camel = to_camel_case(&enum_def.name),

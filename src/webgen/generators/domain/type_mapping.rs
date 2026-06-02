@@ -25,10 +25,41 @@ impl TypeMapper {
         Self {}
     }
 
+    /// Well-known framework types that are not generated as standalone files.
+    /// They map to self-contained, import-free TypeScript/Zod so generated code
+    /// compiles without a shared-types module.
+    fn is_freeform_custom(name: &str) -> bool {
+        matches!(name, "Metadata" | "Json" | "JsonValue")
+    }
+
+    /// Well-known scalar aliases (often from proto schemas) that map to numbers.
+    pub fn is_numeric_scalar(name: &str) -> bool {
+        matches!(
+            name.to_lowercase().as_str(),
+            "int" | "int32" | "int64" | "uint" | "uint32" | "uint64"
+                | "sint32" | "sint64" | "fixed32" | "fixed64"
+                | "float" | "float32" | "float64" | "double" | "decimal" | "bigint" | "long"
+        )
+    }
+
+    /// Schema `@default(...)` values that denote a runtime function (e.g. a
+    /// generated UUID or timestamp) rather than a literal. These must NOT be
+    /// emitted as Zod `.default('uuid')` or as bare identifiers in factories.
+    pub fn is_function_default(value: &str) -> bool {
+        matches!(
+            value.trim().to_lowercase().as_str(),
+            "uuid" | "uuidv4" | "uuid_v4" | "gen_random_uuid" | "cuid" | "nanoid"
+                | "now" | "now()" | "current_timestamp" | "autoincrement" | "auto"
+                | "auto_increment" | "identity"
+        )
+    }
+
     /// Convert a schema field type to TypeScript type
     pub fn to_typescript_type(&self, field_type: &FieldType, optional: bool) -> String {
         let base_type = self.base_typescript_type(field_type);
-        if optional {
+        // Avoid a doubled `| null` when the base type is already nullable
+        // (e.g. an `Optional(_)` field that is also marked optional).
+        if optional && !base_type.contains("| null") {
             format!("{} | null", base_type)
         } else {
             base_type
@@ -53,6 +84,10 @@ impl TypeMapper {
             FieldType::Json => "Record<string, unknown>".to_string(),
             FieldType::Ip => "string".to_string(), // IP address as string
             FieldType::Enum(name) => name.clone(),
+            FieldType::Custom(name) if Self::is_freeform_custom(name) => {
+                "Record<string, unknown>".to_string()
+            }
+            FieldType::Custom(name) if Self::is_numeric_scalar(name) => "number".to_string(),
             FieldType::Custom(name) => name.clone(),
             FieldType::Array(inner) => format!("{}[]", self.base_typescript_type(inner)),
             FieldType::Optional(inner) => format!("{} | null", self.base_typescript_type(inner)),
@@ -71,9 +106,12 @@ impl TypeMapper {
             schema = format!("{}.nullable().optional()", schema);
         }
 
-        // Handle default value
+        // Handle default value. Skip runtime-function defaults (uuid/now/…) —
+        // they are server-assigned, not literal Zod defaults.
         if let Some(default) = &field.default_value {
-            schema = format!("{}.default({})", schema, Self::format_default_value(default, &field.type_name));
+            if !Self::is_function_default(default) {
+                schema = format!("{}.default({})", schema, Self::format_default_value(default, &field.type_name));
+            }
         }
 
         schema
@@ -112,6 +150,11 @@ impl TypeMapper {
                         .map(|v| format!("'{}'", v.name))
                         .collect();
                     format!("z.enum([{}])", variants.join(", "))
+                } else if Self::is_freeform_custom(name) {
+                    // Free-form framework types (e.g. Metadata) → permissive record
+                    "z.record(z.unknown())".to_string()
+                } else if Self::is_numeric_scalar(name) {
+                    "z.number()".to_string()
                 } else {
                     // Assume it's another entity reference
                     format!("{}Schema", name)
@@ -263,6 +306,9 @@ impl TypeMapper {
                     "{}".to_string()
                 }
             }
+            FieldType::Custom(name) if Self::is_numeric_scalar(name) => {
+                if value.parse::<f64>().is_ok() { value.to_string() } else { "0".to_string() }
+            }
             FieldType::Enum(_) | FieldType::Custom(_) => {
                 if value.starts_with('"') || value.starts_with('\'') {
                     value.to_string()
@@ -285,14 +331,19 @@ impl TypeMapper {
             FieldType::Int => "0".to_string(),
             FieldType::Float | FieldType::Decimal => "0.0".to_string(),
             FieldType::Bool => "false".to_string(),
-            FieldType::DateTime => "new Date()".to_string(),
+            // Zod infers date/datetime fields as ISO `string`, so factory
+            // defaults must be strings (not `Date`).
+            FieldType::DateTime => "new Date().toISOString()".to_string(),
             FieldType::Date => "new Date().toISOString().split('T')[0]".to_string(),
             FieldType::Time => "new Date().toISOString().split('T')[1].split('.')[0]".to_string(),
             FieldType::Json => "{}".to_string(),
             FieldType::Array(_) => "[]".to_string(),
+            FieldType::Custom(name) if Self::is_freeform_custom(name) => "{}".to_string(),
+            FieldType::Custom(name) if Self::is_numeric_scalar(name) => "0".to_string(),
             FieldType::Enum(name) | FieldType::Custom(name) => {
-                // Return first variant or empty string
-                format!("'' as {}", name)
+                // Fallback when the enum's variants are unknown to this mapper.
+                // Callers with enum context emit a concrete first variant instead.
+                format!("'' as unknown as {}", name)
             }
             FieldType::Optional(inner) => {
                 format!("null as {} | null", self.base_typescript_type(inner))
