@@ -515,7 +515,7 @@ fn generate_one(
 /// 2. `<module-path>/<identifier>/schema` (legacy, backwards-compatible).
 /// 3. `./schema` when CWD basename matches `identifier`.
 /// 4. `./<identifier>/schema` direct.
-fn resolve_schema_dir(
+pub(crate) fn resolve_schema_dir(
     cwd: &Path,
     module_path_hint: &Path,
     identifier: &str,
@@ -560,7 +560,7 @@ fn resolve_schema_dir(
 /// Walk every `.yaml`/`.yml` file under `schema_dir` and collect every
 /// `external_imports[*].module` value. The schema parser silently drops
 /// `external_imports` today, so we re-read the raw YAML here.
-fn discover_external_modules(schema_dir: &Path) -> Result<BTreeSet<String>> {
+pub(crate) fn discover_external_modules(schema_dir: &Path) -> Result<BTreeSet<String>> {
     #[derive(serde::Deserialize)]
     struct ExternalImport {
         module: Option<String>,
@@ -618,7 +618,7 @@ fn project_names_for_error(ws: &Workspace) -> String {
 }
 
 /// Read the `module:` field from `<schema_dir>/models/index.model.yaml`.
-fn read_index_module_name(schema_dir: &Path) -> Option<String> {
+pub(crate) fn read_index_module_name(schema_dir: &Path) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Header {
         module: Option<String>,

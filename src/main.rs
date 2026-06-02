@@ -58,9 +58,12 @@ fn main() -> Result<()> {
 
         // Shortcut: generate:webapp → delegates to metaphor-webgen binary
         Commands::GenerateWebapp {
-            module, target, entity, output, dry_run, force,
+            module, target, entity, output, schema_dir, import_alias, with_grpc, dry_run, force,
         } => {
-            webapp::run(&module, &target, entity.as_deref(), output.as_ref(), dry_run, force)?;
+            webapp::run(
+                module.as_deref(), &target, entity.as_deref(), output.as_ref(), schema_dir.as_ref(),
+                import_alias.as_deref(), with_grpc, dry_run, force,
+            )?;
         }
     }
 

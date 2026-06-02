@@ -194,6 +194,30 @@ impl Workspace {
         None
     }
 
+    /// Resolve a webapp app NAME → its generated-code output dir
+    /// (`<project_path>/src/generated`). Single-segment names only (multi-segment
+    /// strings are real paths, handled by the caller). Falls back to
+    /// `<root>/apps/<name>/src/generated` for apps not (yet) declared in
+    /// `metaphor.yaml` — matching how the kotlin path resolves mobile apps.
+    pub fn webapp_output_for_app(&self, raw: &str) -> Option<PathBuf> {
+        // Single-segment string only — multi-segment paths are real paths.
+        if raw.contains('/') || raw.contains('\\') {
+            return None;
+        }
+        if let Some(project) = self.project_by_name(raw) {
+            let candidate = self.project_path(project);
+            if candidate.is_dir() {
+                return Some(candidate.join("src/generated"));
+            }
+        }
+        // Filesystem fallback: workspace_root/apps/<name>/src/generated.
+        let candidate = self.root.join("apps").join(raw);
+        if candidate.is_dir() {
+            return Some(candidate.join("src/generated"));
+        }
+        None
+    }
+
     fn build_schema_module_index(&mut self) {
         #[derive(Deserialize)]
         struct IndexHeader {

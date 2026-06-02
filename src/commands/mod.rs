@@ -141,25 +141,54 @@ pub enum Commands {
         verbose: bool,
     },
 
-    /// Generate webapp code (TypeScript + React) via metaphor-webgen
+    /// Generate webapp code (TypeScript + React) via metaphor-webgen.
     ///
-    /// Example: metaphor-schema generate:webapp bersihir --target all
+    /// Workspace "app" mode (recommended) — resolves the app + its modules from
+    /// metaphor.yaml and fans out, no per-app script:
+    ///   metaphor schema generate:webapp --output bersihir-webapp-admin
+    ///   (run from a module dir, e.g. apps/bersihir-service; or pass the module:
+    ///    metaphor schema generate:webapp bersihir --output bersihir-webapp-admin)
+    ///
+    /// Single-module mode — one module into a raw path:
+    ///   metaphor schema generate:webapp bersihir --schema-dir ./schema --output ./out
     #[command(name = "generate:webapp")]
     GenerateWebapp {
-        /// Module name to generate code for
-        module: String,
+        /// Module name. Optional in workspace "app" mode (auto-detected from the
+        /// current project dir, then fanned out across its module deps).
+        module: Option<String>,
 
-        /// Generation targets (comma-separated): all, hooks, schemas, forms, pages, types
-        #[arg(short, long, default_value = "all")]
+        /// Generation targets (comma-separated). Default = the framework-free
+        /// Clean Architecture stack. Legacy MUI/hooks targets are opt-in:
+        /// contracts, application, infrastructure | domain | hooks, schemas,
+        /// forms, pages, types | all.
+        #[arg(short, long, default_value = "contracts,application,infrastructure")]
         target: String,
 
         /// Entity filter (only generate for specific entity)
         #[arg(long)]
         entity: Option<String>,
 
-        /// Output directory (default: apps/webapp/src/)
+        /// Output: a workspace APP NAME (→ `<app>/src/generated`, multi-module
+        /// fan-out) or a raw directory path (single module). Default app layout
+        /// is `apps/<name>/src/generated`.
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Explicit schema directory (containing models/, hooks/). Overrides the
+        /// default `libs/modules/<module>/schema`. Use when the schema lives
+        /// outside the modules dir, e.g. apps/bersihir-service/schema.
+        #[arg(long)]
+        schema_dir: Option<PathBuf>,
+
+        /// Import root alias generated app/infrastructure code uses to reference
+        /// the generated tree (default: @/generated).
+        #[arg(long)]
+        import_alias: Option<String>,
+
+        /// Also generate gRPC clients (nice-grpc-web). Off by default; the REST
+        /// API client is always generated.
+        #[arg(long)]
+        with_grpc: bool,
 
         /// Dry run - show what would be generated without writing files
         #[arg(long)]
