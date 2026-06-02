@@ -10,6 +10,7 @@
 
 pub mod domain;
 pub mod contracts;
+pub mod shared_runtime;
 pub mod application;
 pub mod presentation;
 pub mod infrastructure;
