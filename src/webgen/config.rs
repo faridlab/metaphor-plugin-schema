@@ -173,6 +173,11 @@ pub struct Config {
     /// REST API client is always generated. Enable only for gRPC-web backends.
     pub enable_grpc: bool,
 
+    /// Whether this module's collections mount at the API root
+    /// (`/api/v1/{collection}`, no module segment) — true for the product
+    /// module, false for backbone modules (`/api/v1/{module}/{collection}`).
+    pub api_root: bool,
+
     /// Dry run - show what would be generated without writing files
     pub dry_run: bool,
 
@@ -194,6 +199,7 @@ impl Config {
             domain_import_pattern: "@webapp/domain/{module}".to_string(),
             import_root: "@webapp".to_string(),
             enable_grpc: false,
+            api_root: false,
             dry_run: false,
             force: false,
         }
@@ -244,6 +250,12 @@ impl Config {
     /// Enable/disable gRPC client generation
     pub fn with_grpc(mut self, enable: bool) -> Self {
         self.enable_grpc = enable;
+        self
+    }
+
+    /// Mark this module as the API root (collections at `/api/v1/{collection}`).
+    pub fn with_api_root(mut self, api_root: bool) -> Self {
+        self.api_root = api_root;
         self
     }
 

@@ -64,7 +64,7 @@ pub fn run(
         "missing <MODULE>: pass a module name, or use `--output <app-name>` inside a \
          Metaphor workspace to auto-resolve the app's modules.",
     )?;
-    generate_module(module, target, entity, output, schema_dir, alias, with_grpc, dry_run, force)
+    generate_module(module, target, entity, output, schema_dir, alias, with_grpc, false, dry_run, force)
 }
 
 /// Workspace "app" mode: resolve the app output dir, the primary module, and
@@ -163,6 +163,9 @@ fn run_for_app(
 
     let output_buf = output_dir.to_path_buf();
     for (mod_name, schema) in &planned {
+        // The primary (product) module mounts at the API root (/api/v1/...);
+        // dependency modules mount under /api/v1/{module}/...
+        let api_root = mod_name == &primary_module;
         generate_module(
             mod_name,
             target,
@@ -171,6 +174,7 @@ fn run_for_app(
             Some(schema),
             alias,
             with_grpc,
+            api_root,
             dry_run,
             force,
         )?;
@@ -196,6 +200,7 @@ fn generate_module(
     schema_dir: Option<&PathBuf>,
     import_alias: &str,
     with_grpc: bool,
+    api_root: bool,
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
@@ -224,6 +229,7 @@ fn generate_module(
     config = config
         .with_import_root(import_alias)
         .with_grpc(with_grpc)
+        .with_api_root(api_root)
         .with_dry_run(dry_run)
         .with_force(force);
 

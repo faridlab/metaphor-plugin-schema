@@ -251,7 +251,10 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
   protected abstract readonly collection: string;
 
   protected basePath(): string {
-    return `${API_BASE_URL}/${API_VERSION}/${this.module}/${this.collection}`;
+    // The product module mounts at /api/v1 directly (empty `module`); backbone
+    // modules (sapiens/bucket/corpus) mount under /api/v1/{module}.
+    const seg = this.module ? `/${this.module}` : '';
+    return `${API_BASE_URL}/api/${API_VERSION}${seg}/${this.collection}`;
   }
   protected url(path = ''): string {
     return `${this.basePath()}${path}`;

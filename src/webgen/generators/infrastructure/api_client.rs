@@ -91,7 +91,7 @@ export class {entity_pascal}ApiClient extends {base}<
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams
 > {{
-  protected readonly module = '{module}';
+  protected readonly module = '{url_module}';
   protected readonly collection = '{entity_route}';
 }}
 
@@ -105,6 +105,7 @@ export function get{entity_pascal}ApiClient(): {entity_pascal}ApiClient {{
             entity_pascal = entity_pascal,
             entity_route = entity_route,
             module = self.config.module,
+            url_module = if self.config.api_root { String::new() } else { self.config.module.clone() },
             root = self.config.import_root,
             base = base,
         )
