@@ -31,8 +31,7 @@ impl AppServiceGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let services_dir = self.config.output_dir
-            .join("application")
-            .join(&self.config.module)
+            .join(&self.config.module).join("application")
             .join("services");
 
         if !self.config.dry_run {
@@ -73,14 +72,14 @@ import type {{
   Update{entity_pascal}Input,
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams,
-}} from '@webapp/domain/{module}/entity/{entity_pascal}.schema';
+}} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
 import {{
   create{entity_pascal}Schema,
   update{entity_pascal}Schema,
-}} from '@webapp/domain/{module}/entity/{entity_pascal}.schema';
+}} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
 import {{
   get{entity_pascal}Service,
-}} from '@webapp/domain/{module}/service/{entity_pascal}Service';
+}} from '{root}/{module}/domain/service/{entity_pascal}Service';
 
 // ============================================================================
 // Types
@@ -233,7 +232,7 @@ export class {entity_pascal}AppService {{
     const result = await service.getAll(params, filters);
 
     return {{
-      items: result.items.map((item) => this.toDTO(item)),
+      items: result.data.map((item: {entity_pascal}) => this.toDTO(item)),
       total: result.total,
       page: result.page,
       limit: result.limit,
@@ -286,6 +285,7 @@ export function get{entity_pascal}AppService(): {entity_pascal}AppService {{
             entity_pascal = entity_pascal,
             entity_camel = entity_camel,
             module = self.config.module,
+            root = self.config.import_root,
         )
     }
 }

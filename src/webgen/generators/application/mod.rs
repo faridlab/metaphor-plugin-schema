@@ -83,8 +83,7 @@ impl ApplicationGenerator {
         result: &mut DomainGenerationResult,
     ) -> Result<()> {
         let base_dir = self.config.output_dir
-            .join("application")
-            .join(&self.config.module);
+            .join(&self.config.module).join("application");
 
         if !self.config.dry_run {
             fs::create_dir_all(&base_dir).ok();
@@ -132,8 +131,7 @@ impl ApplicationGenerator {
     /// Collect export statements for existing mapper files in the mappers/ directory
     fn collect_mapper_exports(&self) -> Vec<String> {
         let mappers_dir = self.config.output_dir
-            .join("application")
-            .join(&self.config.module)
+            .join(&self.config.module).join("application")
             .join("mappers");
 
         let mut exports = Vec::new();

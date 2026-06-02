@@ -33,8 +33,7 @@ impl UseCaseGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let usecases_dir = self.config.output_dir
-            .join("application")
-            .join(&self.config.module)
+            .join(&self.config.module).join("application")
             .join("usecases");
 
         if !self.config.dry_run {
@@ -84,12 +83,12 @@ import type {{
   Patch{entity_pascal}Input,
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams,
-}} from '@webapp/domain/{module}/entity/{entity_pascal}.schema';
+}} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
 import {{
   get{entity_pascal}Service,
   type {entity_pascal}Service,
-}} from '@webapp/domain/{module}/service/{entity_pascal}Service';
-import type {{ PaginatedResponse }} from '@webapp/shared/types/pagination';
+}} from '{root}/{module}/domain/service/{entity_pascal}Service';
+import type {{ PaginatedResponse }} from '{root}/shared/types/pagination';
 
 // ============================================================================
 // Types
@@ -384,6 +383,7 @@ export async function list{entity_pascal}UseCase(
             entity_camel = entity_camel,
             entity_upper = entity_upper,
             module = self.config.module,
+            root = self.config.import_root,
         );
 
         // Append soft-delete use cases if entity has soft_delete
@@ -430,11 +430,12 @@ export async function softDelete{ep}UseCase(
       }};
     }}
 
-    const {ec} = await service.softDelete(id);
+    // `delete` performs a soft delete server-side for soft-deletable entities.
+    await service.delete(id);
 
     return {{
       success: true,
-      data: {ec},
+      data: existing,
     }};
   }} catch (error) {{
     return {{
