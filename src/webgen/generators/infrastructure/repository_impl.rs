@@ -31,8 +31,7 @@ impl RepositoryImplGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let repo_dir = self.config.output_dir
-            .join("infrastructure")
-            .join(&self.config.module)
+            .join(&self.config.module).join("infrastructure")
             .join("repository");
 
         if !self.config.dry_run {
@@ -73,11 +72,13 @@ import type {{
   Update{entity_pascal}Input,
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams,
-}} from '@webapp/domain/{module}/entity/{entity_pascal}.schema';
+}} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
 import type {{
   {entity_pascal}Repository,
   Paginated{entity_pascal}Response,
-}} from '@webapp/domain/{module}/repository/{entity_pascal}Repository';
+  Delete{entity_pascal}Response,
+  Batch{entity_pascal}Response,
+}} from '{root}/{module}/domain/repository/{entity_pascal}Repository';
 import {{
   get{entity_pascal}ApiClient,
   {entity_pascal}ApiError,
@@ -123,6 +124,17 @@ export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository 
   }}
 
   /**
+   * Find {entity_pascal} by ID or throw if not found
+   */
+  async findByIdOrThrow(id: string): Promise<{entity_pascal}> {{
+    const result = await this.findById(id);
+    if (!result) {{
+      throw new {entity_pascal}ApiError(`{entity_pascal} not found: ${{id}}`, 404, 'NOT_FOUND');
+    }}
+    return result;
+  }}
+
+  /**
    * Find all {entity_pascal} entities with optional filtering and pagination
    */
   async findAll(
@@ -142,7 +154,7 @@ export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository 
   ): Promise<{entity_pascal}[]> {{
     const client = get{entity_pascal}ApiClient();
     const response = await client.getAll(params, filters);
-    return response.items;
+    return response.data;
   }}
 
   /**
@@ -150,8 +162,8 @@ export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository 
    */
   async findOne(filters: {entity_pascal}FilterParams): Promise<{entity_pascal} | null> {{
     const client = get{entity_pascal}ApiClient();
-    const response = await client.getAll({{ limit: 1 }}, filters);
-    return response.items[0] ?? null;
+    const response = await client.getAll(undefined, filters);
+    return response.data[0] ?? null;
   }}
 
   /**
@@ -165,12 +177,12 @@ export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository 
   /**
    * Create multiple {entity_pascal} entities
    */
-  async createMany(inputs: Create{entity_pascal}Input[]): Promise<{entity_pascal}[]> {{
+  async createMany(inputs: Create{entity_pascal}Input[]): Promise<Batch{entity_pascal}Response> {{
     const client = get{entity_pascal}ApiClient();
     const results = await Promise.all(
       inputs.map((input) => client.create(input))
     );
-    return results;
+    return {{ success: true, count: results.length, ids: results.map((r) => r.{pk}) }};
   }}
 
   /**
@@ -192,17 +204,19 @@ export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository 
   /**
    * Delete a {entity_pascal}
    */
-  async delete(id: string): Promise<void> {{
+  async delete(id: string): Promise<Delete{entity_pascal}Response> {{
     const client = get{entity_pascal}ApiClient();
-    return client.delete(id);
+    await client.delete(id);
+    return {{ success: true, id }};
   }}
 
   /**
    * Delete multiple {entity_pascal} entities
    */
-  async deleteMany(ids: string[]): Promise<void> {{
+  async deleteMany(ids: string[]): Promise<Batch{entity_pascal}Response> {{
     const client = get{entity_pascal}ApiClient();
     await Promise.all(ids.map((id) => client.delete(id)));
+    return {{ success: true, count: ids.length, ids }};
   }}
 
   /**
@@ -225,9 +239,9 @@ export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository 
    * Save a {entity_pascal} (create if new, update if existing)
    */
   async save({entity_camel}: {entity_pascal}): Promise<{entity_pascal}> {{
-    const exists = await this.exists({entity_camel}.id);
+    const exists = await this.exists({entity_camel}.{pk});
     if (exists) {{
-      return this.update({entity_camel}.id, {entity_camel});
+      return this.update({entity_camel}.{pk}, {entity_camel} as Update{entity_pascal}Input);
     }}
     return this.create({entity_camel} as Create{entity_pascal}Input);
   }}
@@ -257,6 +271,8 @@ export function create{entity_pascal}Repository(): {entity_pascal}Repository {{
             entity_pascal = entity_pascal,
             entity_camel = entity_camel,
             module = self.config.module,
+            root = self.config.import_root,
+            pk = crate::webgen::generators::domain::EntityGenerator::primary_key(entity),
         )
     }
 }

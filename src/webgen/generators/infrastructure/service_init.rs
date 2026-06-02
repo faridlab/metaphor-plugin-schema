@@ -32,8 +32,7 @@ impl ServiceInitGenerator {
         let mut result = DomainGenerationResult::new();
 
         let init_dir = self.config.output_dir
-            .join("infrastructure")
-            .join(&self.config.module);
+            .join(&self.config.module).join("infrastructure");
 
         if !self.config.dry_run {
             fs::create_dir_all(&init_dir).ok();
@@ -73,15 +72,17 @@ impl ServiceInitGenerator {
     /// Generate the init file content
     fn generate_init_content(&self, entities: &[EntityDefinition], existing_custom: Option<String>) -> String {
         let module = &self.config.module;
+        let root = &self.config.import_root;
 
         // Generate imports for services
         let service_imports: Vec<String> = entities.iter()
             .map(|e| {
                 let pascal = to_pascal_case(&e.name);
                 format!(
-                    "import {{ set{pascal}Service }} from '@webapp/domain/{module}/service/{pascal}Service';",
+                    "import {{ set{pascal}Service }} from '{root}/{module}/domain/service/{pascal}Service';",
                     pascal = pascal,
                     module = module,
+                    root = root,
                 )
             })
             .collect();

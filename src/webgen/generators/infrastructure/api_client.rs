@@ -31,8 +31,7 @@ impl ApiClientGenerator {
 
         let entity_pascal = to_pascal_case(&entity.name);
         let api_dir = self.config.output_dir
-            .join("infrastructure")
-            .join(&self.config.module)
+            .join(&self.config.module).join("infrastructure")
             .join("api");
 
         if !self.config.dry_run {
@@ -75,10 +74,11 @@ import type {{
   Update{entity_pascal}Input,
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams,
-}} from '@webapp/domain/{module}/entity/{entity_pascal}.schema';
-import type {{ {entity_pascal}Service }} from '@webapp/domain/{module}/service/{entity_pascal}Service';
-import type {{ Paginated{entity_pascal}Response }} from '@webapp/domain/{module}/repository/{entity_pascal}Repository';
-import {{ PaginatedApiResponse }} from './utils';
+}} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
+import type {{ {entity_pascal}Service }} from '{root}/{module}/domain/service/{entity_pascal}Service';
+import type {{ Paginated{entity_pascal}Response }} from '{root}/{module}/domain/repository/{entity_pascal}Repository';
+import type {{ PaginatedApiResponse }} from './utils';
+import {{ httpRequest }} from '{root}/shared/http';
 
 // ============================================================================
 // Configuration
@@ -191,7 +191,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
    * Get {entity_pascal} by ID
    */
   async getById(id: string): Promise<{entity_pascal}> {{
-    const response = await fetch(buildUrl(`/${{id}}`), {{
+    const response = await httpRequest(buildUrl(`/${{id}}`), {{
       method: 'GET',
       headers: this.getHeaders(),
     }});
@@ -209,7 +209,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
     const queryParams = {{ ...params, ...filters }};
     const url = buildUrl(buildQueryString(queryParams as Record<string, unknown>));
 
-    const response = await fetch(url, {{
+    const response = await httpRequest(url, {{
       method: 'GET',
       headers: this.getHeaders(),
     }});
@@ -243,7 +243,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
    * Create a new {entity_pascal}
    */
   async create(input: Create{entity_pascal}Input): Promise<{entity_pascal}> {{
-    const response = await fetch(buildUrl(''), {{
+    const response = await httpRequest(buildUrl(''), {{
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(input),
@@ -256,7 +256,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
    * Update an existing {entity_pascal}
    */
   async update(id: string, input: Update{entity_pascal}Input): Promise<{entity_pascal}> {{
-    const response = await fetch(buildUrl(`/${{id}}`), {{
+    const response = await httpRequest(buildUrl(`/${{id}}`), {{
       method: 'PUT',
       headers: this.getHeaders(),
       body: JSON.stringify(input),
@@ -269,7 +269,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
    * Partially update an existing {entity_pascal}
    */
   async patch(id: string, input: Partial<Update{entity_pascal}Input>): Promise<{entity_pascal}> {{
-    const response = await fetch(buildUrl(`/${{id}}`), {{
+    const response = await httpRequest(buildUrl(`/${{id}}`), {{
       method: 'PATCH',
       headers: this.getHeaders(),
       body: JSON.stringify(input),
@@ -282,7 +282,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
    * Delete a {entity_pascal}{delete_note}
    */
   async delete(id: string): Promise<void> {{
-    const response = await fetch(buildUrl(`/${{id}}`), {{
+    const response = await httpRequest(buildUrl(`/${{id}}`), {{
       method: 'DELETE',
       headers: this.getHeaders(),
     }});
@@ -302,7 +302,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
    */
   async exists(id: string): Promise<boolean> {{
     try {{
-      const response = await fetch(buildUrl(`/${{id}}`), {{
+      const response = await httpRequest(buildUrl(`/${{id}}`), {{
         method: 'HEAD',
         headers: this.getHeaders(),
       }});
@@ -318,7 +318,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
   async count(filters?: {entity_pascal}FilterParams): Promise<number> {{
     const url = buildUrl('/count' + buildQueryString(filters as Record<string, unknown>));
 
-    const response = await fetch(url, {{
+    const response = await httpRequest(url, {{
       method: 'GET',
       headers: this.getHeaders(),
     }});
@@ -331,6 +331,7 @@ export class {entity_pascal}ApiClient implements {entity_pascal}Service {{
             entity_snake = entity_snake,
             entity_route = entity_route,
             module = self.config.module,
+            root = self.config.import_root,
             delete_note = if has_soft_delete { " (soft delete - moves to trash)" } else { "" },
         );
 
@@ -352,7 +353,7 @@ r#"
     const queryParams = {{ ...params, ...filters }};
     const url = buildUrl('/trash' + buildQueryString(queryParams as Record<string, unknown>));
 
-    const response = await fetch(url, {{
+    const response = await httpRequest(url, {{
       method: 'GET',
       headers: this.getHeaders(),
     }});
@@ -384,7 +385,7 @@ r#"
    * Get a soft-deleted {entity_pascal} by ID from trash
    */
   async getDeletedById(id: string): Promise<{entity_pascal}> {{
-    const response = await fetch(buildUrl(`/trash/${{id}}`), {{
+    const response = await httpRequest(buildUrl(`/trash/${{id}}`), {{
       method: 'GET',
       headers: this.getHeaders(),
     }});
@@ -396,7 +397,7 @@ r#"
    * Restore a soft-deleted {entity_pascal} from trash
    */
   async restore(id: string): Promise<{entity_pascal}> {{
-    const response = await fetch(buildUrl(`/${{id}}/restore`), {{
+    const response = await httpRequest(buildUrl(`/${{id}}/restore`), {{
       method: 'POST',
       headers: this.getHeaders(),
     }});
@@ -408,7 +409,7 @@ r#"
    * Permanently delete a {entity_pascal} from trash (cannot be restored)
    */
   async permanentDelete(id: string): Promise<void> {{
-    const response = await fetch(buildUrl(`/trash/${{id}}`), {{
+    const response = await httpRequest(buildUrl(`/trash/${{id}}`), {{
       method: 'DELETE',
       headers: this.getHeaders(),
     }});
@@ -427,7 +428,7 @@ r#"
    * Empty trash - permanently delete all soft-deleted {entity_pascal} entities
    */
   async emptyTrash(): Promise<{{ deleted: number }}> {{
-    const response = await fetch(buildUrl('/trash'), {{
+    const response = await httpRequest(buildUrl('/trash'), {{
       method: 'DELETE',
       headers: this.getHeaders(),
     }});
@@ -441,7 +442,7 @@ r#"
   async countDeleted(): Promise<number> {{
     const url = buildUrl('/trash/count');
 
-    const response = await fetch(url, {{
+    const response = await httpRequest(url, {{
       method: 'GET',
       headers: this.getHeaders(),
     }});
