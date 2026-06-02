@@ -5,6 +5,30 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] — 2026-06-02
+
+### Added
+
+- **API-root mounting for the product module.** The generated REST clients now
+  distinguish the app's *primary* (product) module from its dependency
+  (backbone) modules. The primary module's collections mount at the API root —
+  `/api/v1/{collection}` with no module segment — while backbone modules keep
+  mounting under `/api/v1/{module}/{collection}`. In workspace "app" mode this
+  is resolved automatically (the primary module is flagged as the API root);
+  the single-module command keeps the module-segmented layout. Exposed on
+  [`Config`](src/webgen/config.rs) as the `api_root` field and the
+  `with_api_root(bool)` builder, and consumed by
+  [`BaseCrudApiClient.basePath()`](src/webgen/generators/shared_runtime.rs) and
+  the per-entity [`api_client`](src/webgen/generators/infrastructure/api_client.rs)
+  generator (an empty `module` collapses the segment).
+
+### Changed
+
+- **`BaseCrudApiClient.basePath()` now builds `/api/v1` explicitly.** The base
+  path is composed as `${API_BASE_URL}/api/${API_VERSION}{segment}/{collection}`,
+  where `{segment}` is empty for the API-root (product) module and `/{module}`
+  for backbone modules.
+
 ## [0.2.9] — 2026-06-02
 
 ### Added

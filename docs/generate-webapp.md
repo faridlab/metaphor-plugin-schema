@@ -180,6 +180,23 @@ import { setHttpRequest } from '@/generated/shared/http';
 setHttpRequest((input, init) => ky(input as string, init));
 ```
 
+#### API routing
+
+`BaseCrudApiClient` builds request URLs as
+`${API_BASE_URL}/api/v1{segment}/{collection}`. The `{segment}` depends on
+whether the module is the app's **product** (primary) module or a **backbone**
+dependency:
+
+| Module kind | Base path | Example |
+|-------------|-----------|---------|
+| Product (API root) | `/api/v1/{collection}` | `/api/v1/orders` |
+| Backbone dependency | `/api/v1/{module}/{collection}` | `/api/v1/sapiens/customers` |
+
+In workspace "app" mode the primary module is flagged as the API root
+automatically, so its collections drop the module segment; backbone modules
+(e.g. `sapiens`, `bucket`, `corpus`) keep theirs. The single-module command
+always emits the module-segmented layout.
+
 #### CRUD surface
 
 The generic CRUD bases expose, in addition to the usual `create`/`getById`/
