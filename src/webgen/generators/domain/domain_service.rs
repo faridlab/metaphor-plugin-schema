@@ -1,9 +1,9 @@
-//! Domain Service generator for TypeScript domain layer
+//! Domain Service generator.
 //!
-//! Generates a PURE service port: a framework-free interface plus an injectable
-//! singleton accessor. No `@tanstack/react-query` (data-access hooks are the
-//! app's hand-written phenotype). The infrastructure API client implements this
-//! interface; the application layer consumes it via `get{Entity}Service()`.
+//! Emits a thin per-entity service port (extends the generic `CrudService` /
+//! `SoftDeleteCrudService`) plus an injectable singleton accessor. Pure — no
+//! `@tanstack/react-query`; data-access hooks are the app's hand-written
+//! phenotype.
 
 use std::fs;
 
@@ -29,8 +29,11 @@ impl DomainServiceGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let service_dir = self.config.output_dir
-            .join(&self.config.module).join("domain")
+        let service_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("domain")
             .join("service");
 
         if !self.config.dry_run {
@@ -49,39 +52,26 @@ impl DomainServiceGenerator {
         Ok(result)
     }
 
-    /// Generate the pure service port content (interface + injectable accessor).
+    /// Generate the thin service port content.
     fn generate_service_content(&self, entity: &EntityDefinition) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
-        let has_soft_delete = entity.has_soft_delete();
-
-        // Soft-delete methods, matching exactly what the REST API client implements.
-        let soft_delete_methods = if has_soft_delete {
-            format!(
-                r#"
-  getDeleted(params?: {ep}QueryParams, filters?: {ep}FilterParams): Promise<Paginated{ep}Response>;
-  getDeletedById(id: string): Promise<{ep}>;
-  restore(id: string): Promise<{ep}>;
-  permanentDelete(id: string): Promise<void>;
-  emptyTrash(): Promise<{{ deleted: number }}>;
-  countDeleted(): Promise<number>;"#,
-                ep = entity_pascal
-            )
+        let base = if entity.has_soft_delete() {
+            "SoftDeleteCrudService"
         } else {
-            String::new()
+            "CrudService"
         };
 
         format!(
-r#"/**
- * {entity_pascal} Domain Service (port)
+            r#"/**
+ * {entity_pascal} Service port + injectable accessor
  *
- * Pure, framework-free service interface plus an injectable singleton accessor.
- * The infrastructure API client implements this interface; the application
- * layer consumes it via `get{entity_pascal}Service()`. Data-access hooks
- * (TanStack Query) are the app's hand-written phenotype and live elsewhere.
+ * Extends the generic `{base}`. The infrastructure API client implements it;
+ * the application layer consumes it via `get{entity_pascal}Service()`.
  *
  * @module {module}/service/{entity_pascal}Service
  */
 
+import {{ makeServiceAccessor, type {base} }} from '{root}/shared/crud/CrudService';
 import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
@@ -89,58 +79,28 @@ import type {{
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams,
 }} from '../entity/{entity_pascal}.schema';
-import type {{ Paginated{entity_pascal}Response }} from '../repository/{entity_pascal}Repository';
 
-// ============================================================================
-// Service Interface (port)
-// ============================================================================
+export interface {entity_pascal}Service
+  extends {base}<
+    {entity_pascal},
+    Create{entity_pascal}Input,
+    Update{entity_pascal}Input,
+    {entity_pascal}QueryParams,
+    {entity_pascal}FilterParams
+  > {{}}
 
-/**
- * {entity_pascal} Service Interface
- *
- * Implemented by the infrastructure API client.
- */
-export interface {entity_pascal}Service {{
-  getById(id: string): Promise<{entity_pascal}>;
-  getAll(params?: {entity_pascal}QueryParams, filters?: {entity_pascal}FilterParams): Promise<Paginated{entity_pascal}Response>;
-  create(input: Create{entity_pascal}Input): Promise<{entity_pascal}>;
-  update(id: string, input: Update{entity_pascal}Input): Promise<{entity_pascal}>;
-  patch(id: string, input: Partial<Update{entity_pascal}Input>): Promise<{entity_pascal}>;
-  delete(id: string): Promise<void>;
-  exists(id: string): Promise<boolean>;
-  count(filters?: {entity_pascal}FilterParams): Promise<number>;{soft_delete_methods}
-}}
-
-// ============================================================================
-// Injectable singleton accessor
-// ============================================================================
-
-let _service: {entity_pascal}Service | null = null;
+const accessor = makeServiceAccessor<{entity_pascal}Service>('{entity_pascal}');
 
 /** Inject the {entity_pascal} service implementation (call once at startup). */
-export function set{entity_pascal}Service(service: {entity_pascal}Service): void {{
-  _service = service;
-}}
+export const set{entity_pascal}Service = accessor.set;
 
-/**
- * Get the {entity_pascal} service instance.
- * @throws Error if the service has not been initialized.
- */
-export function get{entity_pascal}Service(): {entity_pascal}Service {{
-  if (!_service) {{
-    throw new Error(
-      '{entity_pascal}Service not initialized. Call set{entity_pascal}Service() first.'
-    );
-  }}
-  return _service;
-}}
-
-// <<< CUSTOM: Add custom service methods here
-// END CUSTOM
+/** Get the {entity_pascal} service instance (throws if not initialized). */
+export const get{entity_pascal}Service = accessor.get;
 "#,
             entity_pascal = entity_pascal,
             module = self.config.module,
-            soft_delete_methods = soft_delete_methods,
+            root = self.config.import_root,
+            base = base,
         )
     }
 }

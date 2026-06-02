@@ -108,6 +108,7 @@ r#"/**
  * @module {module}/entity/{entity_pascal}
  */
 
+import {{ cloneEntity, equalsBy, hasStringKey }} from '{root}/shared/entity/helpers';
 import type {{ {entity_pascal} }} from './{entity_pascal}.schema';
 {imports}
 {relation_types}
@@ -120,39 +121,19 @@ export function create{entity_pascal}(data: Partial<{entity_pascal}> = {{}}): {e
   }};
 }}
 
-/**
- * Type guard for {entity_pascal}
- */
-export function is{entity_pascal}(value: unknown): value is {entity_pascal} {{
-  if (typeof value !== 'object' || value === null) {{
-    return false;
-  }}
+/** Type guard for {entity_pascal}. */
+export const is{entity_pascal} = (value: unknown): value is {entity_pascal} =>
+  hasStringKey(value, '{pk}');
 
-  const obj = value as Record<string, unknown>;
-  return (
-    typeof obj.{pk} === 'string'
-  );
-}}
-
-/**
- * Clone a {entity_pascal} with optional overrides
- */
-export function clone{entity_pascal}(
+/** Clone a {entity_pascal} with optional field overrides. */
+export const clone{entity_pascal} = (
   {entity_camel}: {entity_pascal},
-  overrides: Partial<{entity_pascal}> = {{}}
-): {entity_pascal} {{
-  return {{
-    ...{entity_camel},
-    ...overrides,
-  }};
-}}
+  overrides: Partial<{entity_pascal}> = {{}},
+): {entity_pascal} => cloneEntity({entity_camel}, overrides);
 
-/**
- * Compare two {entity_pascal} entities by ID
- */
-export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): boolean {{
-  return a.{pk} === b.{pk};
-}}
+/** Compare two {entity_pascal} entities by primary key. */
+export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): boolean =>
+  equalsBy(a, b, '{pk}');
 
 // <<< CUSTOM: Add custom entity utilities here
 // END CUSTOM
@@ -161,6 +142,7 @@ export function equals{entity_pascal}(a: {entity_pascal}, b: {entity_pascal}): b
             entity_camel = entity_camel,
             pk = Self::primary_key(entity),
             module = self.config.module,
+            root = self.config.import_root,
             imports = imports,
             factory_defaults = factory_defaults,
             relation_types = relation_types,
@@ -512,7 +494,9 @@ mod tests {
         // imports it and provides runtime helpers (factory, guards).
         assert!(content.contains("import type { User } from './User.schema';"));
         assert!(content.contains("export function createUser"));
-        assert!(content.contains("export function isUser"));
+        // guard/clone/equals now delegate to the shared generic helpers
+        assert!(content.contains("export const isUser"));
+        assert!(content.contains("from '@webapp/shared/entity/helpers'"));
         assert!(!content.contains("export interface User {"));
     }
 }

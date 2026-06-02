@@ -1,6 +1,6 @@
-//! Repository interface generator for TypeScript domain layer
+//! Repository interface generator for TypeScript domain layer.
 //!
-//! Generates repository interface types that mirror backend repositories.
+//! Emits a thin per-entity port that extends the generic `CrudRepository`.
 
 use std::fs;
 
@@ -26,8 +26,11 @@ impl RepositoryGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let repo_dir = self.config.output_dir
-            .join(&self.config.module).join("domain")
+        let repo_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("domain")
             .join("repository");
 
         if !self.config.dry_run {
@@ -46,20 +49,22 @@ impl RepositoryGenerator {
         Ok(result)
     }
 
-    /// Generate repository interface content
+    /// Generate the thin repository port content.
     fn generate_repository_content(&self, entity: &EntityDefinition) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
 
         format!(
-r#"/**
- * {entity_pascal} Repository Interface
+            r#"/**
+ * {entity_pascal} Repository port
  *
- * Defines the contract for {entity_pascal} data access.
- * Implementations can use REST API, GraphQL, or other backends.
+ * Extends the generic `CrudRepository`. Implementations live in the
+ * infrastructure layer.
  *
  * @module {module}/repository/{entity_pascal}Repository
  */
 
+import type {{ CrudRepository }} from '{root}/shared/crud/CrudRepository';
+import type {{ PaginatedResponse }} from '{root}/shared/types/pagination';
 import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
@@ -68,144 +73,21 @@ import type {{
   {entity_pascal}FilterParams,
 }} from '../entity/{entity_pascal}.schema';
 
-// ============================================================================
-// Response Types
-// ============================================================================
+export interface {entity_pascal}Repository
+  extends CrudRepository<
+    {entity_pascal},
+    Create{entity_pascal}Input,
+    Update{entity_pascal}Input,
+    {entity_pascal}QueryParams,
+    {entity_pascal}FilterParams
+  > {{}}
 
-/**
- * Paginated response for list queries
- */
-export interface Paginated{entity_pascal}Response {{
-  data: {entity_pascal}[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-  hasNext: boolean;
-  hasPrev: boolean;
-}}
-
-/**
- * Single entity response
- */
-export interface {entity_pascal}Response {{
-  data: {entity_pascal};
-}}
-
-/**
- * Delete response
- */
-export interface Delete{entity_pascal}Response {{
-  success: boolean;
-  id: string;
-}}
-
-/**
- * Batch operation response
- */
-export interface Batch{entity_pascal}Response {{
-  success: boolean;
-  count: number;
-  ids: string[];
-  errors?: Array<{{ id: string; error: string }}>;
-}}
-
-// ============================================================================
-// Repository Interface
-// ============================================================================
-
-/**
- * {entity_pascal} Repository Interface
- *
- * This interface defines all data access operations for {entity_pascal}.
- * Implement this interface to create a concrete repository.
- */
-export interface {entity_pascal}Repository {{
-  /**
-   * Find a {entity_pascal} by ID
-   */
-  findById(id: string): Promise<{entity_pascal} | null>;
-
-  /**
-   * Find a {entity_pascal} by ID or throw if not found
-   */
-  findByIdOrThrow(id: string): Promise<{entity_pascal}>;
-
-  /**
-   * Get all {entity_pascal} entities with pagination
-   */
-  findAll(
-    params?: {entity_pascal}QueryParams,
-    filters?: {entity_pascal}FilterParams
-  ): Promise<Paginated{entity_pascal}Response>;
-
-  /**
-   * Create a new {entity_pascal}
-   */
-  create(input: Create{entity_pascal}Input): Promise<{entity_pascal}>;
-
-  /**
-   * Update an existing {entity_pascal}
-   */
-  update(id: string, input: Update{entity_pascal}Input): Promise<{entity_pascal}>;
-
-  /**
-   * Delete a {entity_pascal} by ID
-   */
-  delete(id: string): Promise<Delete{entity_pascal}Response>;
-
-  /**
-   * Check if a {entity_pascal} exists by ID
-   */
-  exists(id: string): Promise<boolean>;
-
-  /**
-   * Count {entity_pascal} entities
-   */
-  count(filters?: {entity_pascal}FilterParams): Promise<number>;
-
-  /**
-   * Batch create multiple {entity_pascal} entities
-   */
-  createMany(inputs: Create{entity_pascal}Input[]): Promise<Batch{entity_pascal}Response>;
-
-  /**
-   * Batch delete multiple {entity_pascal} entities
-   */
-  deleteMany(ids: string[]): Promise<Batch{entity_pascal}Response>;
-}}
-
-// ============================================================================
-// Repository Factory
-// ============================================================================
-
-/**
- * Repository creation options
- */
-export interface {entity_pascal}RepositoryOptions {{
-  baseUrl: string;
-  headers?: Record<string, string>;
-  timeout?: number;
-}}
-
-/**
- * Create a {entity_pascal} repository instance
- *
- * This factory function creates a repository with the specified options.
- * The actual implementation depends on the injected fetcher.
- */
-export function create{entity_pascal}Repository(
-  options: {entity_pascal}RepositoryOptions
-): {entity_pascal}Repository {{
-  // This would typically be implemented by an API client
-  throw new Error('Repository implementation required. Use create{entity_pascal}ApiRepository instead.');
-}}
-
-// <<< CUSTOM: Add custom repository methods here
-// END CUSTOM
+/** Back-compat alias for the paginated list response. */
+export type Paginated{entity_pascal}Response = PaginatedResponse<{entity_pascal}>;
 "#,
             entity_pascal = entity_pascal,
             module = self.config.module,
+            root = self.config.import_root,
         )
     }
 }
