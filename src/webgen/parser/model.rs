@@ -90,10 +90,13 @@ impl ModelParser {
             mapping.get(Value::String("indexes".to_string()))
         );
 
-        // Parse soft_delete flag (defaults to false if not specified)
+        // Soft-delete: explicit `soft_delete: true`, OR (Backbone convention) the
+        // entity carries audit `metadata` / a `deleted_at` field — which means the
+        // backend exposes the trash endpoints (list_deleted/restore/empty_trash).
         let soft_delete = mapping.get(Value::String("soft_delete".to_string()))
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || fields.iter().any(|f| f.name == "metadata" || f.name == "deleted_at");
 
         Ok(EntityDefinition {
             name,
