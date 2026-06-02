@@ -1,14 +1,15 @@
-//! Repository implementation generator
+//! Repository implementation generator.
 //!
-//! Generates repository implementations that use API clients for data access.
+//! Emits a thin per-entity repo that extends the generic `BaseRepositoryImpl`,
+//! delegating to the entity's API client.
 
 use std::fs;
 
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case};
-use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::generators::domain::{DomainGenerationResult, EntityGenerator};
+use crate::webgen::parser::to_pascal_case;
 
 /// Generator for repository implementations
 pub struct RepositoryImplGenerator {
@@ -30,15 +31,17 @@ impl RepositoryImplGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let repo_dir = self.config.output_dir
-            .join(&self.config.module).join("infrastructure")
+        let repo_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("infrastructure")
             .join("repository");
 
         if !self.config.dry_run {
             fs::create_dir_all(&repo_dir).ok();
         }
 
-        // Generate repository implementation file
         let content = self.generate_repository_impl_content(entity);
         let file_path = repo_dir.join(format!("{}RepositoryImpl.ts", entity_pascal));
 
@@ -51,21 +54,22 @@ impl RepositoryImplGenerator {
         Ok(result)
     }
 
-    /// Generate repository implementation content
+    /// Generate the thin repository implementation content.
     fn generate_repository_impl_content(&self, entity: &EntityDefinition) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
-        let entity_camel = to_camel_case(&entity.name);
+        let pk = EntityGenerator::primary_key(entity);
 
         format!(
-r#"/**
- * {entity_pascal} Repository Implementation
+            r#"/**
+ * {entity_pascal} Repository implementation
  *
- * Implements the {entity_pascal}Repository interface using the API client.
- * Bridges the domain layer with infrastructure layer.
+ * Extends the generic `BaseRepositoryImpl`, delegating to the API client.
  *
  * @module infrastructure/{module}/repository/{entity_pascal}RepositoryImpl
  */
 
+import {{ BaseRepositoryImpl }} from '{root}/shared/crud/BaseRepositoryImpl';
+import {{ get{entity_pascal}ApiClient }} from '../api/{entity_pascal}ApiClient';
 import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
@@ -73,206 +77,34 @@ import type {{
   {entity_pascal}QueryParams,
   {entity_pascal}FilterParams,
 }} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
-import type {{
-  {entity_pascal}Repository,
-  Paginated{entity_pascal}Response,
-  Delete{entity_pascal}Response,
-  Batch{entity_pascal}Response,
-}} from '{root}/{module}/domain/repository/{entity_pascal}Repository';
-import {{
-  get{entity_pascal}ApiClient,
-  {entity_pascal}ApiError,
-}} from '../api/{entity_pascal}ApiClient';
+import type {{ {entity_pascal}Repository }} from '{root}/{module}/domain/repository/{entity_pascal}Repository';
 
-// ============================================================================
-// Repository Implementation
-// ============================================================================
-
-/**
- * {entity_pascal} Repository Implementation
- *
- * Uses the {entity_pascal}ApiClient for data operations.
- */
-export class {entity_pascal}RepositoryImpl implements {entity_pascal}Repository {{
-  private static instance: {entity_pascal}RepositoryImpl;
-
-  private constructor() {{}}
-
-  /**
-   * Get singleton instance
-   */
-  static getInstance(): {entity_pascal}RepositoryImpl {{
-    if (!{entity_pascal}RepositoryImpl.instance) {{
-      {entity_pascal}RepositoryImpl.instance = new {entity_pascal}RepositoryImpl();
-    }}
-    return {entity_pascal}RepositoryImpl.instance;
-  }}
-
-  /**
-   * Find {entity_pascal} by ID
-   */
-  async findById(id: string): Promise<{entity_pascal} | null> {{
-    try {{
-      const client = get{entity_pascal}ApiClient();
-      return await client.getById(id);
-    }} catch (error) {{
-      if (error instanceof {entity_pascal}ApiError && error.status === 404) {{
-        return null;
-      }}
-      throw error;
-    }}
-  }}
-
-  /**
-   * Find {entity_pascal} by ID or throw if not found
-   */
-  async findByIdOrThrow(id: string): Promise<{entity_pascal}> {{
-    const result = await this.findById(id);
-    if (!result) {{
-      throw new {entity_pascal}ApiError(`{entity_pascal} not found: ${{id}}`, 404, 'NOT_FOUND');
-    }}
-    return result;
-  }}
-
-  /**
-   * Find all {entity_pascal} entities with optional filtering and pagination
-   */
-  async findAll(
-    params?: {entity_pascal}QueryParams,
-    filters?: {entity_pascal}FilterParams
-  ): Promise<Paginated{entity_pascal}Response> {{
-    const client = get{entity_pascal}ApiClient();
-    return client.getAll(params, filters);
-  }}
-
-  /**
-   * Find {entity_pascal} entities matching filter criteria
-   */
-  async findMany(
-    filters: {entity_pascal}FilterParams,
-    params?: {entity_pascal}QueryParams
-  ): Promise<{entity_pascal}[]> {{
-    const client = get{entity_pascal}ApiClient();
-    const response = await client.getAll(params, filters);
-    return response.data;
-  }}
-
-  /**
-   * Find a single {entity_pascal} matching filter criteria
-   */
-  async findOne(filters: {entity_pascal}FilterParams): Promise<{entity_pascal} | null> {{
-    const client = get{entity_pascal}ApiClient();
-    const response = await client.getAll(undefined, filters);
-    return response.data[0] ?? null;
-  }}
-
-  /**
-   * Create a new {entity_pascal}
-   */
-  async create(input: Create{entity_pascal}Input): Promise<{entity_pascal}> {{
-    const client = get{entity_pascal}ApiClient();
-    return client.create(input);
-  }}
-
-  /**
-   * Create multiple {entity_pascal} entities
-   */
-  async createMany(inputs: Create{entity_pascal}Input[]): Promise<Batch{entity_pascal}Response> {{
-    const client = get{entity_pascal}ApiClient();
-    const results = await Promise.all(
-      inputs.map((input) => client.create(input))
-    );
-    return {{ success: true, count: results.length, ids: results.map((r) => r.{pk}) }};
-  }}
-
-  /**
-   * Update an existing {entity_pascal}
-   */
-  async update(id: string, input: Update{entity_pascal}Input): Promise<{entity_pascal}> {{
-    const client = get{entity_pascal}ApiClient();
-    return client.update(id, input);
-  }}
-
-  /**
-   * Partially update an existing {entity_pascal}
-   */
-  async patch(id: string, input: Partial<Update{entity_pascal}Input>): Promise<{entity_pascal}> {{
-    const client = get{entity_pascal}ApiClient();
-    return client.patch(id, input);
-  }}
-
-  /**
-   * Delete a {entity_pascal}
-   */
-  async delete(id: string): Promise<Delete{entity_pascal}Response> {{
-    const client = get{entity_pascal}ApiClient();
-    await client.delete(id);
-    return {{ success: true, id }};
-  }}
-
-  /**
-   * Delete multiple {entity_pascal} entities
-   */
-  async deleteMany(ids: string[]): Promise<Batch{entity_pascal}Response> {{
-    const client = get{entity_pascal}ApiClient();
-    await Promise.all(ids.map((id) => client.delete(id)));
-    return {{ success: true, count: ids.length, ids }};
-  }}
-
-  /**
-   * Check if a {entity_pascal} exists
-   */
-  async exists(id: string): Promise<boolean> {{
-    const client = get{entity_pascal}ApiClient();
-    return client.exists(id);
-  }}
-
-  /**
-   * Count {entity_pascal} entities
-   */
-  async count(filters?: {entity_pascal}FilterParams): Promise<number> {{
-    const client = get{entity_pascal}ApiClient();
-    return client.count(filters);
-  }}
-
-  /**
-   * Save a {entity_pascal} (create if new, update if existing)
-   */
-  async save({entity_camel}: {entity_pascal}): Promise<{entity_pascal}> {{
-    const exists = await this.exists({entity_camel}.{pk});
-    if (exists) {{
-      return this.update({entity_camel}.{pk}, {entity_camel} as Update{entity_pascal}Input);
-    }}
-    return this.create({entity_camel} as Create{entity_pascal}Input);
+export class {entity_pascal}RepositoryImpl
+  extends BaseRepositoryImpl<
+    {entity_pascal},
+    Create{entity_pascal}Input,
+    Update{entity_pascal}Input,
+    {entity_pascal}QueryParams,
+    {entity_pascal}FilterParams
+  >
+  implements {entity_pascal}Repository
+{{
+  constructor() {{
+    super(get{entity_pascal}ApiClient(), '{pk}');
   }}
 }}
 
-// ============================================================================
-// Factory Function
-// ============================================================================
+let _repo: {entity_pascal}RepositoryImpl | null = null;
 
-/**
- * Get {entity_pascal} repository instance
- */
+/** Get the shared {entity_pascal} repository instance. */
 export function get{entity_pascal}Repository(): {entity_pascal}Repository {{
-  return {entity_pascal}RepositoryImpl.getInstance();
+  return (_repo ??= new {entity_pascal}RepositoryImpl());
 }}
-
-/**
- * Create {entity_pascal} repository instance
- */
-export function create{entity_pascal}Repository(): {entity_pascal}Repository {{
-  return {entity_pascal}RepositoryImpl.getInstance();
-}}
-
-// <<< CUSTOM: Add custom repository methods here
-// END CUSTOM
 "#,
             entity_pascal = entity_pascal,
-            entity_camel = entity_camel,
             module = self.config.module,
             root = self.config.import_root,
-            pk = crate::webgen::generators::domain::EntityGenerator::primary_key(entity),
+            pk = pk,
         )
     }
 }
