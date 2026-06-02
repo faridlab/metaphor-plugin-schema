@@ -5,6 +5,55 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] — 2026-06-02
+
+### Added
+
+- **New `contracts` target — a pure, framework-free domain "genotype".** A
+  deliberately slim subset of `domain` that emits *only* the framework-agnostic
+  contracts every target shares: entity types, Zod schemas + inferred DTOs
+  (Create/Update/Patch), enums, and repository **ports** — pure TypeScript whose
+  sole external import is `zod`. No React Query hooks, MUI/Mantine forms, pages,
+  use cases, or repository implementations. It is **opt-in only** (never included
+  by `--target all`, to avoid colliding with the framework-coupled `domain`
+  output) and is requested via `--target contracts` (aliases: `pure`,
+  `genotype`). Intended for webapps that hand-write their own runtime *phenotype*
+  (e.g. Mantine + TanStack Query) on top of the generated port. New
+  [`ContractsGenerator`](src/webgen/generators/contracts/mod.rs) and
+  `Target::Contracts` variant; wired through `Generator::generate_contracts_layer`.
+- **Workspace "app" mode for `generate:webapp`.** Mirroring the kotlin/mobile
+  generator, passing an **app name** to `--output` (a single path segment that
+  resolves to a workspace app, or `apps/<name>/`) now resolves the app's
+  `src/generated/` dir and the module set from `metaphor.yaml` (the primary
+  module + its transitive `depends_on` / `external_imports`), then fans out —
+  one command regenerates everything for an app, no per-app script. The primary
+  module is auto-detected from the CWD project when omitted. Modules referenced
+  as deps but absent from the workspace are skipped with a warning. See
+  [`Workspace::webapp_output_for_app`](src/commands/workspace.rs) and
+  [`webapp::run`](src/commands/webapp.rs).
+- **`--schema-dir` flag** — point the generator at an explicit schema root
+  (containing `models/`, `hooks/`) instead of the default
+  `libs/modules/<module>/schema`, letting the logical module name stay clean
+  (e.g. `bersihir`) while the schema lives elsewhere (e.g.
+  `apps/bersihir-service/schema`). Backed by `Config::schema_dir_override` /
+  `Config::with_schema_dir`.
+- **`--import-alias` flag** (default `@/generated`) — the import root alias
+  generated application/infrastructure code uses to reference the generated tree.
+  Backed by `Config::import_root` / `Config::with_import_root`.
+- **`--with-grpc` flag** (off by default) — also emit gRPC clients
+  (nice-grpc-web); the REST API client is always generated. Backed by
+  `Config::enable_grpc` / `Config::with_grpc`.
+
+### Changed
+
+- **`generate:webapp` default `--target` is now
+  `contracts,application,infrastructure`** (the framework-free Clean Architecture
+  stack) instead of `all`. The legacy MUI/hooks output (`domain`, `hooks`,
+  `forms`, `pages`, `types`, `all`) is now opt-in.
+- **`<MODULE>` is now optional** on `generate:webapp` — in workspace "app" mode
+  it is auto-detected from the current project dir and fanned out across module
+  deps.
+
 ## [0.2.6] — 2026-06-01
 
 ### Fixed
