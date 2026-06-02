@@ -144,6 +144,42 @@ Output layout (rooted at `--output`):
 > `models/`, `hooks/`) instead of the default `libs/modules/<module>/schema`,
 > letting the logical module name stay clean while the schema lives elsewhere.
 
+### Shared CRUD runtime (`shared/`)
+
+To avoid repeating ~300 lines of identical CRUD per entity, the generator emits a
+single set of **framework-free generic bases** once into `<output>/shared/`, and
+the per-entity files become thin wrappers that extend or call them. Like the rest
+of the genotype, the whole `shared/` tree is pure TypeScript — no `zod`, React, or
+framework imports — so the contracts purity guard still holds.
+
+```text
+<output>/shared/
+├── http/index.ts            # injectable HTTP transport (defaults to global fetch)
+├── types/                   # PaginatedResponse<T>, PaginationParams
+│   ├── pagination.ts
+│   └── index.ts
+├── crud/
+│   ├── CrudService.ts       # generic service port
+│   ├── CrudRepository.ts    # generic repository port
+│   ├── BaseCrudApiClient.ts # generic REST api client base
+│   ├── BaseRepositoryImpl.ts# generic repository impl over the api client
+│   ├── crudUseCases.ts      # generic use-case factories
+│   ├── crudAppService.ts    # generic application-service factory
+│   └── index.ts
+└── entity/helpers.ts        # shared entity helpers (factory/guard utilities)
+```
+
+The HTTP transport defaults to the global `fetch`. Override it **once** at app
+startup to reuse your own auth/refresh/error pipeline — e.g. routing through
+[`ky`](https://github.com/sindresorhus/ky):
+
+```ts
+import ky from 'ky';
+import { setHttpRequest } from '@/generated/shared/http';
+
+setHttpRequest((input, init) => ky(input as string, init));
+```
+
 ---
 
 ## Architecture

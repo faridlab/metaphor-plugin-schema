@@ -5,6 +5,32 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] — 2026-06-02
+
+### Added
+
+- **Shared, framework-free CRUD runtime emitted once into `shared/`.** A new
+  [`shared_runtime`](src/webgen/generators/shared_runtime.rs) module emits a set
+  of generic bases — an injectable HTTP transport (`shared/http`), pagination
+  types (`shared/types`), and the generic CRUD building blocks under
+  `shared/crud/` (`CrudService`, `CrudRepository`, `BaseCrudApiClient`,
+  `BaseRepositoryImpl`, `crudUseCases`, `crudAppService`) plus `shared/entity`
+  helpers. The whole tree is pure TypeScript (no `zod`/React/framework imports),
+  so the contracts purity guard still holds. The HTTP transport defaults to the
+  global `fetch` and can be swapped once at startup via `setHttpRequest(...)`
+  (e.g. to route through `ky` for shared auth/refresh). Emitted by the
+  `ContractsGenerator` into `<output>/shared/`.
+
+### Changed
+
+- **Generated per-entity files are now thin wrappers over the shared runtime.**
+  Domain entities/repositories/services, infrastructure API clients and
+  repository impls, and application use-cases/app-services now extend or call the
+  generic `shared/crud/` bases instead of repeating ~300 lines of identical CRUD
+  per entity. Net effect across the generators: ~1700 lines of duplicated
+  boilerplate removed in favor of the shared bases, with no change to the
+  generated public surface.
+
 ## [0.2.7] — 2026-06-02
 
 ### Added
