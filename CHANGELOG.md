@@ -5,6 +5,38 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] — 2026-06-02
+
+### Added
+
+- **Bulk-create and upsert across the whole CRUD stack.** The shared runtime now
+  carries `bulkCreate(inputs)` (POST `/bulk`) and `upsert(input)` (POST `/upsert`)
+  through every layer: `CrudService`/`CrudRepository` ports, `BaseCrudApiClient`,
+  `BaseRepositoryImpl`, the `crudUseCases` factory (`BULK_CREATE_*` / `UPSERT_*`
+  error codes), and `crudAppService`. Each entity now also exports
+  `bulkCreate{Entity}UseCase` and `upsert{Entity}UseCase`. `createMany` is now
+  implemented on top of `bulkCreate` (one round-trip instead of N parallel
+  `create` calls). See
+  [`shared_runtime`](src/webgen/generators/shared_runtime.rs) and
+  [`usecase`](src/webgen/generators/application/usecase.rs).
+- **Soft-delete auto-detection by Backbone convention.** Beyond an explicit
+  `soft_delete: true`, an entity is now treated as soft-deletable when it carries
+  an audit `metadata` field or a `deleted_at` field — matching the Backbone
+  backend which exposes the trash endpoints (`listDeleted` / `restore` /
+  `emptyTrash`) for those entities. See
+  [`ModelParser`](src/webgen/parser/model.rs).
+
+### Changed
+
+- **Soft-delete use cases now mirror the backend trash surface.** The
+  `makeSoftDeleteUseCases` factory drops the redundant `softDelete` (a soft
+  delete is just the normal `delete`) and now emits `listDeleted`, `restore`,
+  `emptyTrash`, and `permanentDelete`. Each entity exports
+  `list{Entity}DeletedUseCase`, `restore{Entity}UseCase`,
+  `emptyTrash{Entity}UseCase`, and `permanentDelete{Entity}UseCase`.
+- **`emptyTrash` endpoint moved from `DELETE /trash` to `DELETE /empty`** to
+  match the Backbone REST contract.
+
 ## [0.2.8] — 2026-06-02
 
 ### Added

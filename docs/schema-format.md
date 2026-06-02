@@ -450,6 +450,19 @@ models:
       # ... deleted_at is added automatically
 ```
 
+A model is treated as soft-deletable in two ways:
+
+1. **Explicit** — `soft_delete: true`.
+2. **By convention (Backbone)** — the model carries an audit `metadata` field or
+   a `deleted_at` field. The Backbone backend exposes the trash endpoints for
+   exactly these entities, so the generator infers soft-delete automatically and
+   emits the trash use cases.
+
+Soft-deletable entities gain the trash surface in the generated webapp runtime:
+`listDeleted`, `restore`, `emptyTrash` (`DELETE /empty`), and `permanentDelete`.
+A plain `delete` performs the soft delete itself, so there is no separate
+`softDelete` operation.
+
 ---
 
 ## Hook YAML Format

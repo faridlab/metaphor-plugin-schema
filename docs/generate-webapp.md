@@ -180,6 +180,25 @@ import { setHttpRequest } from '@/generated/shared/http';
 setHttpRequest((input, init) => ky(input as string, init));
 ```
 
+#### CRUD surface
+
+The generic CRUD bases expose, in addition to the usual `create`/`getById`/
+`list`/`update`/`patch`/`delete`:
+
+| Operation | Endpoint | Notes |
+|-----------|----------|-------|
+| `bulkCreate(inputs)` | `POST /bulk` | Create many entities in one request; `createMany` is built on top of it. |
+| `upsert(input)` | `POST /upsert` | Insert, or update when the entity already exists. |
+
+Each entity gets matching `bulkCreate{Entity}UseCase` and `upsert{Entity}UseCase`
+exports (with `BULK_CREATE_*` / `UPSERT_*` error codes).
+
+For soft-deletable entities (see [Soft delete](schema-format.md#soft-delete)),
+the runtime also emits the trash surface — `listDeleted`, `restore`,
+`emptyTrash` (`DELETE /empty`), and `permanentDelete` — exported per entity as
+`list{Entity}DeletedUseCase`, `restore{Entity}UseCase`,
+`emptyTrash{Entity}UseCase`, and `permanentDelete{Entity}UseCase`.
+
 ---
 
 ## Architecture
