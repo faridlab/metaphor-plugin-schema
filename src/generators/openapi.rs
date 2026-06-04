@@ -274,6 +274,7 @@ impl OpenApiGenerator {
         writeln!(output, "                type: array").unwrap();
         writeln!(output, "                items:").unwrap();
         writeln!(output, "                  $ref: '#/components/schemas/{}'", model.name).unwrap();
+        self.write_bulk_collection_ops(output, model, &tag);
         writeln!(output).unwrap();
 
         // Upsert
@@ -366,7 +367,172 @@ impl OpenApiGenerator {
         writeln!(output, "                    type: integer").unwrap();
         writeln!(output).unwrap();
 
+        self.write_bulk_trash_paths(output, model, &base_path, &tag);
+
         Ok(())
+    }
+
+    /// Emit the atomic `PUT` (full) and `PATCH` (partial) bulk-update operations
+    /// on the collection root. Shared by `write_model_paths` (combined spec) and
+    /// `generate_model_spec` (split spec) so both stay in lockstep.
+    fn write_bulk_collection_ops(&self, output: &mut String, model: &Model, tag: &str) {
+        // PUT - Bulk full update (atomic)
+        writeln!(output, "    put:").unwrap();
+        writeln!(output, "      tags:").unwrap();
+        writeln!(output, "        - {}", tag).unwrap();
+        writeln!(output, "      summary: Bulk update {} (full, atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "      operationId: bulkUpdate{}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      requestBody:").unwrap();
+        writeln!(output, "        required: true").unwrap();
+        writeln!(output, "        content:").unwrap();
+        writeln!(output, "          application/json:").unwrap();
+        writeln!(output, "            schema:").unwrap();
+        writeln!(output, "              type: array").unwrap();
+        writeln!(output, "              items:").unwrap();
+        writeln!(output, "                allOf:").unwrap();
+        writeln!(output, "                  - type: object").unwrap();
+        writeln!(output, "                    required: [id]").unwrap();
+        writeln!(output, "                    properties:").unwrap();
+        writeln!(output, "                      id:").unwrap();
+        writeln!(output, "                        type: string").unwrap();
+        writeln!(output, "                  - $ref: '#/components/schemas/Update{}Request'", model.name).unwrap();
+        writeln!(output, "      responses:").unwrap();
+        writeln!(output, "        '200':").unwrap();
+        writeln!(output, "          description: Updated").unwrap();
+        writeln!(output, "          content:").unwrap();
+        writeln!(output, "            application/json:").unwrap();
+        writeln!(output, "              schema:").unwrap();
+        writeln!(output, "                $ref: '#/components/schemas/{}BulkResult'", model.name).unwrap();
+        writeln!(output, "        '400':").unwrap();
+        writeln!(output, "          $ref: '#/components/responses/BadRequest'").unwrap();
+        // PATCH - Bulk partial update (atomic; shared or per-id)
+        writeln!(output, "    patch:").unwrap();
+        writeln!(output, "      tags:").unwrap();
+        writeln!(output, "        - {}", tag).unwrap();
+        writeln!(output, "      summary: Bulk partial-update {} (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "      operationId: bulkPatch{}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      requestBody:").unwrap();
+        writeln!(output, "        required: true").unwrap();
+        writeln!(output, "        content:").unwrap();
+        writeln!(output, "          application/json:").unwrap();
+        writeln!(output, "            schema:").unwrap();
+        writeln!(output, "              oneOf:").unwrap();
+        writeln!(output, "                - type: object").unwrap();
+        writeln!(output, "                  required: [ids, patch]").unwrap();
+        writeln!(output, "                  properties:").unwrap();
+        writeln!(output, "                    ids:").unwrap();
+        writeln!(output, "                      type: array").unwrap();
+        writeln!(output, "                      items: {{ type: string }}").unwrap();
+        writeln!(output, "                    patch:").unwrap();
+        writeln!(output, "                      type: object").unwrap();
+        writeln!(output, "                      additionalProperties: true").unwrap();
+        writeln!(output, "                - type: object").unwrap();
+        writeln!(output, "                  required: [items]").unwrap();
+        writeln!(output, "                  properties:").unwrap();
+        writeln!(output, "                    items:").unwrap();
+        writeln!(output, "                      type: array").unwrap();
+        writeln!(output, "                      items:").unwrap();
+        writeln!(output, "                        type: object").unwrap();
+        writeln!(output, "                        required: [id, patch]").unwrap();
+        writeln!(output, "                        properties:").unwrap();
+        writeln!(output, "                          id: {{ type: string }}").unwrap();
+        writeln!(output, "                          patch: {{ type: object, additionalProperties: true }}").unwrap();
+        writeln!(output, "      responses:").unwrap();
+        writeln!(output, "        '200':").unwrap();
+        writeln!(output, "          description: Updated").unwrap();
+        writeln!(output, "          content:").unwrap();
+        writeln!(output, "            application/json:").unwrap();
+        writeln!(output, "              schema:").unwrap();
+        writeln!(output, "                $ref: '#/components/schemas/{}BulkResult'", model.name).unwrap();
+        writeln!(output, "        '400':").unwrap();
+        writeln!(output, "          $ref: '#/components/responses/BadRequest'").unwrap();
+    }
+
+    /// Emit the atomic id-based batch paths (`/delete/bulk`, `/restore/bulk`,
+    /// `/restore/all`, `/trash/bulk`). Shared by `write_model_paths` and
+    /// `generate_model_spec` so combined and split specs stay in lockstep.
+    fn write_bulk_trash_paths(&self, output: &mut String, model: &Model, base_path: &str, tag: &str) {
+        // Bulk soft delete by ids (atomic)
+        writeln!(output, "  {}/delete/bulk:", base_path).unwrap();
+        writeln!(output, "    post:").unwrap();
+        writeln!(output, "      tags:").unwrap();
+        writeln!(output, "        - {}", tag).unwrap();
+        writeln!(output, "      summary: Bulk soft-delete {} by ids (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "      operationId: bulkDelete{}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      requestBody:").unwrap();
+        writeln!(output, "        $ref: '#/components/requestBodies/BatchIds'").unwrap();
+        writeln!(output, "      responses:").unwrap();
+        writeln!(output, "        '200':").unwrap();
+        writeln!(output, "          description: Soft-deleted").unwrap();
+        writeln!(output, "          content:").unwrap();
+        writeln!(output, "            application/json:").unwrap();
+        writeln!(output, "              schema:").unwrap();
+        writeln!(output, "                type: object").unwrap();
+        writeln!(output, "                properties:").unwrap();
+        writeln!(output, "                  soft_deleted: {{ type: integer }}").unwrap();
+        writeln!(output, "        '400':").unwrap();
+        writeln!(output, "          $ref: '#/components/responses/BadRequest'").unwrap();
+        writeln!(output).unwrap();
+
+        // Bulk restore by ids (atomic)
+        writeln!(output, "  {}/restore/bulk:", base_path).unwrap();
+        writeln!(output, "    post:").unwrap();
+        writeln!(output, "      tags:").unwrap();
+        writeln!(output, "        - {}", tag).unwrap();
+        writeln!(output, "      summary: Bulk restore {} by ids (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "      operationId: bulkRestore{}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      requestBody:").unwrap();
+        writeln!(output, "        $ref: '#/components/requestBodies/BatchIds'").unwrap();
+        writeln!(output, "      responses:").unwrap();
+        writeln!(output, "        '200':").unwrap();
+        writeln!(output, "          description: Restored").unwrap();
+        writeln!(output, "          content:").unwrap();
+        writeln!(output, "            application/json:").unwrap();
+        writeln!(output, "              schema:").unwrap();
+        writeln!(output, "                $ref: '#/components/schemas/{}BulkResult'", model.name).unwrap();
+        writeln!(output, "        '400':").unwrap();
+        writeln!(output, "          $ref: '#/components/responses/BadRequest'").unwrap();
+        writeln!(output).unwrap();
+
+        // Restore all soft-deleted (atomic)
+        writeln!(output, "  {}/restore/all:", base_path).unwrap();
+        writeln!(output, "    post:").unwrap();
+        writeln!(output, "      tags:").unwrap();
+        writeln!(output, "        - {}", tag).unwrap();
+        writeln!(output, "      summary: Restore all soft-deleted {}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      operationId: restoreAll{}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      responses:").unwrap();
+        writeln!(output, "        '200':").unwrap();
+        writeln!(output, "          description: Restored").unwrap();
+        writeln!(output, "          content:").unwrap();
+        writeln!(output, "            application/json:").unwrap();
+        writeln!(output, "              schema:").unwrap();
+        writeln!(output, "                type: object").unwrap();
+        writeln!(output, "                properties:").unwrap();
+        writeln!(output, "                  restored: {{ type: integer }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Bulk permanent delete by ids (atomic)
+        writeln!(output, "  {}/trash/bulk:", base_path).unwrap();
+        writeln!(output, "    delete:").unwrap();
+        writeln!(output, "      tags:").unwrap();
+        writeln!(output, "        - {}", tag).unwrap();
+        writeln!(output, "      summary: Bulk permanently-delete {} from trash by ids (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "      operationId: bulkPermanentDelete{}", pluralize(&model.name)).unwrap();
+        writeln!(output, "      requestBody:").unwrap();
+        writeln!(output, "        $ref: '#/components/requestBodies/BatchIds'").unwrap();
+        writeln!(output, "      responses:").unwrap();
+        writeln!(output, "        '200':").unwrap();
+        writeln!(output, "          description: Permanently deleted").unwrap();
+        writeln!(output, "          content:").unwrap();
+        writeln!(output, "            application/json:").unwrap();
+        writeln!(output, "              schema:").unwrap();
+        writeln!(output, "                type: object").unwrap();
+        writeln!(output, "                properties:").unwrap();
+        writeln!(output, "                  permanently_deleted: {{ type: integer }}").unwrap();
+        writeln!(output, "        '400':").unwrap();
+        writeln!(output, "          $ref: '#/components/responses/BadRequest'").unwrap();
+        writeln!(output).unwrap();
     }
 
     fn write_common_schemas(&self, output: &mut String) -> Result<(), GenerateError> {
@@ -478,6 +644,21 @@ impl OpenApiGenerator {
         writeln!(output, "            $ref: '#/components/schemas/Error'").unwrap();
         writeln!(output).unwrap();
 
+        // Common request bodies (shared by batch endpoints)
+        writeln!(output, "  requestBodies:").unwrap();
+        writeln!(output, "    BatchIds:").unwrap();
+        writeln!(output, "      required: true").unwrap();
+        writeln!(output, "      content:").unwrap();
+        writeln!(output, "        application/json:").unwrap();
+        writeln!(output, "          schema:").unwrap();
+        writeln!(output, "            type: object").unwrap();
+        writeln!(output, "            required: [ids]").unwrap();
+        writeln!(output, "            properties:").unwrap();
+        writeln!(output, "              ids:").unwrap();
+        writeln!(output, "                type: array").unwrap();
+        writeln!(output, "                items: {{ type: string }}").unwrap();
+        writeln!(output).unwrap();
+
         Ok(())
     }
 
@@ -495,6 +676,21 @@ impl OpenApiGenerator {
         for field in &model.fields {
             self.write_field_schema(output, field, 8)?;
         }
+        writeln!(output).unwrap();
+
+        // Bulk result schema (returned by bulk restore / update / patch)
+        writeln!(output, "    {}BulkResult:", model.name).unwrap();
+        writeln!(output, "      type: object").unwrap();
+        writeln!(output, "      properties:").unwrap();
+        writeln!(output, "        items:").unwrap();
+        writeln!(output, "          type: array").unwrap();
+        writeln!(output, "          items:").unwrap();
+        writeln!(output, "            $ref: '#/components/schemas/{}'", model.name).unwrap();
+        writeln!(output, "        total: {{ type: integer }}").unwrap();
+        writeln!(output, "        failed: {{ type: integer }}").unwrap();
+        writeln!(output, "        errors:").unwrap();
+        writeln!(output, "          type: array").unwrap();
+        writeln!(output, "          items: {{ type: string }}").unwrap();
         writeln!(output).unwrap();
 
         // Create request schema
@@ -723,6 +919,16 @@ impl OpenApiGenerator {
             // Reference for empty trash endpoints
             writeln!(output, "  {}/empty:", base_path).unwrap();
             writeln!(output, "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1empty'", model_snake, model_plural).unwrap();
+
+            // References for batch endpoints
+            writeln!(output, "  {}/delete/bulk:", base_path).unwrap();
+            writeln!(output, "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1delete~1bulk'", model_snake, model_plural).unwrap();
+            writeln!(output, "  {}/restore/bulk:", base_path).unwrap();
+            writeln!(output, "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1restore~1bulk'", model_snake, model_plural).unwrap();
+            writeln!(output, "  {}/restore/all:", base_path).unwrap();
+            writeln!(output, "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1restore~1all'", model_snake, model_plural).unwrap();
+            writeln!(output, "  {}/trash/bulk:", base_path).unwrap();
+            writeln!(output, "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1trash~1bulk'", model_snake, model_plural).unwrap();
         }
         writeln!(output).unwrap();
 
@@ -939,6 +1145,7 @@ impl OpenApiGenerator {
         writeln!(output, "                type: array").unwrap();
         writeln!(output, "                items:").unwrap();
         writeln!(output, "                  $ref: '#/components/schemas/{}'", model.name).unwrap();
+        self.write_bulk_collection_ops(&mut output, model, &tag);
         writeln!(output).unwrap();
 
         // Upsert
@@ -1030,6 +1237,8 @@ impl OpenApiGenerator {
         writeln!(output, "                  deleted_count:").unwrap();
         writeln!(output, "                    type: integer").unwrap();
         writeln!(output).unwrap();
+
+        self.write_bulk_trash_paths(&mut output, model, &base_path, &tag);
 
         // Components
         writeln!(output, "components:").unwrap();
@@ -1176,6 +1385,15 @@ mod tests {
         assert!(spec.contains("/api/v1/users/trash:"));
         assert!(spec.contains("/api/v1/users/{id}/restore:"));
         assert!(spec.contains("/api/v1/users/empty:"));
+
+        // Batch endpoints
+        assert!(spec.contains("/api/v1/users/delete/bulk:"));
+        assert!(spec.contains("/api/v1/users/restore/bulk:"));
+        assert!(spec.contains("/api/v1/users/restore/all:"));
+        assert!(spec.contains("/api/v1/users/trash/bulk:"));
+        assert!(spec.contains("operationId: bulkUpdateUsers"));
+        assert!(spec.contains("operationId: bulkPatchUsers"));
+        assert!(spec.contains("UserBulkResult"));
     }
 
     #[test]
