@@ -796,6 +796,47 @@ impl GraphqlGenerator {
         }
         writeln!(output, "            .map_err(|e| Error::new(e.to_string()))").unwrap();
         writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // ── Atomic batch mutations ──
+        // Bulk soft delete by ids
+        writeln!(output, "    /// Bulk soft-delete {} by ids (atomic). Returns the number deleted.", model_plural).unwrap();
+        writeln!(output, "    async fn {}_bulk_delete_{}(&self, ctx: &Context<'_>, ids: Vec<String>) -> Result<i64> {{", module_snake, model_plural).unwrap();
+        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(output, "        let n = service.bulk_soft_delete(ids).await").unwrap();
+        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(output, "        Ok(n as i64)").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Bulk restore by ids
+        writeln!(output, "    /// Bulk restore {} by ids (atomic). Returns the restored entities.", model_plural).unwrap();
+        writeln!(output, "    async fn {}_bulk_restore_{}(&self, ctx: &Context<'_>, ids: Vec<String>) -> Result<Vec<{}Gql>> {{", module_snake, model_plural, model_name).unwrap();
+        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(output, "        let restored = service.bulk_restore(ids).await").unwrap();
+        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(output, "        Ok(restored.into_iter().map(Into::into).collect())").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Restore all soft-deleted
+        writeln!(output, "    /// Restore all soft-deleted {}. Returns the number restored.", model_plural).unwrap();
+        writeln!(output, "    async fn {}_restore_all_{}(&self, ctx: &Context<'_>) -> Result<i64> {{", module_snake, model_plural).unwrap();
+        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(output, "        let n = service.restore_all().await").unwrap();
+        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(output, "        Ok(n as i64)").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Bulk permanent delete by ids
+        writeln!(output, "    /// Bulk permanently-delete {} from trash by ids (atomic). Returns the number deleted.", model_plural).unwrap();
+        writeln!(output, "    async fn {}_bulk_permanent_delete_{}(&self, ctx: &Context<'_>, ids: Vec<String>) -> Result<i64> {{", module_snake, model_plural).unwrap();
+        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(output, "        let n = service.bulk_permanent_delete(ids).await").unwrap();
+        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(output, "        Ok(n as i64)").unwrap();
+        writeln!(output, "    }}").unwrap();
 
         writeln!(output, "}}").unwrap();
 

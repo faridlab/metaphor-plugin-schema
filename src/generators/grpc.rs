@@ -72,6 +72,28 @@ impl GrpcGenerator {
         writeln!(output, "    rpc EmptyTrash(Empty{}TrashRequest) returns (Empty{}TrashResponse);", model.name, model.name).unwrap();
         writeln!(output, "    ").unwrap();
         writeln!(output, "    // ===========================================").unwrap();
+        writeln!(output, "    // Atomic batch operations").unwrap();
+        writeln!(output, "    // ===========================================").unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // Bulk soft-delete {} by ids (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "    rpc BulkDelete(BulkDelete{}Request) returns (BulkMutate{}Response);", model.name, model.name).unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // Bulk restore {} by ids (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "    rpc BulkRestore(BulkRestore{}Request) returns (Bulk{}Response);", model.name, model.name).unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // Restore all soft-deleted {}", pluralize(&model.name)).unwrap();
+        writeln!(output, "    rpc RestoreAll(RestoreAll{}Request) returns (BulkMutate{}Response);", model.name, model.name).unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // Bulk permanently-delete {} from trash by ids (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "    rpc BulkPermanentDelete(BulkPermanentDelete{}Request) returns (BulkMutate{}Response);", model.name, model.name).unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // Bulk full-update {} (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "    rpc BulkUpdate(BulkUpdate{}Request) returns (Bulk{}Response);", model.name, model.name).unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // Bulk partial-update {} (atomic)", pluralize(&model.name)).unwrap();
+        writeln!(output, "    rpc BulkPatch(BulkPatch{}Request) returns (Bulk{}Response);", model.name, model.name).unwrap();
+        writeln!(output, "    ").unwrap();
+        writeln!(output, "    // ===========================================").unwrap();
         writeln!(output, "    // Streaming RPCs").unwrap();
         writeln!(output, "    // ===========================================").unwrap();
         writeln!(output, "    ").unwrap();
@@ -240,6 +262,70 @@ impl GrpcGenerator {
 
         writeln!(output, "message Empty{}TrashResponse {{", model.name).unwrap();
         writeln!(output, "    int64 deleted_count = 1;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        // ── Atomic batch operations ──
+        writeln!(output, "// Shared response for batch ops that return affected entities").unwrap();
+        writeln!(output, "message Bulk{}Response {{", model.name).unwrap();
+        writeln!(output, "    repeated {} items = 1;", model.name).unwrap();
+        writeln!(output, "    int32 total = 2;").unwrap();
+        writeln!(output, "    int32 failed = 3;").unwrap();
+        writeln!(output, "    repeated string errors = 4;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "// Shared response for batch ops that return an affected-row count").unwrap();
+        writeln!(output, "message BulkMutate{}Response {{", model.name).unwrap();
+        writeln!(output, "    int64 affected = 1;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "message BulkDelete{}Request {{", model.name).unwrap();
+        writeln!(output, "    repeated string ids = 1;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "message BulkRestore{}Request {{", model.name).unwrap();
+        writeln!(output, "    repeated string ids = 1;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "message BulkPermanentDelete{}Request {{", model.name).unwrap();
+        writeln!(output, "    repeated string ids = 1;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "message RestoreAll{}Request {{}}", model.name).unwrap();
+        writeln!(output).unwrap();
+
+        // Bulk full update — id + the full update payload per item
+        writeln!(output, "message BulkUpdate{}Item {{", model.name).unwrap();
+        writeln!(output, "    string id = 1 [(buf.validate.field).string.uuid = true];").unwrap();
+        let mut bnum = 2;
+        for field in &model.fields {
+            if field.name == "id" || field.name == "created_at" || field.name == "updated_at" || field.name == "deleted_at" {
+                continue;
+            }
+            let proto_type = self.field_to_proto_type(field);
+            writeln!(output, "    {} {} = {};", proto_type, field.name, bnum).unwrap();
+            bnum += 1;
+        }
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "message BulkUpdate{}Request {{", model.name).unwrap();
+        writeln!(output, "    repeated BulkUpdate{}Item items = 1;", model.name).unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        // Bulk partial patch — id + map of changed fields per item
+        writeln!(output, "message BulkPatch{}Item {{", model.name).unwrap();
+        writeln!(output, "    string id = 1 [(buf.validate.field).string.uuid = true];").unwrap();
+        writeln!(output, "    map<string, string> patch = 2;").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "message BulkPatch{}Request {{", model.name).unwrap();
+        writeln!(output, "    repeated BulkPatch{}Item items = 1;", model.name).unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -673,6 +759,16 @@ mod tests {
         assert!(proto.contains("rpc ListTrash(ListUserTrashRequest)"));
         assert!(proto.contains("rpc Restore(RestoreUserRequest)"));
         assert!(proto.contains("rpc EmptyTrash(EmptyUserTrashRequest)"));
+
+        // Atomic batch operations
+        assert!(proto.contains("rpc BulkDelete(BulkDeleteUserRequest)"));
+        assert!(proto.contains("rpc BulkRestore(BulkRestoreUserRequest)"));
+        assert!(proto.contains("rpc RestoreAll(RestoreAllUserRequest)"));
+        assert!(proto.contains("rpc BulkPermanentDelete(BulkPermanentDeleteUserRequest)"));
+        assert!(proto.contains("rpc BulkUpdate(BulkUpdateUserRequest)"));
+        assert!(proto.contains("rpc BulkPatch(BulkPatchUserRequest)"));
+        assert!(proto.contains("message BulkUserResponse"));
+        assert!(proto.contains("message BulkMutateUserResponse"));
     }
 
     #[test]
