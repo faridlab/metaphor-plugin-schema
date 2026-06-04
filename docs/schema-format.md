@@ -502,18 +502,26 @@ hooks:
         roles: [admin, customer]
 
     rules:
-      - name: minimum_order_amount
+      minimum_order_amount:
+        when: [create, update]            # create | update | delete (optional)
         condition: "order.total >= 10.00"
-        error_code: "ORDER_BELOW_MINIMUM"
         message: "Order total must be at least $10.00"
+        code: "ORDER_BELOW_MINIMUM"       # optional — warnings often omit it
+        severity: error                   # error | warning (optional)
 
     permissions:
-      pending:
-        editable_fields: [items, shipping_address]
-      confirmed:
-        editable_fields: [shipping_address]
-      shipped:
-        editable_fields: []
+      customer:
+        allow:
+          - read                          # shorthand: bare action string
+          - action: update                # full form: condition + field scope
+            if: "order.status == 'pending'"
+            only: [items, shipping_address]
+        deny:
+          - action: update
+            except: [total]               # all fields except these
+      admin:
+        allow:
+          - all
 
     computed:
       - name: total

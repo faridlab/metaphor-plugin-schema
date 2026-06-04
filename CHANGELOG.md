@@ -5,6 +5,31 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] — 2026-06-05
+
+### Changed
+
+- **Webgen hook parser now mirrors the canonical permission/validation
+  grammar.** The `*.hook.yaml` parser was carrying a narrower shape than the
+  rest of the schema toolchain; it now accepts the same fields the canonical
+  `YamlPermissionAction` grammar exposes:
+  - **Permission rules (`allow:` / `deny:`).** Each entry may be either a bare
+    action string (`- all`, `- read`) or a full struct with `if` (condition),
+    `only` (restrict to these fields), and `except` (all fields except these).
+    `PermissionRule` gains `only` and `except`; the raw form is now an untagged
+    `Simple | Full` enum so both spellings deserialize.
+    [`state_machine`](src/webgen/ast/state_machine.rs).
+  - **Validation rules (`rules:`).** `code` is now optional and a new optional
+    `severity` (`error`, `warning`) field is parsed — warnings commonly omit a
+    code. The parser also keys each rule by its map name instead of dropping it,
+    so `ValidationRule.name` is populated.
+    [`hook`](src/webgen/parser/hook.rs).
+
+### Fixed
+
+- Validation rules parsed from `*.hook.yaml` no longer lose their name (the
+  map key is now carried through to `ValidationRule.name`).
+
 ## [0.2.12] — 2026-06-04
 
 ### Added
