@@ -102,6 +102,22 @@ export interface CrudService<T, C, U, Q = unknown, F = unknown> {
   upsert(input: C): Promise<T>;
   exists(id: string): Promise<boolean>;
   count(filters?: F): Promise<number>;
+  /** Soft-delete many entities by id, atomically (POST /delete/bulk). */
+  bulkDelete(ids: string[]): Promise<{ soft_deleted: number }>;
+  /** Full-update many entities, atomically (PUT /bulk). */
+  bulkUpdate(items: Array<{ id: string } & U>): Promise<BulkResult<T>>;
+  /** Partial-update many entities, atomically (PATCH /bulk). Shared patch or per-id. */
+  bulkPatch(
+    body: { ids: string[]; patch: Partial<U> } | { items: Array<{ id: string; patch: Partial<U> }> },
+  ): Promise<BulkResult<T>>;
+}
+
+/** Result envelope for batch operations that return affected entities. */
+export interface BulkResult<T> {
+  items: T[];
+  total: number;
+  failed: number;
+  errors: string[];
 }
 
 export interface SoftDeleteCrudService<T, C, U, Q = unknown, F = unknown>
@@ -112,6 +128,12 @@ export interface SoftDeleteCrudService<T, C, U, Q = unknown, F = unknown>
   permanentDelete(id: string): Promise<void>;
   emptyTrash(): Promise<{ deleted: number }>;
   countDeleted(): Promise<number>;
+  /** Restore many soft-deleted entities by id, atomically (POST /restore/bulk). */
+  bulkRestore(ids: string[]): Promise<BulkResult<T>>;
+  /** Restore every soft-deleted entity (POST /restore/all). */
+  restoreAll(): Promise<{ restored: number }>;
+  /** Permanently delete many soft-deleted entities by id, atomically (DELETE /trash/bulk). */
+  bulkPermanentDelete(ids: string[]): Promise<{ permanently_deleted: number }>;
 }
 
 /** Build a typed, injectable singleton accessor for a service implementation. */
@@ -176,7 +198,7 @@ const BASE_API_CLIENT: &str = r#"/**
 
 import { httpRequest } from '../http';
 import type { PaginatedResponse } from '../types/pagination';
-import type { CrudService, SoftDeleteCrudService } from './CrudService';
+import type { CrudService, SoftDeleteCrudService, BulkResult } from './CrudService';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 const API_VERSION = 'v1';
@@ -351,6 +373,38 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
       }),
     );
   }
+
+  async bulkDelete(ids: string[]): Promise<{ soft_deleted: number }> {
+    return handle<{ soft_deleted: number }>(
+      await httpRequest(this.url('/delete/bulk'), {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ ids }),
+      }),
+    );
+  }
+
+  async bulkUpdate(items: Array<{ id: string } & U>): Promise<BulkResult<T>> {
+    return handle<BulkResult<T>>(
+      await httpRequest(this.url('/bulk'), {
+        method: 'PUT',
+        headers: this.headers(),
+        body: JSON.stringify(items),
+      }),
+    );
+  }
+
+  async bulkPatch(
+    body: { ids: string[]; patch: Partial<U> } | { items: Array<{ id: string; patch: Partial<U> }> },
+  ): Promise<BulkResult<T>> {
+    return handle<BulkResult<T>>(
+      await httpRequest(this.url('/bulk'), {
+        method: 'PATCH',
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      }),
+    );
+  }
 }
 
 export abstract class SoftDeleteCrudApiClient<T, C, U, Q = unknown, F = unknown>
@@ -393,6 +447,32 @@ export abstract class SoftDeleteCrudApiClient<T, C, U, Q = unknown, F = unknown>
       await httpRequest(this.url('/trash/count'), { method: 'GET', headers: this.headers() }),
     );
     return res.count;
+  }
+
+  async bulkRestore(ids: string[]): Promise<BulkResult<T>> {
+    return handle<BulkResult<T>>(
+      await httpRequest(this.url('/restore/bulk'), {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ ids }),
+      }),
+    );
+  }
+
+  async restoreAll(): Promise<{ restored: number }> {
+    return handle<{ restored: number }>(
+      await httpRequest(this.url('/restore/all'), { method: 'POST', headers: this.headers() }),
+    );
+  }
+
+  async bulkPermanentDelete(ids: string[]): Promise<{ permanently_deleted: number }> {
+    return handle<{ permanently_deleted: number }>(
+      await httpRequest(this.url('/trash/bulk'), {
+        method: 'DELETE',
+        headers: this.headers(),
+        body: JSON.stringify({ ids }),
+      }),
+    );
   }
 }
 "#;
@@ -483,7 +563,7 @@ const CRUD_USECASES: &str = r#"/**
  */
 
 import type { PaginatedResponse } from '../types/pagination';
-import type { CrudService, SoftDeleteCrudService } from './CrudService';
+import type { BulkResult, CrudService, SoftDeleteCrudService } from './CrudService';
 
 export interface UseCaseContext {
   userId?: string;
@@ -570,6 +650,33 @@ export function makeCrudUseCases<T, C, U, Q, F>(
         return fail(`UPSERT_${label}_FAILED`, msg(e));
       }
     },
+    bulkDelete: async (ids: string[], _ctx?: UseCaseContext): Promise<UseCaseResult<{ soft_deleted: number }>> => {
+      try {
+        return ok(await getService().bulkDelete(ids));
+      } catch (e) {
+        return fail(`BULK_DELETE_${label}_FAILED`, msg(e));
+      }
+    },
+    bulkUpdate: async (
+      items: Array<{ id: string } & U>,
+      _ctx?: UseCaseContext,
+    ): Promise<UseCaseResult<BulkResult<T>>> => {
+      try {
+        return ok(await getService().bulkUpdate(items));
+      } catch (e) {
+        return fail(`BULK_UPDATE_${label}_FAILED`, msg(e));
+      }
+    },
+    bulkPatch: async (
+      body: { ids: string[]; patch: Partial<U> } | { items: Array<{ id: string; patch: Partial<U> }> },
+      _ctx?: UseCaseContext,
+    ): Promise<UseCaseResult<BulkResult<T>>> => {
+      try {
+        return ok(await getService().bulkPatch(body));
+      } catch (e) {
+        return fail(`BULK_PATCH_${label}_FAILED`, msg(e));
+      }
+    },
   };
 }
 
@@ -607,6 +714,27 @@ export function makeSoftDeleteUseCases<T, C, U, Q, F>(
         return fail(`PERMANENT_DELETE_${label}_FAILED`, msg(e));
       }
     },
+    bulkRestore: async (ids: string[]): Promise<UseCaseResult<BulkResult<T>>> => {
+      try {
+        return ok(await getService().bulkRestore(ids));
+      } catch (e) {
+        return fail(`BULK_RESTORE_${label}_FAILED`, msg(e));
+      }
+    },
+    restoreAll: async (): Promise<UseCaseResult<{ restored: number }>> => {
+      try {
+        return ok(await getService().restoreAll());
+      } catch (e) {
+        return fail(`RESTORE_ALL_${label}_FAILED`, msg(e));
+      }
+    },
+    bulkPermanentDelete: async (ids: string[]): Promise<UseCaseResult<{ permanently_deleted: number }>> => {
+      try {
+        return ok(await getService().bulkPermanentDelete(ids));
+      } catch (e) {
+        return fail(`BULK_PERMANENT_DELETE_${label}_FAILED`, msg(e));
+      }
+    },
   };
 }
 "#;
@@ -619,7 +747,7 @@ const CRUD_APPSERVICE: &str = r#"/**
  */
 
 import type { PaginatedResponse } from '../types/pagination';
-import type { CrudService } from './CrudService';
+import type { BulkResult, CrudService } from './CrudService';
 
 export function makeCrudAppService<T, C, U, Q, F>(getService: () => CrudService<T, C, U, Q, F>) {
   return {
@@ -631,6 +759,11 @@ export function makeCrudAppService<T, C, U, Q, F>(getService: () => CrudService<
     remove: (id: string): Promise<void> => getService().delete(id),
     bulkCreate: (inputs: C[]): Promise<T[]> => getService().bulkCreate(inputs),
     upsert: (input: C): Promise<T> => getService().upsert(input),
+    bulkDelete: (ids: string[]): Promise<{ soft_deleted: number }> => getService().bulkDelete(ids),
+    bulkUpdate: (items: Array<{ id: string } & U>): Promise<BulkResult<T>> => getService().bulkUpdate(items),
+    bulkPatch: (
+      body: { ids: string[]; patch: Partial<U> } | { items: Array<{ id: string; patch: Partial<U> }> },
+    ): Promise<BulkResult<T>> => getService().bulkPatch(body),
   };
 }
 "#;

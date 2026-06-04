@@ -76,7 +76,10 @@ const soft = makeSoftDeleteUseCases('{entity_upper}', get{entity_pascal}Service)
 export const list{entity_pascal}DeletedUseCase = soft.listDeleted;
 export const restore{entity_pascal}UseCase = soft.restore;
 export const emptyTrash{entity_pascal}UseCase = soft.emptyTrash;
-export const permanentDelete{entity_pascal}UseCase = soft.permanentDelete;"#,
+export const permanentDelete{entity_pascal}UseCase = soft.permanentDelete;
+export const bulkRestore{entity_pascal}UseCase = soft.bulkRestore;
+export const restoreAll{entity_pascal}UseCase = soft.restoreAll;
+export const bulkPermanentDelete{entity_pascal}UseCase = soft.bulkPermanentDelete;"#,
                 entity_pascal = entity_pascal,
                 entity_upper = entity_upper,
             )
@@ -107,6 +110,9 @@ export const get{entity_pascal}ByIdUseCase = crud.getById;
 export const list{entity_pascal}UseCase = crud.list;
 export const bulkCreate{entity_pascal}UseCase = crud.bulkCreate;
 export const upsert{entity_pascal}UseCase = crud.upsert;
+export const bulkDelete{entity_pascal}UseCase = crud.bulkDelete;
+export const bulkUpdate{entity_pascal}UseCase = crud.bulkUpdate;
+export const bulkPatch{entity_pascal}UseCase = crud.bulkPatch;
 
 /** All {entity_pascal} use cases as one object. */
 export const {entity_camel}UseCases = crud;{soft_block}
