@@ -171,7 +171,7 @@ impl HookParser {
     /// Parse trigger actions from raw trigger actions
     fn parse_trigger_actions(trigger_type: TriggerType, raw: &RawTriggerActions, name: &str) -> Trigger {
         let actions = raw.actions.iter()
-            .map(|a| Self::parse_action_string(a))
+            .map(|a| Self::parse_action_string(&a.name()))
             .collect();
 
         Trigger {

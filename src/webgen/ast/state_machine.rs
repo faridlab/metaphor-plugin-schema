@@ -279,9 +279,32 @@ pub(crate) struct RawTriggers {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawTriggerActions {
     #[serde(default)]
-    pub actions: Vec<String>,
+    pub actions: Vec<RawTriggerAction>,
     #[serde(rename = "if", default)]
     pub r#if: Option<String>,
+}
+
+/// A trigger action: either a bare string (`- send_email(...)`) or a struct
+/// (`- action: foo` / `- type: foo`, optionally with `params`). Extra keys are
+/// ignored by webgen but preserved in the schema source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RawTriggerAction {
+    Simple(String),
+    Detailed {
+        #[serde(default, alias = "type")]
+        action: Option<String>,
+    },
+}
+
+impl RawTriggerAction {
+    /// The action's name regardless of authored form.
+    pub fn name(&self) -> String {
+        match self {
+            RawTriggerAction::Simple(s) => s.clone(),
+            RawTriggerAction::Detailed { action } => action.clone().unwrap_or_default(),
+        }
+    }
 }
 
 #[cfg(test)]
