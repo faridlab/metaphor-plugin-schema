@@ -5,6 +5,21 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] — 2026-06-05
+
+### Changed
+
+- **Webgen trigger actions accept both the bare-string and struct spellings.**
+  Entries under a trigger's `actions:` list were previously required to be plain
+  strings (`- send_email(...)`); they now also deserialize from the struct form
+  (`- action: foo` / `- type: foo`, optionally with `params`), matching how
+  actions are authored elsewhere in `*.hook.yaml`. The raw form is an untagged
+  `Simple | Detailed` enum (`RawTriggerAction`), and `name()` yields the action
+  name regardless of which spelling was used. Extra keys are ignored by webgen
+  but preserved in the schema source.
+  [`state_machine`](src/webgen/ast/state_machine.rs),
+  [`hook`](src/webgen/parser/hook.rs).
+
 ## [0.2.13] — 2026-06-05
 
 ### Changed

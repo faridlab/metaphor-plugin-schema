@@ -538,6 +538,22 @@ hooks:
         action: send_shipping_notification
 ```
 
+A trigger may also group several actions under a named key with an optional
+`if` condition. Each entry in `actions:` is either a bare action string or the
+struct form (`action:` / `type:`, optionally with `params:`) — both spellings
+are accepted:
+
+```yaml
+    triggers:
+      notify_warehouse:
+        if: "order.requires_shipping"
+        actions:
+          - send_shipping_notification          # bare string
+          - action: reserve_inventory           # struct form
+            params: { warehouse: "default" }
+          - type: log_event                      # `type` is an alias for `action`
+```
+
 ---
 
 ## Workflow YAML Format
