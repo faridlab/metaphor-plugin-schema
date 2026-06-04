@@ -98,12 +98,13 @@ impl HookParser {
     /// Parse validation rules
     fn parse_validation_rules(rules: &Option<HashMap<String, RawValidationRule>>) -> Vec<ValidationRule> {
         rules.as_ref()
-            .map(|map| map.values().map(|r| ValidationRule {
-                name: String::new(), // Name from key
+            .map(|map| map.iter().map(|(name, r)| ValidationRule {
+                name: name.clone(),
                 when: r.when.clone(),
                 condition: r.condition.clone(),
                 message: r.message.clone(),
                 code: r.code.clone(),
+                severity: r.severity.clone(),
             }).collect())
             .unwrap_or_default()
     }

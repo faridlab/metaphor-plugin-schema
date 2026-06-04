@@ -69,7 +69,10 @@ pub struct ValidationRule {
     pub when: Vec<String>, // create, update, delete
     pub condition: String,
     pub message: String,
-    pub code: String,
+    /// Error code — optional to match the canonical grammar (warnings often omit it).
+    pub code: Option<String>,
+    /// Severity (error, warning) — optional, matches the canonical grammar.
+    pub severity: Option<String>,
 }
 
 /// Permission rule
@@ -77,6 +80,10 @@ pub struct ValidationRule {
 pub struct PermissionRule {
     pub action: String,
     pub condition: Option<String>,
+    /// Restrict the action to these fields only.
+    pub only: Option<Vec<String>>,
+    /// Apply the action to all fields except these.
+    pub except: Option<Vec<String>>,
 }
 
 /// Trigger definition
@@ -201,7 +208,10 @@ pub(crate) struct RawValidationRule {
     pub when: Vec<String>,
     pub condition: String,
     pub message: String,
-    pub code: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
 }
 
 /// Raw permission set
@@ -213,18 +223,45 @@ pub(crate) struct RawPermissionSet {
     pub deny: Vec<RawPermission>,
 }
 
-/// Raw permission rule
+/// Raw permission rule. Mirrors the canonical `YamlPermissionAction` grammar:
+/// either a bare action string (`- all`) or a full struct with `if`/`only`/`except`.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RawPermission {
-    pub action: String,
-    pub condition: Option<String>,
+#[serde(untagged)]
+pub(crate) enum RawPermission {
+    /// Shorthand: just the action name (e.g. `- all`, `- read`).
+    Simple(String),
+    /// Full form: action with optional condition + field restrictions.
+    Full {
+        action: String,
+        #[serde(default)]
+        only: Option<Vec<String>>,
+        #[serde(default)]
+        except: Option<Vec<String>>,
+        #[serde(rename = "if", default)]
+        condition: Option<String>,
+    },
 }
 
 impl From<RawPermission> for PermissionRule {
     fn from(raw: RawPermission) -> Self {
-        Self {
-            action: raw.action,
-            condition: raw.condition,
+        match raw {
+            RawPermission::Simple(action) => Self {
+                action,
+                condition: None,
+                only: None,
+                except: None,
+            },
+            RawPermission::Full {
+                action,
+                only,
+                except,
+                condition,
+            } => Self {
+                action,
+                condition,
+                only,
+                except,
+            },
         }
     }
 }
