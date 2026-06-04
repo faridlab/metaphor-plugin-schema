@@ -208,11 +208,22 @@ export class CrudApiError extends Error {
   }
 }
 
+/**
+ * Wire-format aliases. The TS API stays idiomatic camelCase (`sortBy`,
+ * `sortOrder`), but the backend list endpoints parse snake_case query params
+ * and treat any unrecognized key as a column filter. Sending `sortOrder` raw
+ * would land in that filter map and produce `column "sortorder" does not exist`.
+ */
+const QUERY_KEY_ALIASES: Record<string, string> = {
+  sortBy: 'sort_by',
+  sortOrder: 'sort_order',
+};
+
 function buildQuery(params?: Record<string, unknown>): string {
   if (!params) return '';
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null) sp.append(k, String(v));
+    if (v !== undefined && v !== null) sp.append(QUERY_KEY_ALIASES[k] ?? k, String(v));
   }
   const q = sp.toString();
   return q ? `?${q}` : '';

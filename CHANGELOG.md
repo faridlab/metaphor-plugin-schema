@@ -5,6 +5,19 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] — 2026-06-04
+
+### Fixed
+
+- **List query params now alias camelCase keys to snake_case on the wire.** The
+  generated TS API stays idiomatic camelCase (`sortBy`, `sortOrder`), but the
+  backend list endpoints parse snake_case query params and treat any
+  unrecognized key as a column filter — so a raw `sortOrder` landed in the
+  filter map and produced `column "sortorder" does not exist`.
+  [`buildQuery()`](src/webgen/generators/shared_runtime.rs) now maps
+  `sortBy → sort_by` and `sortOrder → sort_order` via a `QUERY_KEY_ALIASES`
+  table before appending; all other keys pass through unchanged.
+
 ## [0.2.10] — 2026-06-02
 
 ### Added

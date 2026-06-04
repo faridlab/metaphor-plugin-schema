@@ -317,6 +317,12 @@ This is useful for:
 
 - `useList{Entity}` -- Paginated list query
 - `useGet{Entity}` -- Single entity query by ID
+
+> **Wire format:** list query params stay idiomatic camelCase in the TS API
+> (`sortBy`, `sortOrder`), but the runtime aliases them to snake_case
+> (`sort_by`, `sort_order`) before hitting the backend, which parses snake_case
+> params and treats unrecognized keys as column filters. Other params pass
+> through unchanged.
 - `useCreate{Entity}` -- Create mutation
 - `useUpdate{Entity}` -- Update mutation
 - `useDelete{Entity}` -- Delete mutation
