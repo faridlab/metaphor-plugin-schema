@@ -262,6 +262,12 @@ serialization helpers.
   same `*RepositoryCustom.kt` companion alongside the delta-sync override.
 - The `// <<< CUSTOM` marker is honored by the writer — files containing it
   are preserved untouched on regeneration.
+- **Atomic batch operations** — `bulkDelete(ids)` plus, for soft-deletable
+  entities, `bulkRestore(ids)`, `restoreAll()`, and `bulkPermanentDelete(ids)`.
+  These are online-only (they require connectivity); on success the whole cache
+  is invalidated since many rows change at once, so callers should refresh or
+  re-observe afterwards. The matching methods are also declared on the
+  `<Entity>Repository` interface.
 - Skip per-model with `generators.disabled: [offlinerepositories]` in the
   schema, or whitelist-only with `generators.enabled: [offlinerepositories]`.
 

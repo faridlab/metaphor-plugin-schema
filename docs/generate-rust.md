@@ -264,6 +264,10 @@ Generates Axum REST handlers with:
 Generates Tonic gRPC services with:
 - Unary RPCs for CRUD operations
 - Server streaming for list operations
+- Atomic batch RPCs — `BulkDelete`, `BulkRestore`, `RestoreAll`,
+  `BulkPermanentDelete`, `BulkUpdate`, `BulkPatch` — with shared
+  `Bulk{Model}Response` (affected entities) and `BulkMutate{Model}Response`
+  (affected-row count) messages
 - Request/response message mapping
 - Error code mapping
 
@@ -276,6 +280,9 @@ Generates `async-graphql` schema objects and resolvers with:
   — the generator emits `soft_delete<Entity>` (sets `deleted_at`) and
   `restore<Entity>` instead of a hard `delete<Entity>`. Hard `delete`
   is only emitted for models without soft-delete.
+- **Atomic batch mutations** — `{module}_bulk_delete_*`,
+  `{module}_bulk_restore_*`, `{module}_restore_all_*`, and
+  `{module}_bulk_permanent_delete_*` for id-based batch operations.
 - **Deduped `Service` import** in the resolver module so re-exported
   services aren't pulled in twice when a module has multiple entities.
 - **Schema suffix on merged roots** — the per-module merged roots are
@@ -291,6 +298,10 @@ Generates OpenAPI 3.0 specs with:
 - Path definitions for all endpoints
 - Schema definitions for all models
 - Request/response body schemas
+- Atomic batch paths — `PUT`/`PATCH` on the collection (`bulkUpdate`/
+  `bulkPatch`) plus `/delete/bulk`, `/restore/bulk`, `/restore/all`,
+  `/trash/bulk` — backed by a shared `BatchIds` request body and a
+  `{Model}BulkResult` schema
 - Use `--split` flag to generate one file per entity
 
 > **Feature-gated imports** — `use utoipa::ToSchema` lines emitted into

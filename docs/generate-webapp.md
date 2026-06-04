@@ -206,15 +206,35 @@ The generic CRUD bases expose, in addition to the usual `create`/`getById`/
 |-----------|----------|-------|
 | `bulkCreate(inputs)` | `POST /bulk` | Create many entities in one request; `createMany` is built on top of it. |
 | `upsert(input)` | `POST /upsert` | Insert, or update when the entity already exists. |
+| `bulkDelete(ids)` | `POST /delete/bulk` | Soft-delete many by id, atomically. Returns `{ soft_deleted }`. |
+| `bulkUpdate(items)` | `PUT /bulk` | Full-update many, one `{ id } & Update` payload per item. Returns a `BulkResult<T>`. |
+| `bulkPatch(body)` | `PATCH /bulk` | Partial-update many — shared `{ ids, patch }` or per-id `{ items: [{ id, patch }] }`. Returns a `BulkResult<T>`. |
 
-Each entity gets matching `bulkCreate{Entity}UseCase` and `upsert{Entity}UseCase`
-exports (with `BULK_CREATE_*` / `UPSERT_*` error codes).
+Every operation is wired through all layers (port, API client, `makeCrudUseCases`
+/ `makeCrudAppService`), so each entity gets matching per-operation use-case
+exports: `bulkCreate{Entity}UseCase`, `upsert{Entity}UseCase`,
+`bulkDelete{Entity}UseCase`, `bulkUpdate{Entity}UseCase`, and
+`bulkPatch{Entity}UseCase` (error codes `BULK_CREATE_*`, `UPSERT_*`,
+`BULK_DELETE_*`, `BULK_UPDATE_*`, `BULK_PATCH_*`).
+
+Operations that return affected entities resolve to a `BulkResult<T>` envelope
+(`items`, `total`, `failed`, `errors`); count-only operations return a small
+count object.
 
 For soft-deletable entities (see [Soft delete](schema-format.md#soft-delete)),
 the runtime also emits the trash surface — `listDeleted`, `restore`,
 `emptyTrash` (`DELETE /empty`), and `permanentDelete` — exported per entity as
 `list{Entity}DeletedUseCase`, `restore{Entity}UseCase`,
-`emptyTrash{Entity}UseCase`, and `permanentDelete{Entity}UseCase`.
+`emptyTrash{Entity}UseCase`, and `permanentDelete{Entity}UseCase`. Soft-delete
+entities also gain the atomic batch trash operations (exported as
+`bulkRestore{Entity}UseCase`, `restoreAll{Entity}UseCase`, and
+`bulkPermanentDelete{Entity}UseCase`):
+
+| Operation | Endpoint | Notes |
+|-----------|----------|-------|
+| `bulkRestore(ids)` | `POST /restore/bulk` | Restore many soft-deleted by id, atomically. Returns a `BulkResult<T>`. |
+| `restoreAll()` | `POST /restore/all` | Restore every soft-deleted row. Returns `{ restored }`. |
+| `bulkPermanentDelete(ids)` | `DELETE /trash/bulk` | Purge many from trash by id, atomically. Returns `{ permanently_deleted }`. |
 
 ---
 

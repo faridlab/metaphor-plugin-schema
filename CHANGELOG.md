@@ -5,6 +5,61 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] — 2026-06-04
+
+### Added
+
+- **Atomic batch mutations across every generated API surface.** Beyond the
+  existing `bulkCreate`/`upsert`, the CRUD stack now emits a full set of
+  id-based batch operations that run in a single atomic transaction:
+  - `bulkDelete(ids)` — soft-delete many by id (`POST /delete/bulk`).
+  - `bulkUpdate(items)` — full-update many, one `{ id } & Update` payload per
+    item (`PUT /bulk`).
+  - `bulkPatch(body)` — partial-update many, either a shared `{ ids, patch }`
+    or per-id `{ items: [{ id, patch }] }` (`PATCH /bulk`).
+
+  For soft-deletable entities the trash surface also gains:
+  - `bulkRestore(ids)` — restore many by id (`POST /restore/bulk`).
+  - `restoreAll()` — restore every soft-deleted row (`POST /restore/all`).
+  - `bulkPermanentDelete(ids)` — purge many from trash by id
+    (`DELETE /trash/bulk`).
+
+  Operations that return affected rows resolve to a `BulkResult<T>` envelope
+  (`items`, `total`, `failed`, `errors`); count-only operations return a small
+  count object (`soft_deleted` / `restored` / `permanently_deleted`).
+
+  Generated through every layer:
+  - **Web (TS).** Wired through every layer, matching the 0.2.9
+    bulk-create/upsert pattern. New `bulkDelete`/`bulkUpdate`/`bulkPatch` on
+    `CrudService` and `BaseCrudApiClient`, with `bulkRestore`/`restoreAll`/
+    `bulkPermanentDelete` on the soft-delete variants, plus the exported
+    `BulkResult<T>` envelope. The `makeCrudUseCases`, `makeSoftDeleteUseCases`,
+    and `makeCrudAppService` factories expose the same operations (with
+    `BULK_DELETE_*` / `BULK_UPDATE_*` / `BULK_PATCH_*` / `BULK_RESTORE_*` /
+    `RESTORE_ALL_*` / `BULK_PERMANENT_DELETE_*` error codes), and each entity
+    now exports `bulkDelete{Entity}UseCase`, `bulkUpdate{Entity}UseCase`,
+    `bulkPatch{Entity}UseCase` (and, for soft-delete entities,
+    `bulkRestore{Entity}UseCase`, `restoreAll{Entity}UseCase`,
+    `bulkPermanentDelete{Entity}UseCase`).
+    [`shared_runtime`](src/webgen/generators/shared_runtime.rs),
+    [`usecase`](src/webgen/generators/application/usecase.rs).
+  - **OpenAPI.** `PUT`/`PATCH` on the collection plus `/delete/bulk`,
+    `/restore/bulk`, `/restore/all`, `/trash/bulk` paths, a shared `BatchIds`
+    request body, and a `{Model}BulkResult` schema; module-index `$ref`s wired
+    for each batch path. [`openapi`](src/generators/openapi.rs).
+  - **gRPC.** `BulkDelete`/`BulkRestore`/`RestoreAll`/`BulkPermanentDelete`/
+    `BulkUpdate`/`BulkPatch` RPCs with shared `Bulk{Model}Response` and
+    `BulkMutate{Model}Response` messages. [`grpc`](src/generators/grpc.rs).
+  - **GraphQL.** `{module}_bulk_delete_*`, `{module}_bulk_restore_*`,
+    `{module}_restore_all_*`, and `{module}_bulk_permanent_delete_*`
+    mutations. [`graphql`](src/generators/graphql.rs).
+  - **Kotlin.** `bulkDelete`/`bulkRestore`/`restoreAll`/`bulkPermanentDelete`
+    on the repository interface and the offline repository (online-only; the
+    cache is fully invalidated on success). [`templates`](src/kotlin/templates/mod.rs).
+  - **Integration tests.** `test_bulk_delete`/`test_bulk_restore`/
+    `test_restore_all` exercised against created entities in `run_all`.
+    [`integration_test`](src/generators/integration_test.rs).
+
 ## [0.2.11] — 2026-06-04
 
 ### Fixed
