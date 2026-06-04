@@ -155,6 +155,12 @@ interface {{entity_name}}Repository {
      * Delete {{entity_name}} (soft delete if enabled)
      */
     suspend fun delete(id: String): Boolean
+
+    /**
+     * Soft-delete many {{entity_name_lowercase}} records by id (atomic).
+     * Returns the number deleted.
+     */
+    suspend fun bulkDelete(ids: List<String>): Int
 {{#if has_soft_delete}}
 
     /**
@@ -169,6 +175,23 @@ interface {{entity_name}}Repository {
      * Restore soft-deleted {{entity_name}}
      */
     suspend fun restore(id: String): {{entity_name}}?
+
+    /**
+     * Restore many soft-deleted {{entity_name_lowercase}} records by id (atomic).
+     * Returns the number restored.
+     */
+    suspend fun bulkRestore(ids: List<String>): Int
+
+    /**
+     * Restore every soft-deleted {{entity_name}}. Returns the number restored.
+     */
+    suspend fun restoreAll(): Int
+
+    /**
+     * Permanently delete many soft-deleted {{entity_name_lowercase}} records by id (atomic).
+     * Returns the number deleted.
+     */
+    suspend fun bulkPermanentDelete(ids: List<String>): Int
 {{/if}}
 }
 "#;
@@ -285,6 +308,40 @@ class Offline{{entity_name}}Repository(
     override fun deserializeOne(jsonStr: String): {{entity_name}} = json.decodeFromString(jsonStr)
     override fun serializeList(response: PaginatedApiResponse<{{entity_name}}>): String = json.encodeToString(response)
     override fun deserializeList(jsonStr: String): PaginatedApiResponse<{{entity_name}}> = json.decodeFromString(jsonStr)
+
+    // ── Atomic batch operations ───────────────────────────────────────────────
+    //
+    // Online-only (require connectivity); on success the whole cache is
+    // invalidated since many rows change at once. Callers should refresh /
+    // re-observe afterwards to repopulate from the server.
+
+    /** Soft-delete many by id (atomic). Returns the number deleted. */
+    suspend fun bulkDelete(ids: List<String>): Result<Int> {
+        val result = api.bulkDelete(ids)
+        if (result is Result.Success) invalidateAll()
+        return result
+    }
+
+    /** Restore many soft-deleted by id (atomic). Returns the number restored. */
+    suspend fun bulkRestore(ids: List<String>): Result<Int> {
+        val result = api.bulkRestore(ids)
+        if (result is Result.Success) invalidateAll()
+        return result
+    }
+
+    /** Restore every soft-deleted record. Returns the number restored. */
+    suspend fun restoreAll(): Result<Int> {
+        val result = api.restoreAll()
+        if (result is Result.Success) invalidateAll()
+        return result
+    }
+
+    /** Permanently delete many soft-deleted by id (atomic). Returns the number deleted. */
+    suspend fun bulkPermanentDelete(ids: List<String>): Result<Int> {
+        val result = api.bulkPermanentDelete(ids)
+        if (result is Result.Success) invalidateAll()
+        return result
+    }
 }
 "#;
 
