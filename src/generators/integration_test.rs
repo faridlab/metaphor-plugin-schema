@@ -287,6 +287,39 @@ impl IntegrationTestGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
+        writeln!(output, "    /// Test: Bulk soft-delete (POST /collection/delete/bulk)").unwrap();
+        writeln!(output, "    pub async fn test_bulk_delete(&self, ids: &[String]) -> TestResult {{").unwrap();
+        writeln!(output, "        let test_name = format!(\"{{}} - Bulk Delete\", self.config.entity_name);").unwrap();
+        writeln!(output, "        let payload = serde_json::json!({{ \"ids\": ids }});").unwrap();
+        writeln!(output, "        match self.api_test.post(&self.endpoint(\"/delete/bulk\"), &payload, None).await {{").unwrap();
+        writeln!(output, "            Ok(response) => self.api_test.create_result(&test_name, &response, 200, \"Bulk soft-delete works\"),").unwrap();
+        writeln!(output, "            Err(e) => TestResult::failure(&test_name, e.to_string()),").unwrap();
+        writeln!(output, "        }}").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "    /// Test: Bulk restore (POST /collection/restore/bulk)").unwrap();
+        writeln!(output, "    pub async fn test_bulk_restore(&self, ids: &[String]) -> TestResult {{").unwrap();
+        writeln!(output, "        let test_name = format!(\"{{}} - Bulk Restore\", self.config.entity_name);").unwrap();
+        writeln!(output, "        let payload = serde_json::json!({{ \"ids\": ids }});").unwrap();
+        writeln!(output, "        match self.api_test.post(&self.endpoint(\"/restore/bulk\"), &payload, None).await {{").unwrap();
+        writeln!(output, "            Ok(response) => self.api_test.create_result(&test_name, &response, 200, \"Bulk restore works\"),").unwrap();
+        writeln!(output, "            Err(e) => TestResult::failure(&test_name, e.to_string()),").unwrap();
+        writeln!(output, "        }}").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        writeln!(output, "    /// Test: Restore all soft-deleted (POST /collection/restore/all)").unwrap();
+        writeln!(output, "    pub async fn test_restore_all(&self) -> TestResult {{").unwrap();
+        writeln!(output, "        let test_name = format!(\"{{}} - Restore All\", self.config.entity_name);").unwrap();
+        writeln!(output, "        let payload = serde_json::json!({{}});").unwrap();
+        writeln!(output, "        match self.api_test.post(&self.endpoint(\"/restore/all\"), &payload, None).await {{").unwrap();
+        writeln!(output, "            Ok(response) => self.api_test.create_result(&test_name, &response, 200, \"Restore all works\"),").unwrap();
+        writeln!(output, "            Err(e) => TestResult::failure(&test_name, e.to_string()),").unwrap();
+        writeln!(output, "        }}").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
         writeln!(output, "    /// Run all CRUD tests").unwrap();
         writeln!(output, "    pub async fn run_all(&mut self) -> Vec<TestResult> {{").unwrap();
         writeln!(output, "        let mut results = Vec::new();").unwrap();
@@ -327,6 +360,15 @@ impl IntegrationTestGenerator {
         writeln!(output, "        // Validation tests").unwrap();
         writeln!(output, "        results.push(self.test_invalid_create().await);").unwrap();
         writeln!(output, "        results.push(self.test_not_found().await);").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "        // Batch operations (exercised on the created entities;").unwrap();
+        writeln!(output, "        // soft-delete then restore so they remain for cleanup below)").unwrap();
+        writeln!(output, "        let batch_ids: Vec<String> = self.created_ids.clone();").unwrap();
+        writeln!(output, "        if !batch_ids.is_empty() {{").unwrap();
+        writeln!(output, "            results.push(self.test_bulk_delete(&batch_ids).await);").unwrap();
+        writeln!(output, "            results.push(self.test_bulk_restore(&batch_ids).await);").unwrap();
+        writeln!(output, "            results.push(self.test_restore_all().await);").unwrap();
+        writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        // Cleanup - delete created entities").unwrap();
         writeln!(output, "        for id in self.created_ids.clone() {{").unwrap();
