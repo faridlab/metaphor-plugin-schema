@@ -330,6 +330,8 @@ Used in the legacy DSL format and in relation `attributes` arrays:
 | `@hashed` | Field is stored hashed (e.g., passwords) | `password string @hashed` |
 | `@audit_metadata` | JSONB audit metadata field. On the Kotlin side this is emitted as the `Metadata` typealias (`Map<String, JsonElement?>`), not raw `JsonElement` — see [generate-kotlin.md](./generate-kotlin.md). | - |
 | `@omit_if_none` | Omit this nullable field from the serialized response when its value is `None` (emits `#[serde(skip_serializing_if = "Option::is_none")]`). By default nullable fields serialize as explicit `null` for a stable response shape; use this attribute to opt out per field. | `deleted_at datetime? @omit_if_none` |
+| `@private` | Field-level security: the field is pruned from serialized responses for non-owner/non-root callers. Collected into the generated `EntityRepoMeta::private_fields()` override (as camelCase response keys); backbone-core's `apply_field_security` strips these keys at the handler. | `ssn string @private` |
+| `@owner` | Marks the tenant/ownership column used by field-level security to decide who counts as the owner. Emitted as the `EntityRepoMeta::owner_field()` override (camelCase response key). At most one per model. | `user_id uuid @owner` |
 
 ### Foreign Key Actions
 

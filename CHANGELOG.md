@@ -5,6 +5,20 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.17] — 2026-06-06
+
+### Added
+
+- **Field-level security attributes `@private` and `@owner`.** A field tagged
+  `@private` is collected into a generated `EntityRepoMeta::private_fields()`
+  override, and a field tagged `@owner` becomes the `EntityRepoMeta::owner_field()`
+  override. Both are emitted as camelCase response keys so they line up with the
+  serialized body that backbone-core's `apply_field_security` prunes for
+  non-owner/non-root callers. The overrides are only emitted when the model
+  actually declares such fields (`private_fields()` when at least one `@private`
+  field exists, `owner_field()` when an `@owner` column exists).
+  [`rust`](src/generators/rust.rs).
+
 ## [0.2.16] — 2026-06-06
 
 ### Changed

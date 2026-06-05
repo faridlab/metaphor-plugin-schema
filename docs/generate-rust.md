@@ -221,6 +221,7 @@ The largest generator. Produces:
 - Hashed field detection (for password fields)
 - Audit metadata JSONB field support
 - State machine support in entity structs
+- Field-level security via `EntityRepoMeta::private_fields()` / `owner_field()` overrides, emitted from `@private` and `@owner` field attributes (camelCase response keys; pruned by backbone-core's `apply_field_security`)
 - PascalCase conversion for all type names
 
 ### `sql` -- PostgreSQL Migrations
