@@ -4,10 +4,15 @@ use std::fs;
 use std::path::Path;
 use crate::webgen::ast::state_machine::{
     HookSchema, StateMachine, StateDefinition, TransitionDefinition,
-    ValidationRule, PermissionSet, Trigger, TriggerType,
+    ValidationRule, PermissionSet, PermissionRule, Trigger, TriggerType,
     TriggerAction, ComputedField,
     RawHookSchema, RawStates, RawValidationRule,
     RawPermissionSet, RawPermission, RawTriggers, RawTriggerActions,
+};
+use crate::parser::yaml_parser::{
+    parse_hook_yaml_flexible, YamlHookParseResult,
+    YamlHookSchema, YamlStateMachine, YamlState, YamlStateList, YamlAction,
+    YamlPermissionAction,
 };
 use crate::webgen::{Error, Result};
 use std::collections::HashMap;
@@ -24,11 +29,28 @@ impl HookParser {
         Self::parse_content(&content, path)
     }
 
-    /// Parse hook schema from YAML content
+    /// Parse hook schema from YAML content.
+    ///
+    /// Tries the rich map-based form first; on failure falls back to the canonical
+    /// `parse_hook_yaml_flexible` (which also accepts the list/sequence authoring
+    /// form). This keeps webgen aligned with the backend codegen — both accept the
+    /// same hook grammar, so any authored schema works in every generator.
     pub fn parse_content(content: &str, path: &Path) -> Result<HookSchema> {
-        let raw: RawHookSchema = serde_yaml::from_str(content)
-            .map_err(|e| Error::Parse(format!("Failed to parse YAML from {}: {}", path.display(), e)))?;
+        match serde_yaml::from_str::<RawHookSchema>(content) {
+            Ok(raw) => Ok(Self::build_from_raw(raw, path)),
+            Err(map_err) => match parse_hook_yaml_flexible(content) {
+                Ok(YamlHookParseResult::Hook(hook)) => Ok(Self::from_canonical(hook, path)),
+                _ => Err(Error::Parse(format!(
+                    "Failed to parse YAML from {}: {}",
+                    path.display(),
+                    map_err
+                ))),
+            },
+        }
+    }
 
+    /// Build a `HookSchema` from the rich map-based raw form.
+    fn build_from_raw(raw: RawHookSchema, path: &Path) -> HookSchema {
         // Use filename for name if not specified
         let name = raw.name.unwrap_or_else(|| {
             path.file_stem()
@@ -45,7 +67,7 @@ impl HookParser {
         let triggers = Self::parse_triggers(&raw.triggers);
         let computed_fields = Self::parse_computed_fields(&raw.computed);
 
-        Ok(HookSchema {
+        HookSchema {
             name,
             model,
             state_machine,
@@ -53,7 +75,111 @@ impl HookParser {
             permissions,
             triggers,
             computed_fields,
-        })
+        }
+    }
+
+    /// Convert a canonical `YamlHookSchema` (from the shared flexible parser) into
+    /// webgen's `HookSchema`. Used for the list/sequence authoring form.
+    fn from_canonical(hook: YamlHookSchema, path: &Path) -> HookSchema {
+        let name = if hook.name.is_empty() {
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string()
+        } else {
+            hook.name
+        };
+        let model = if hook.model.is_empty() { name.clone() } else { hook.model };
+
+        let state_machine = hook.states.map(Self::convert_canonical_state_machine);
+
+        let rules = hook.rules.into_iter().map(|(rname, r)| ValidationRule {
+            name: rname,
+            when: r.when,
+            condition: r.condition,
+            message: r.message,
+            code: r.code,
+            severity: r.severity,
+        }).collect();
+
+        let permissions = hook.permissions.into_iter().map(|(role, p)| {
+            (role, PermissionSet {
+                allow: p.allow.into_iter().map(Self::convert_canonical_permission).collect(),
+                deny: p.deny.into_iter().map(Self::convert_canonical_permission).collect(),
+            })
+        }).collect();
+
+        let triggers = hook.triggers.into_iter().map(|(tname, t)| Trigger {
+            trigger_type: Self::infer_trigger_type(&tname),
+            actions: t.actions.iter().map(|a| Self::parse_action_string(&Self::yaml_action_name(a))).collect(),
+            condition: t.condition,
+            name: tname,
+        }).collect();
+
+        let computed_fields = hook.computed.into_iter()
+            .map(|(cname, expr)| ComputedField { name: cname, expression: expr })
+            .collect();
+
+        HookSchema { name, model, state_machine, rules, permissions, triggers, computed_fields }
+    }
+
+    fn convert_canonical_state_machine(sm: YamlStateMachine) -> StateMachine {
+        let mut states = HashMap::new();
+        for (sname, sval) in sm.values {
+            let (is_initial, is_final, on_enter, on_exit) = match sval {
+                YamlState::Simple(_) => (false, false, Vec::new(), Vec::new()),
+                YamlState::Full { initial, final_state, on_enter, on_exit } => (
+                    initial.unwrap_or(false),
+                    final_state.unwrap_or(false),
+                    on_enter.iter().map(Self::yaml_action_name).collect(),
+                    on_exit.iter().map(Self::yaml_action_name).collect(),
+                ),
+            };
+            states.insert(sname.clone(), StateDefinition {
+                name: sname,
+                is_initial,
+                is_final,
+                on_enter,
+                on_exit,
+            });
+        }
+
+        let transitions = sm.transitions.into_iter().map(|(tname, t)| TransitionDefinition {
+            name: tname,
+            from_state: match t.from {
+                YamlStateList::Single(s) => s,
+                YamlStateList::Multiple(v) => v.join(","),
+            },
+            to_state: t.to,
+            roles: t.roles,
+            condition: t.condition,
+            message: t.message,
+            on_transition: Vec::new(),
+        }).collect();
+
+        StateMachine { state_field: sm.field, states, transitions }
+    }
+
+    fn convert_canonical_permission(p: YamlPermissionAction) -> PermissionRule {
+        match p {
+            YamlPermissionAction::Simple(action) => PermissionRule {
+                action,
+                condition: None,
+                only: None,
+                except: None,
+            },
+            YamlPermissionAction::Full { action, only, except, condition } => PermissionRule {
+                action,
+                condition,
+                only,
+                except,
+            },
+        }
+    }
+
+    /// The action name regardless of its authored form (string or `{ type, … }`).
+    fn yaml_action_name(a: &YamlAction) -> String {
+        match a {
+            YamlAction::Simple(s) => s.clone(),
+            YamlAction::Full { action_type, .. } => action_type.clone(),
+        }
     }
 
     /// Parse state machine from states section
