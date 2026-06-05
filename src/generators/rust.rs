@@ -1328,7 +1328,11 @@ impl RustGenerator {
                 writeln!(output, "    #[serde(skip_serializing)]").unwrap();
             }
 
-            if field.type_ref.is_optional() {
+            // Default: nullable fields serialize as explicit `null` (present, not omitted),
+            // so the response shape is stable for typed clients. Opt out per field with
+            // `@omit_if_none` when absence is semantically meaningful. See
+            // apps/bersihir-service/docs/field-shaping.md (Phase 1).
+            if field.type_ref.is_optional() && field.has_attribute("omit_if_none") {
                 writeln!(output, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
             }
 

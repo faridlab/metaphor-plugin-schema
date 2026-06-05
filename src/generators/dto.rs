@@ -826,8 +826,10 @@ impl DtoGenerator {
     fn get_serde_response_attrs(&self, field: &Field) -> String {
         let mut attrs = Vec::new();
 
-        // Handle optional fields in response
-        if matches!(field.type_ref, TypeRef::Optional(_)) {
+        // Default: nullable response fields serialize as explicit `null` (present, not
+        // omitted) for a stable shape. Opt out per field with `@omit_if_none`. See
+        // apps/bersihir-service/docs/field-shaping.md (Phase 1).
+        if matches!(field.type_ref, TypeRef::Optional(_)) && field.has_attribute("omit_if_none") {
             attrs.push("skip_serializing_if = \"Option::is_none\"".to_string());
         }
 
