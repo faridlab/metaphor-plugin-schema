@@ -1127,6 +1127,17 @@ impl RustGenerator {
             .map(|f| f.name.as_str())
             .collect();
 
+        // Field-level security: @private (owner/root-only) and @owner (the tenant-id
+        // column). Emitted as RESPONSE keys (camelCase) to match the serialized
+        // response the handler prunes — see backbone-core's apply_field_security.
+        let private_fields: Vec<String> = model.fields.iter()
+            .filter(|f| f.has_attribute("private"))
+            .map(|f| crate::webgen::parser::to_camel_case(&f.name))
+            .collect();
+        let owner_field: Option<String> = model.fields.iter()
+            .find(|f| f.has_attribute("owner"))
+            .map(|f| crate::webgen::parser::to_camel_case(&f.name));
+
         writeln!(output).unwrap();
         writeln!(output, "impl backbone_orm::EntityRepoMeta for {name} {{").unwrap();
 
@@ -1155,6 +1166,21 @@ impl RustGenerator {
             writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
         }
         writeln!(output, "    }}").unwrap();
+
+        // private_fields() — only override when the model declares @private fields.
+        if !private_fields.is_empty() {
+            let joined: Vec<String> = private_fields.iter().map(|f| format!("\"{f}\"")).collect();
+            writeln!(output, "    fn private_fields() -> &'static [&'static str] {{").unwrap();
+            writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
+        // owner_field() — only override when the model declares an @owner column.
+        if let Some(of) = &owner_field {
+            writeln!(output, "    fn owner_field() -> Option<&'static str> {{").unwrap();
+            writeln!(output, "        Some(\"{of}\")").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
 
         writeln!(output, "}}").unwrap();
     }
