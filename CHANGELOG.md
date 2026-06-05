@@ -5,6 +5,22 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.15] — 2026-06-05
+
+### Changed
+
+- **Webgen hook parser now accepts both hook authoring forms.** `parse_content`
+  tries the rich map-based form (`RawHookSchema`) first, and on failure falls
+  back to the canonical `parse_hook_yaml_flexible` parser — which also accepts
+  the list/sequence authoring form (`YamlHookSchema`). The canonical schema is
+  converted into webgen's `HookSchema` via two new helpers (`from_canonical`,
+  with `convert_canonical_state_machine` / `convert_canonical_permission`), and
+  the existing map-based path is factored into `build_from_raw`. This keeps
+  webgen aligned with the backend codegen: both now accept the same hook grammar,
+  so any authored `*.hook.yaml` parses in every generator regardless of which
+  spelling (map or list) it uses.
+  [`hook`](src/webgen/parser/hook.rs).
+
 ## [0.2.14] — 2026-06-05
 
 ### Changed

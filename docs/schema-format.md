@@ -554,6 +554,12 @@ are accepted:
           - type: log_event                      # `type` is an alias for `action`
 ```
 
+Both the rich map-based form shown above and the canonical list/sequence
+authoring form are accepted everywhere `*.hook.yaml` is consumed. The webgen
+generator tries the map form first and falls back to the canonical flexible
+parser, so it accepts exactly the same hook grammar as the backend codegen — an
+authored hook parses in every generator regardless of which spelling it uses.
+
 ---
 
 ## Workflow YAML Format
