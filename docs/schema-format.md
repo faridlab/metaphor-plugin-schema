@@ -329,6 +329,7 @@ Used in the legacy DSL format and in relation `attributes` arrays:
 | `@soft_delete` | Enable soft-delete on model. On the Kotlin side, when paired with an `@audit_metadata` field, the entity gains a derived `val isDeleted: Boolean get() = metadata["deleted_at"] != null` helper. If the schema also declares an explicit `is_deleted` column, the helper is suppressed (the column wins) so there is exactly one canonical `isDeleted` property. | - |
 | `@hashed` | Field is stored hashed (e.g., passwords) | `password string @hashed` |
 | `@audit_metadata` | JSONB audit metadata field. On the Kotlin side this is emitted as the `Metadata` typealias (`Map<String, JsonElement?>`), not raw `JsonElement` — see [generate-kotlin.md](./generate-kotlin.md). | - |
+| `@omit_if_none` | Omit this nullable field from the serialized response when its value is `None` (emits `#[serde(skip_serializing_if = "Option::is_none")]`). By default nullable fields serialize as explicit `null` for a stable response shape; use this attribute to opt out per field. | `deleted_at datetime? @omit_if_none` |
 
 ### Foreign Key Actions
 

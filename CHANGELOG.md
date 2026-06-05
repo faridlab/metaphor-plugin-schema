@@ -5,6 +5,20 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.16] — 2026-06-06
+
+### Changed
+
+- **Nullable response fields now serialize as explicit `null` by default.**
+  Previously every optional field on a generated DTO/entity response carried
+  `#[serde(skip_serializing_if = "Option::is_none")]`, so `None` values were
+  omitted from the JSON body entirely. The default is now reversed: nullable
+  fields serialize as present-with-`null`, giving typed clients a stable
+  response shape. Opt back into omission per field with the new `@omit_if_none`
+  attribute, for cases where absence is semantically meaningful. Applies to both
+  the response DTO generator and the entity serializer.
+  [`dto`](src/generators/dto.rs), [`rust`](src/generators/rust.rs).
+
 ## [0.2.15] — 2026-06-05
 
 ### Changed

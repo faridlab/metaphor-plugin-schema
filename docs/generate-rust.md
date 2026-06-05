@@ -318,6 +318,12 @@ Generates request/response DTOs with:
 - `use utoipa::ToSchema` imports are emitted under
   `#[cfg(feature = "openapi")]` so DTO modules compile without the
   `openapi` feature enabled.
+- **Nullable response fields serialize as explicit `null` by default.**
+  A nullable field whose value is `None` is rendered as `"field": null`
+  (present, not omitted), so typed clients see a stable response shape.
+  Opt a field out with the `@omit_if_none` attribute, which restores
+  `#[serde(skip_serializing_if = "Option::is_none")]` for that field. The
+  same rule governs the entity serializer in [`rust`](src/generators/rust.rs).
 
 ### `config` -- Module Configuration
 
