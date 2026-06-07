@@ -326,6 +326,15 @@ Generates request/response DTOs with:
   Opt a field out with the `@omit_if_none` attribute, which restores
   `#[serde(skip_serializing_if = "Option::is_none")]` for that field. The
   same rule governs the entity serializer in [`rust`](src/generators/rust.rs).
+- **Request DTOs accept snake_case input alongside the canonical camelCase
+  wire name.** `Create`/`Update`/`Patch{Entity}Dto` keep
+  `#[serde(rename_all = "camelCase")]` (so `providerId` remains the documented
+  format), but every multi-word field also gets
+  `#[serde(alias = "<snake_name>")]`, letting clients send `provider_id` or
+  `providerId` interchangeably. The alias is emitted only when the snake and
+  camel forms differ (i.e. multi-word fields). Response DTOs are unchanged —
+  output stays camelCase — so this is non-breaking.
+  [`dto`](src/generators/dto.rs).
 
 ### `config` -- Module Configuration
 
