@@ -275,7 +275,12 @@ impl DtoGenerator {
             };
 
             let field_name = escape_rust_keyword(&field.name);
-            writeln!(output, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+            // Accept snake_case input alongside the camelCase wire name.
+            let mut patch_attrs = vec!["skip_serializing_if = \"Option::is_none\"".to_string()];
+            if field.name.contains('_') {
+                patch_attrs.push(format!("alias = \"{}\"", field.name));
+            }
+            writeln!(output, "    #[serde({})]", patch_attrs.join(", ")).unwrap();
             writeln!(output, "    pub {}: {},", field_name, rust_type).unwrap();
         }
 
@@ -818,6 +823,12 @@ impl DtoGenerator {
         // AuditMetadata should default when not provided in request body
         if field.has_attribute("audit_metadata") {
             attrs.push("default".to_string());
+        }
+
+        // Accept snake_case input alongside the camelCase wire name, so clients
+        // may send either casing. Only needed when the two differ (multi-word).
+        if field.name.contains('_') {
+            attrs.push(format!("alias = \"{}\"", field.name));
         }
 
         attrs.join(", ")

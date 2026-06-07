@@ -5,6 +5,18 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.21] — 2026-06-08
+
+### Changed
+
+- **Generated request DTOs now accept snake_case input in addition to the
+  canonical camelCase wire name.** `Create`/`Update`/`Patch{Entity}Dto` keep
+  `#[serde(rename_all = "camelCase")]` (so `providerId` stays the documented
+  format) but each multi-word field also gets `#[serde(alias = "<snake_name>")]`,
+  letting clients send `provider_id` or `providerId` interchangeably. Response
+  DTOs are unchanged (output stays camelCase), so this is non-breaking. The alias
+  is emitted only when the snake and camel forms differ (multi-word fields).
+
 ## [0.2.20] — 2026-06-07
 
 ### Changed
