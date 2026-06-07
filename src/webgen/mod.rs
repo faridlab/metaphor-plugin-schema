@@ -5,6 +5,7 @@
 
 pub mod ast;
 pub mod config;
+pub(crate) mod custom_blocks;
 pub mod config_file;
 pub mod error;
 pub mod generator;
