@@ -222,6 +222,7 @@ The largest generator. Produces:
 - Audit metadata JSONB field support
 - State machine support in entity structs
 - Field-level security via `EntityRepoMeta::private_fields()` / `owner_field()` overrides, emitted from `@private` and `@owner` field attributes (camelCase response keys; pruned by backbone-core's `apply_field_security`)
+- `EntityRepoMeta::relations()` override emitted from `@one` relations that carry a `@foreign_key`, returning `&[(relation_name, target_table, local_fk)]` so handlers can expand sibling records via `?include=` (relation name and FK as camelCase response keys; target table from the target model's collection; only emitted when includable to-one relations exist)
 - PascalCase conversion for all type names
 
 ### `sql` -- PostgreSQL Migrations

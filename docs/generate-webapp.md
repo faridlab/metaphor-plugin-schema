@@ -113,6 +113,14 @@ Key properties:
   and adds a factory + type guards + a `{Entity}WithRelations` view.
 - **Manifest.** Writes a `metaphor.codegen.yaml` at the output root recording the
   generator-owned tree and reserving `user_owned:` globs for hand-written code.
+- **CUSTOM blocks survive regen.** The generated `{Entity}.schema.ts` emits a
+  `// <<< CUSTOM … // END CUSTOM` block; any content you author inside it (e.g. a
+  hand-written `listSchema`) is preserved across the next `schema generate:webapp`.
+  The merge keeps the generator's marker placement and substitutes only the block
+  body, matched by its open-marker header line — content *outside* the block is
+  always regenerated. A missing file or a file with no CUSTOM blocks is written
+  through unchanged. (Unlike the Rust `mod.rs` merge, this does not re-anchor
+  markers, which is correct for the fixed, generator-controlled spot in TS files.)
 
 ```bash
 # Generate pure contracts for the `bersihir` module into a webapp's

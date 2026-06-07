@@ -5,6 +5,40 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.19] — 2026-06-07
+
+### Added
+
+- **`// <<< CUSTOM … // END CUSTOM` blocks are preserved across webapp regen.**
+  The webapp generators emit these markers but write each file fresh, so any
+  hand-authored content inside a block (e.g. a `listSchema` added to a generated
+  `{Entity}.schema.ts`) was previously lost on the next `schema generate:webapp`.
+  A new `preserve_custom_blocks` merge keeps the **generator's marker placement**
+  and only substitutes each block's body, matched by its open-marker header line.
+  This differs from the Rust `mod.rs` merge — which re-anchors single-line markers
+  and would misfire on nested brace structures — and is correct for the TS schema
+  files, where the block sits at a fixed, generator-controlled spot. A missing
+  file or a file with no CUSTOM blocks passes through unchanged.
+  [`custom_blocks`](src/webgen/custom_blocks.rs),
+  [`entity_schema`](src/webgen/generators/domain/entity_schema.rs).
+
+## [0.2.18] — 2026-06-07
+
+### Added
+
+- **`EntityRepoMeta::relations()` emitted from to-one relations.** Each `@one`
+  relation that carries a `@foreign_key` and points at another model in the
+  schema is collected into a generated `relations()` override returning
+  `&[(relation_name, target_table, local_fk)]`. The relation name and local FK
+  are emitted as camelCase response keys; the target table comes from the target
+  model's collection name. This gives handlers the metadata to expand sibling
+  records via `?include=`. The override is only emitted when the model actually
+  declares includable to-one relations. The relation's `@foreign_key` is read
+  locally (accepting both `String` and `Ident` argument spellings) so a bare FK
+  name resolves here without widening the shared `Relation::foreign_key()` — which
+  would change FK-constraint emission in migration generation.
+  [`rust`](src/generators/rust.rs).
+
 ## [0.2.17] — 2026-06-06
 
 ### Added
