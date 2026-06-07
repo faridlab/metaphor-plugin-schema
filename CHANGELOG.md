@@ -5,6 +5,21 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20] — 2026-06-07
+
+### Changed
+
+- **CUSTOM-block preservation now applies to every webapp writer, not just the
+  TS schema files.** 0.2.19 preserved `// <<< CUSTOM … // END CUSTOM` blocks only
+  in the `{Entity}.schema.ts` path; every other generated file still went through
+  a plain `fs::write` and lost any hand-authored block content on regen. A new
+  drop-in `preserve_and_write` helper wraps `preserve_custom_blocks` + `fs::write`,
+  and every webgen writer (domain, application, infrastructure, presentation,
+  contracts) now calls it in place of `fs::write`. Behaviour is unchanged for
+  files that contain no CUSTOM markers — they are written through verbatim — so
+  this is a safe, uniform substitution rather than a per-file opt-in.
+  [`preserve_and_write`](src/webgen/custom_blocks.rs).
+
 ## [0.2.19] — 2026-06-07
 
 ### Added

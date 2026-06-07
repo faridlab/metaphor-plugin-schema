@@ -113,14 +113,19 @@ Key properties:
   and adds a factory + type guards + a `{Entity}WithRelations` view.
 - **Manifest.** Writes a `metaphor.codegen.yaml` at the output root recording the
   generator-owned tree and reserving `user_owned:` globs for hand-written code.
-- **CUSTOM blocks survive regen.** The generated `{Entity}.schema.ts` emits a
-  `// <<< CUSTOM … // END CUSTOM` block; any content you author inside it (e.g. a
-  hand-written `listSchema`) is preserved across the next `schema generate:webapp`.
-  The merge keeps the generator's marker placement and substitutes only the block
-  body, matched by its open-marker header line — content *outside* the block is
-  always regenerated. A missing file or a file with no CUSTOM blocks is written
-  through unchanged. (Unlike the Rust `mod.rs` merge, this does not re-anchor
-  markers, which is correct for the fixed, generator-controlled spot in TS files.)
+- **CUSTOM blocks survive regen — across every generated file.** Any generated
+  file may emit a `// <<< CUSTOM … // END CUSTOM` block; any content you author
+  inside it (e.g. a hand-written `listSchema` in `{Entity}.schema.ts`) is
+  preserved across the next `schema generate:webapp`. The merge keeps the
+  generator's marker placement and substitutes only the block body, matched by its
+  open-marker header line — content *outside* the block is always regenerated. A
+  missing file or a file with no CUSTOM blocks is written through unchanged.
+  (Unlike the Rust `mod.rs` merge, this does not re-anchor markers, which is
+  correct for the fixed, generator-controlled spots in the emitted files.)
+  Preservation is uniform: every webapp writer goes through a single
+  `preserve_and_write` helper — a drop-in replacement for `fs::write` — so the
+  domain, application, infrastructure, presentation, and contracts generators all
+  honour CUSTOM blocks identically, not just the schema files.
 
 ```bash
 # Generate pure contracts for the `bersihir` module into a webapp's
