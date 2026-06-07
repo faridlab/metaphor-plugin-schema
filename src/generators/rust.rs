@@ -1078,6 +1078,7 @@ impl RustGenerator {
         &self,
         model: &Model,
         enum_names: &std::collections::HashSet<String>,
+        collections: &std::collections::HashMap<String, String>,
         output: &mut String,
     ) {
         let name = &model.name;
@@ -1138,6 +1139,44 @@ impl RustGenerator {
             .find(|f| f.has_attribute("owner"))
             .map(|f| crate::webgen::parser::to_camel_case(&f.name));
 
+        // To-one relations expandable via `?include=` — (relation_name, target_table,
+        // local_fk). relation_name + local_fk are response keys (camelCase); the
+        // target table comes from the target model's collection.
+        let relations: Vec<(String, String, String)> = model
+            .relations
+            .iter()
+            .filter(|r| matches!(r.relation_type, crate::ast::model::RelationType::One))
+            .filter_map(|r| {
+                let target = match &r.target {
+                    TypeRef::Custom(n) => Some(n.as_str()),
+                    TypeRef::Optional(inner) => match inner.as_ref() {
+                        TypeRef::Custom(n) => Some(n.as_str()),
+                        _ => None,
+                    },
+                    _ => None,
+                }?;
+                let table = collections.get(target)?.clone();
+                // Read the relation's @foreign_key locally — a bare FK name parses as
+                // `Ident`, which the shared `Relation::foreign_key()` ignores (and we
+                // don't want to widen it: that would change FK-constraint emission in
+                // migration generation). Accept String or Ident here.
+                let fk = r
+                    .attributes
+                    .iter()
+                    .find(|a| a.name == "foreign_key")
+                    .and_then(|a| a.args.first())
+                    .and_then(|(_, v)| match v {
+                        AttributeValue::String(s) | AttributeValue::Ident(s) => Some(s.clone()),
+                        _ => None,
+                    })?;
+                Some((
+                    crate::webgen::parser::to_camel_case(&r.name),
+                    table,
+                    crate::webgen::parser::to_camel_case(&fk),
+                ))
+            })
+            .collect();
+
         writeln!(output).unwrap();
         writeln!(output, "impl backbone_orm::EntityRepoMeta for {name} {{").unwrap();
 
@@ -1179,6 +1218,17 @@ impl RustGenerator {
         if let Some(of) = &owner_field {
             writeln!(output, "    fn owner_field() -> Option<&'static str> {{").unwrap();
             writeln!(output, "        Some(\"{of}\")").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
+        // relations() — only override when the model has includable to-one relations.
+        if !relations.is_empty() {
+            let joined: Vec<String> = relations
+                .iter()
+                .map(|(n, t, fk)| format!("(\"{n}\", \"{t}\", \"{fk}\")"))
+                .collect();
+            writeln!(output, "    fn relations() -> &'static [(&'static str, &'static str, &'static str)] {{").unwrap();
+            writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
             writeln!(output, "    }}").unwrap();
         }
 
@@ -1389,7 +1439,14 @@ impl RustGenerator {
         {
             let enum_names: std::collections::HashSet<String> =
                 schema.schema.enums.iter().map(|e| e.name.clone()).collect();
-            self.generate_entity_repo_meta_impl(model, &enum_names, &mut output);
+            // entity name → DB table, so relations() can resolve a target's table.
+            let collections: std::collections::HashMap<String, String> = schema
+                .schema
+                .models
+                .iter()
+                .map(|m| (m.name.clone(), m.collection_name()))
+                .collect();
+            self.generate_entity_repo_meta_impl(model, &enum_names, &collections, &mut output);
         }
 
         // Generate builder struct for fluent entity construction
