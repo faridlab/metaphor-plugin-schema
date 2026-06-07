@@ -41,21 +41,21 @@ impl CommandGenerator {
         let create_path = commands_dir.join(format!("Create{}Command.ts", entity_pascal));
         result.add_file(create_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&create_path, create_cmd).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&create_path, create_cmd).ok();
         }
 
         let update_cmd = self.generate_update_command(entity);
         let update_path = commands_dir.join(format!("Update{}Command.ts", entity_pascal));
         result.add_file(update_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&update_path, update_cmd).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&update_path, update_cmd).ok();
         }
 
         let delete_cmd = self.generate_delete_command(entity);
         let delete_path = commands_dir.join(format!("Delete{}Command.ts", entity_pascal));
         result.add_file(delete_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&delete_path, delete_cmd).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&delete_path, delete_cmd).ok();
         }
 
         // Generate commands index
@@ -63,7 +63,7 @@ impl CommandGenerator {
         let index_path = commands_dir.join("index.ts");
         result.add_file(index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&index_path, index_content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&index_path, index_content).ok();
         }
 
         Ok(result)

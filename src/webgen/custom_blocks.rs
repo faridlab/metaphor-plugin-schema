@@ -91,6 +91,19 @@ pub(crate) fn preserve_custom_blocks(generated: &str, existing_path: &Path) -> S
     result
 }
 
+/// Drop-in replacement for `fs::write` in the webapp generators: writes
+/// `content` to `path` after re-injecting any `// <<< CUSTOM … // END CUSTOM`
+/// block bodies from the existing file, so hand-authored block content survives
+/// regeneration. Files without CUSTOM markers are written unchanged.
+pub(crate) fn preserve_and_write<P: AsRef<Path>, C: AsRef<str>>(
+    path: P,
+    content: C,
+) -> std::io::Result<()> {
+    let path = path.as_ref();
+    let merged = preserve_custom_blocks(content.as_ref(), path);
+    std::fs::write(path, merged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

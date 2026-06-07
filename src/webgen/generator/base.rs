@@ -307,7 +307,7 @@ impl Generator {
             // For now, just overwrite
         }
 
-        fs::write(path, content)
+        crate::webgen::custom_blocks::preserve_and_write(path, content)
             .map_err(|e| Error::write_error(path.clone(), e))?;
 
         if create_index {
@@ -337,7 +337,7 @@ impl Generator {
             if !content.contains(&export_line) {
                 content.push_str(&export_line);
                 content.push('\n');
-                fs::write(&index_path, content)
+                crate::webgen::custom_blocks::preserve_and_write(&index_path, content)
                     .map_err(|e| Error::write_error(index_path.clone(), e))?;
             }
         }

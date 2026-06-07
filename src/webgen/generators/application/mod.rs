@@ -95,7 +95,7 @@ impl ApplicationGenerator {
 
         result.add_file(index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&index_path, index_content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&index_path, index_content).ok();
         }
 
         Ok(())

@@ -41,7 +41,7 @@ impl SpecificationGenerator {
         result.add_file(path.clone(), self.config.dry_run);
 
         if !self.config.dry_run {
-            fs::write(&path, content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&path, content).ok();
         }
 
         Ok(result)

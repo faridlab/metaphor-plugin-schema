@@ -51,7 +51,7 @@ impl PageConfigGenerator {
         result.add_file(file_path.clone(), self.config.dry_run);
 
         if !self.config.dry_run {
-            fs::write(&file_path, content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&file_path, content).ok();
         }
 
         Ok(result)
@@ -436,7 +436,7 @@ r#"  {{
         result.add_file(file_path.clone(), self.config.dry_run);
 
         if !self.config.dry_run {
-            fs::write(&file_path, content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&file_path, content).ok();
         }
 
         Ok(result)
@@ -540,7 +540,7 @@ export function {entity_pascal}ListPage() {{
         result.add_file(file_path.clone(), self.config.dry_run);
 
         if !self.config.dry_run {
-            fs::write(&file_path, content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&file_path, content).ok();
         }
 
         Ok(result)

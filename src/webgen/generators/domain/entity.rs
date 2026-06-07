@@ -48,7 +48,7 @@ impl EntityGenerator {
         result.add_file(entity_path.clone(), self.config.dry_run);
 
         if !self.config.dry_run {
-            fs::write(&entity_path, entity_content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&entity_path, entity_content).ok();
         }
 
         // Generate enum types if any are used by this entity
@@ -60,7 +60,7 @@ impl EntityGenerator {
                 result.add_file(enum_path.clone(), self.config.dry_run);
 
                 if !self.config.dry_run {
-                    fs::write(&enum_path, enum_content).ok();
+                    crate::webgen::custom_blocks::preserve_and_write(&enum_path, enum_content).ok();
                 }
             }
         }

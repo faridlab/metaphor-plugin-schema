@@ -217,7 +217,7 @@ user_owned:
             if let Some(parent) = manifest_path.parent() {
                 fs::create_dir_all(parent).ok();
             }
-            fs::write(&manifest_path, manifest).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&manifest_path, manifest).ok();
             result.files_generated.push(manifest_path);
         }
         Ok(())
@@ -234,7 +234,7 @@ user_owned:
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).ok();
             }
-            fs::write(&path, content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&path, content).ok();
             result.files_generated.push(path);
         }
     }

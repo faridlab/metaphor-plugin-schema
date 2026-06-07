@@ -41,14 +41,14 @@ impl QueryGenerator {
         let get_path = queries_dir.join(format!("Get{}Query.ts", entity_pascal));
         result.add_file(get_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&get_path, get_query).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&get_path, get_query).ok();
         }
 
         let list_query = self.generate_list_query(entity);
         let list_path = queries_dir.join(format!("List{}Query.ts", entity_pascal));
         result.add_file(list_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&list_path, list_query).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&list_path, list_query).ok();
         }
 
         // Generate queries index
@@ -56,7 +56,7 @@ impl QueryGenerator {
         let index_path = queries_dir.join("index.ts");
         result.add_file(index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&index_path, index_content).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&index_path, index_content).ok();
         }
 
         Ok(result)

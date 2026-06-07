@@ -752,7 +752,7 @@ export type {}EnumValue = typeof {}Enum[number];
             // TODO: Implement custom section preservation
         }
 
-        fs::write(path, content)
+        crate::webgen::custom_blocks::preserve_and_write(path, content)
             .map_err(|e| Error::write_error(path.clone(), e))?;
 
         Ok(())

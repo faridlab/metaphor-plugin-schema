@@ -53,9 +53,7 @@ impl EntitySchemaGenerator {
             // Preserve any `// <<< CUSTOM … // END CUSTOM` block authored in the
             // existing file (e.g. a hand-written `listSchema`) across regen — the
             // generator emits the markers but the content lives only on disk.
-            let merged =
-                crate::webgen::custom_blocks::preserve_custom_blocks(&schema_content, &schema_path);
-            fs::write(&schema_path, merged).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&schema_path, &schema_content).ok();
         }
 
         Ok(result)

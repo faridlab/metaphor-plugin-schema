@@ -240,7 +240,7 @@ impl DomainGenerator {
             if let Some(parent) = entity_index_path.parent() {
                 fs::create_dir_all(parent).ok();
             }
-            fs::write(&entity_index_path, entity_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&entity_index_path, entity_index).ok();
             result.files_generated.push(entity_index_path);
         }
 
@@ -256,7 +256,7 @@ impl DomainGenerator {
                 if let Some(parent) = index_path.parent() {
                     fs::create_dir_all(parent).ok();
                 }
-                fs::write(&index_path, index_content).ok();
+                crate::webgen::custom_blocks::preserve_and_write(&index_path, index_content).ok();
                 result.files_generated.push(index_path);
             }
         }
@@ -268,7 +268,7 @@ impl DomainGenerator {
         if self.config.dry_run {
             result.dry_run_files.push(module_index_path);
         } else {
-            fs::write(&module_index_path, module_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&module_index_path, module_index).ok();
             result.files_generated.push(module_index_path);
         }
 

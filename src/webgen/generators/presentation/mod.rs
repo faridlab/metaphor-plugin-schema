@@ -130,7 +130,7 @@ impl PresentationGenerator {
 
         result.add_file(forms_index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&forms_index_path, forms_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&forms_index_path, forms_index).ok();
         }
 
         // Generate tables index
@@ -149,7 +149,7 @@ impl PresentationGenerator {
 
         result.add_file(tables_index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&tables_index_path, tables_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&tables_index_path, tables_index).ok();
         }
 
         // Generate pages index
@@ -167,7 +167,7 @@ impl PresentationGenerator {
 
         result.add_file(pages_index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&pages_index_path, pages_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&pages_index_path, pages_index).ok();
         }
 
         // Generate configs index for generic templates
@@ -186,7 +186,7 @@ impl PresentationGenerator {
 
         result.add_file(configs_index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            fs::write(&configs_index_path, configs_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&configs_index_path, configs_index).ok();
         }
 
         Ok(())
