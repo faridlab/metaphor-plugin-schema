@@ -311,6 +311,13 @@ Generates OpenAPI 3.0 specs with:
 > so a module that opts out of the `openapi` cargo feature still compiles
 > without pulling `utoipa` into its dependency graph.
 
+> **Schema placement** — per-model schemas (`{Model}`, `Create{Model}Request`,
+> `{Model}List`, etc.) are written under `components.schemas`, so every
+> `#/components/schemas/{Model}` `$ref` resolves. They are emitted *before* the
+> common `parameters`/`responses`/`requestBodies` sections; writing them after
+> would nest them under `requestBodies` and leave every entity ref dangling in
+> Swagger UI (fixed in 0.2.22).
+
 ### `dto` -- Data Transfer Objects
 
 Generates request/response DTOs with:
