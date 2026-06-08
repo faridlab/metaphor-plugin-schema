@@ -87,13 +87,17 @@ impl OpenApiGenerator {
         writeln!(output, "components:").unwrap();
         writeln!(output, "  schemas:").unwrap();
 
-        // Common schemas
-        self.write_common_schemas(&mut output)?;
-
-        // Model schemas
+        // Model schemas FIRST. `write_common_schemas` closes `schemas:` and opens
+        // sibling `parameters:`/`responses:`/`requestBodies:` sections, so emitting
+        // the model schemas after it would nest them under `requestBodies` instead
+        // of `schemas` — leaving every `#/components/schemas/{Model}` $ref dangling.
         for model in &schema.schema.models {
             self.write_model_schemas(&mut output, model)?;
         }
+
+        // Common schemas (PaginationMeta, Error) + shared parameters/responses/
+        // requestBodies. Must come AFTER the model schemas (see note above).
+        self.write_common_schemas(&mut output)?;
 
         // Security schemes
         writeln!(output, "  securitySchemes:").unwrap();

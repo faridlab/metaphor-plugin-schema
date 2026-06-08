@@ -5,6 +5,20 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.22] — 2026-06-08
+
+### Fixed
+
+- **OpenAPI generator emitted model schemas in the wrong place, leaving every
+  `#/components/schemas/{Model}` $ref dangling.** `generate_spec` opened
+  `components.schemas`, then called `write_common_schemas` (which closes
+  `schemas:` and opens sibling `parameters:`/`responses:`/`requestBodies:`),
+  and only *then* wrote the per-model schemas — so `Account`, `CreateAccountRequest`,
+  `{Model}List`, etc. nested under `requestBodies` instead of `schemas`. Swagger UI
+  reported "Could not resolve reference" for every entity. Fixed by writing the
+  model schemas BEFORE the common sections, so all schema definitions sit under
+  `components.schemas`. The generated spec now resolves with zero dangling refs.
+
 ## [0.2.21] — 2026-06-08
 
 ### Changed
