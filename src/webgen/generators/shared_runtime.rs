@@ -263,6 +263,22 @@ async function handle<R>(res: Response): Promise<R> {
   return res.json() as Promise<R>;
 }
 
+/**
+ * Single-entity endpoints wrap the row in a `{ success, data }` envelope — the
+ * same shape as the list `{ success, data, meta }` minus pagination. Unwrap to
+ * the bare entity so callers (detail/edit forms) bind real fields, not envelope
+ * keys. Tolerates a already-bare entity for forward-compat.
+ */
+async function handleEntity<T>(res: Response): Promise<T> {
+  const body = await handle<T | { success: boolean; data: T; error?: string }>(res);
+  if (body && typeof body === 'object' && 'data' in body && 'success' in body) {
+    const env = body as { success: boolean; data: T; error?: string };
+    if (!env.success) throw new CrudApiError(env.error || 'Request failed', 500, 'REQUEST_FAILED');
+    return env.data;
+  }
+  return body as T;
+}
+
 function toPaginated<T>(res: PaginatedApiResponse<T>): PaginatedResponse<T> {
   if (!res.success) throw new CrudApiError(res.error || 'Failed to fetch', 500, 'FETCH_FAILED');
   const { data, meta } = res;
@@ -297,7 +313,7 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
   }
 
   async getById(id: string): Promise<T> {
-    return handle<T>(await httpRequest(this.url(`/${id}`), { method: 'GET', headers: this.headers() }));
+    return handleEntity<T>(await httpRequest(this.url(`/${id}`), { method: 'GET', headers: this.headers() }));
   }
 
   async getAll(params?: Q, filters?: F): Promise<PaginatedResponse<T>> {
@@ -310,19 +326,19 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
   }
 
   async create(input: C): Promise<T> {
-    return handle<T>(
+    return handleEntity<T>(
       await httpRequest(this.url(''), { method: 'POST', headers: this.headers(), body: JSON.stringify(input) }),
     );
   }
 
   async update(id: string, input: U): Promise<T> {
-    return handle<T>(
+    return handleEntity<T>(
       await httpRequest(this.url(`/${id}`), { method: 'PUT', headers: this.headers(), body: JSON.stringify(input) }),
     );
   }
 
   async patch(id: string, input: Partial<U>): Promise<T> {
-    return handle<T>(
+    return handleEntity<T>(
       await httpRequest(this.url(`/${id}`), { method: 'PATCH', headers: this.headers(), body: JSON.stringify(input) }),
     );
   }
@@ -365,7 +381,7 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
   }
 
   async upsert(input: C): Promise<T> {
-    return handle<T>(
+    return handleEntity<T>(
       await httpRequest(this.url('/upsert'), {
         method: 'POST',
         headers: this.headers(),
@@ -421,11 +437,11 @@ export abstract class SoftDeleteCrudApiClient<T, C, U, Q = unknown, F = unknown>
   }
 
   async getDeletedById(id: string): Promise<T> {
-    return handle<T>(await httpRequest(this.url(`/trash/${id}`), { method: 'GET', headers: this.headers() }));
+    return handleEntity<T>(await httpRequest(this.url(`/trash/${id}`), { method: 'GET', headers: this.headers() }));
   }
 
   async restore(id: string): Promise<T> {
-    return handle<T>(await httpRequest(this.url(`/${id}/restore`), { method: 'POST', headers: this.headers() }));
+    return handleEntity<T>(await httpRequest(this.url(`/${id}/restore`), { method: 'POST', headers: this.headers() }));
   }
 
   async permanentDelete(id: string): Promise<void> {
