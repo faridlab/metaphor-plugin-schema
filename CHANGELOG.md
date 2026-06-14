@@ -5,6 +5,22 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.23] — 2026-06-15
+
+### Fixed
+
+- **Single-entity API client methods returned the raw `{ success, data }`
+  envelope instead of the bare entity, so detail/edit forms bound to envelope
+  keys instead of real fields.** List endpoints were already unwrapped via
+  `toPaginated`, but `getById`, `create`, `update`, `patch`, `upsert`,
+  `getDeletedById`, and `restore` passed the response straight through `handle<T>`,
+  leaking the server's `{ success, data }` wrapper. Added a `handleEntity<T>`
+  helper to the shared runtime that unwraps the `{ success, data }` envelope
+  (the list shape minus pagination), throwing `CrudApiError` when `success` is
+  false, and tolerating an already-bare entity for forward-compat. All
+  single-entity `BaseCrudApiClient` / `SoftDeleteCrudApiClient` methods now route
+  through it, so callers receive the entity directly.
+
 ## [0.2.22] — 2026-06-08
 
 ### Fixed

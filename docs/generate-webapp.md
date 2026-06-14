@@ -234,6 +234,15 @@ Operations that return affected entities resolve to a `BulkResult<T>` envelope
 (`items`, `total`, `failed`, `errors`); count-only operations return a small
 count object.
 
+Single-entity responses are unwrapped automatically. The server wraps one row in
+a `{ success, data }` envelope (the list `{ success, data, meta }` shape minus
+pagination), so `getById`, `create`, `update`, `patch`, `upsert`,
+`getDeletedById`, and `restore` route through a `handleEntity<T>` helper that
+returns the bare entity (throwing `CrudApiError` when `success` is false). Detail
+and edit forms therefore bind real entity fields, not envelope keys. The helper
+tolerates an already-bare entity, so a backend that returns the row unwrapped
+still works.
+
 For soft-deletable entities (see [Soft delete](schema-format.md#soft-delete)),
 the runtime also emits the trash surface — `listDeleted`, `restore`,
 `emptyTrash` (`DELETE /empty`), and `permanentDelete` — exported per entity as
