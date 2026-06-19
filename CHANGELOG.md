@@ -5,6 +5,21 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.24] — 2026-06-19
+
+### Fixed
+
+- **Cross-module foreign keys were schema-qualified with the module name
+  (`REFERENCES sapiens.users`), so the constraint failed to create.** A relation
+  whose target lives in another module (e.g. `@foreign_key(sapiens.User.id)`)
+  emitted `REFERENCES <module>.<table>`, treating the module name as a Postgres
+  schema. Modules are composed into a single schema (`public`), so that
+  reference points at a schema that doesn't exist — and because migration
+  runners typically don't stop on error, the `ALTER TABLE … ADD CONSTRAINT …`
+  failed silently and the foreign key was never created. The SQL generator now
+  emits the bare, conventionally-derived table name (`REFERENCES users`) for
+  cross-module references, so the reference resolves via the search path.
+
 ## [0.2.23] — 2026-06-15
 
 ### Fixed

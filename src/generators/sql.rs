@@ -1258,11 +1258,18 @@ fn get_relation_target_table(type_ref: &TypeRef, schema: &crate::ast::ModuleSche
         }
         TypeRef::Array(inner) => get_relation_target_table(inner, schema),
         TypeRef::Optional(inner) => get_relation_target_table(inner, schema),
-        TypeRef::ModuleRef { module, name } => {
-            // For cross-module references, we can't look up the actual model
-            // since it's in a different module. Use the module-qualified table name.
-            // We need to properly pluralize the name.
-            format!("{}.{}", module, pluralize(&to_snake_case(name)))
+        TypeRef::ModuleRef { name, .. } => {
+            // For cross-module references we can't look up the target model (it
+            // lives in another module), so derive the table name by convention.
+            //
+            // Do NOT schema-qualify with the module name. Modules are composed
+            // into a single Postgres schema (`public`); a `module.table`
+            // reference points at a schema that doesn't exist, so the generated
+            // `REFERENCES module.table` ALTER fails silently (the migration
+            // runner does not stop on error) and the foreign key is never
+            // created. Emit the bare, conventionally-derived table name so the
+            // reference resolves via the search path.
+            pluralize(&to_snake_case(name))
         }
         _ => "unknown".to_string(),
     }
@@ -1650,6 +1657,62 @@ mod tests {
             !output.files.keys().any(|p| p.to_string_lossy().contains("add_foreign_keys")),
             "expected no global add_foreign_keys file when there are no FK cycles, got files: {:?}",
             output.files.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_cross_module_foreign_key_is_not_schema_qualified() {
+        // A cross-module relation target (e.g. `sapiens.User`) must emit an
+        // UNqualified table name in the FK. Modules are composed into a single
+        // Postgres schema (`public`); `REFERENCES sapiens.users` points at a
+        // schema that doesn't exist, so the ALTER fails silently and the
+        // constraint is never created. Regression guard for that bug.
+        let mut post_model = Model::new("Post");
+        post_model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "author_id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![],
+                ..Default::default()
+            },
+        ];
+        // Cross-module relation: author lives in the `sapiens` module.
+        post_model.relations.push(crate::ast::Relation {
+            name: "author".to_string(),
+            target: TypeRef::ModuleRef { module: "sapiens".to_string(), name: "User".to_string() },
+            relation_type: RelationType::One,
+            attributes: vec![],
+            ..Default::default()
+        });
+
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(post_model);
+        let resolved = ResolvedSchema { schema };
+
+        let generator = SqlGenerator::new().with_split(true);
+        let output = generator.generate(&resolved).unwrap();
+
+        let all: String = output
+            .files
+            .values()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all.contains("FOREIGN KEY (author_id) REFERENCES users"),
+            "expected unqualified `REFERENCES users`, got:\n{}",
+            all
+        );
+        assert!(
+            !all.contains("REFERENCES sapiens.users"),
+            "cross-module FK must not be schema-qualified, got:\n{}",
+            all
         );
     }
 
