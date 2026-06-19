@@ -230,7 +230,13 @@ The largest generator. Produces:
 Generates SQL migration scripts with:
 - `CREATE TABLE IF NOT EXISTS` statements
 - All field constraints (NOT NULL, UNIQUE, DEFAULT)
-- Foreign key constraints with ON DELETE/UPDATE actions
+- Foreign key constraints with ON DELETE/UPDATE actions. Cross-module
+  references (e.g. `@foreign_key(sapiens.User.id)`) emit the bare, conventionally
+  derived target table name (`REFERENCES users`), **not** a schema-qualified
+  `REFERENCES sapiens.users`. The module name is not a Postgres schema — modules
+  are composed into a single schema (`public`) — so the unqualified reference
+  resolves via the search path. (A qualified name would point at a non-existent
+  schema and the `ADD CONSTRAINT` would fail silently, leaving the FK uncreated.)
 - GIN indexes for JSONB audit metadata
 - Composite and single-field indexes
 - Partial indexes via `@where(...)` (audit-metadata keys auto-rewritten to JSONB form)
