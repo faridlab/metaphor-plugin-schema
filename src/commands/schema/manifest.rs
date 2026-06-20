@@ -22,6 +22,35 @@ use std::path::Path;
 struct CodegenManifest {
     #[serde(default)]
     user_owned: Vec<String>,
+    #[serde(default)]
+    openapi_vendor: Option<OpenapiVendor>,
+}
+
+/// `openapi_vendor` section of `metaphor.codegen.yaml`. Declares where a consumer
+/// app wants its composed modules' generated OpenAPI specs copied to, so they can
+/// be embedded and served via Swagger UI. Consumed by `schema openapi-collect`.
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct OpenapiVendor {
+    /// Destination directory for the vendored specs, relative to the app root.
+    pub dest: String,
+    /// Module names to vendor (e.g. `backbone-sapiens`). Empty = the app's
+    /// `depends_on` from `metaphor.yaml`.
+    #[serde(default)]
+    pub modules: Vec<String>,
+}
+
+/// Load the `openapi_vendor` section from `metaphor.codegen.yaml` in `output_dir`,
+/// or `None` when the manifest or the section is absent.
+pub(super) fn load_openapi_vendor(output_dir: &Path) -> Result<Option<OpenapiVendor>> {
+    let manifest_path = output_dir.join("metaphor.codegen.yaml");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let manifest: CodegenManifest = serde_yaml::from_str(&raw)
+        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+    Ok(manifest.openapi_vendor)
 }
 
 /// Load `metaphor.codegen.yaml` from `output_dir` and compile its

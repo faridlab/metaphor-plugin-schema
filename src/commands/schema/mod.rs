@@ -10,6 +10,7 @@ mod merge;
 mod migration_cmd;
 mod migrations;
 mod module_loader;
+mod openapi_collect;
 mod parse;
 mod validate;
 mod watch;
@@ -245,6 +246,13 @@ pub enum SchemaAction {
         /// Module name (auto-detected from CWD if omitted)
         module: Option<String>,
     },
+    /// Vendor composed modules' generated OpenAPI specs into a consumer app
+    /// (for serving via Swagger UI). Reads the `openapi_vendor` section of the
+    /// app's `metaphor.codegen.yaml`. Run from the app directory.
+    OpenapiCollect {
+        /// Consumer app/project name (auto-detected from CWD if omitted)
+        module: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, clap::ValueEnum)]
@@ -304,6 +312,9 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         SchemaAction::Doctor { module } => {
             let module = resolve_module_arg(module, "schema doctor")?;
             execute_doctor(&module)
+        }
+        SchemaAction::OpenapiCollect { module } => {
+            openapi_collect::execute_openapi_collect(module)
         }
     }
 }
