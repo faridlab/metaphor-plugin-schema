@@ -38,13 +38,13 @@ impl AuditTriggersGenerator {
         // Generate triggers for each model with audit_metadata
         let mut has_triggers = false;
         for model in &schema.schema.models {
-            if let Some((field_name, table_name)) = self.get_audit_metadata_field(model) {
+            if let Some(field_name) = self.audit_metadata_field(model) {
                 has_triggers = true;
                 writeln!(output, "-- ==============================================================================").unwrap();
-                writeln!(output, "-- Table: {} ({})", model.name, table_name).unwrap();
+                writeln!(output, "-- Table: {} ({})", model.name, model.qualified_table_name()).unwrap();
                 writeln!(output, "-- ==============================================================================").unwrap();
                 writeln!(output).unwrap();
-                self.generate_trigger_sql(&mut output, &table_name, field_name)?;
+                self.generate_trigger_sql(&mut output, model, field_name)?;
                 writeln!(output).unwrap();
             }
         }
@@ -56,21 +56,29 @@ impl AuditTriggersGenerator {
         Ok(output)
     }
 
-    /// Get the audit metadata field and table name for a model
-    fn get_audit_metadata_field<'a>(&self, model: &'a Model) -> Option<(&'a str, String)> {
-        for field in &model.fields {
-            if field.has_attribute("audit_metadata") {
-                return Some((field.name.as_str(), model.collection_name()));
-            }
-        }
-        None
+    /// Get the audit metadata field name for a model, if any.
+    fn audit_metadata_field<'a>(&self, model: &'a Model) -> Option<&'a str> {
+        model
+            .fields
+            .iter()
+            .find(|f| f.has_attribute("audit_metadata"))
+            .map(|f| f.name.as_str())
     }
 
-    /// Generate trigger SQL for a single table
-    fn generate_trigger_sql(&self, output: &mut String, table_name: &str, field_name: &str) -> Result<(), GenerateError> {
-        let trigger_func_name = format!("{}_audit_timestamp", table_name);
-        let insert_trigger_name = format!("{}_insert_audit", table_name);
-        let update_trigger_name = format!("{}_update_audit", table_name);
+    /// Generate trigger SQL for a single table.
+    ///
+    /// The table reference is schema-qualified and the audit function is
+    /// qualified into the table's schema (so two same-named tables in different
+    /// schemas don't collide on one `public` function). Trigger *names* stay
+    /// bare — Postgres scopes them to their table. This mirrors
+    /// `SqlGenerator::generate_audit_triggers` so the standalone migration and
+    /// the inline CREATE TABLE migration agree.
+    fn generate_trigger_sql(&self, output: &mut String, model: &Model, field_name: &str) -> Result<(), GenerateError> {
+        let qualified_table = model.qualified_table_name();
+        let bare = model.collection_name();
+        let trigger_func_name = model.audit_function_name();
+        let insert_trigger_name = format!("{}_insert_audit", bare);
+        let update_trigger_name = format!("{}_update_audit", bare);
 
         writeln!(output, "-- Function to set {} timestamps", field_name).unwrap();
         writeln!(output, "CREATE OR REPLACE FUNCTION {}() RETURNS trigger AS $$", trigger_func_name).unwrap();
@@ -87,14 +95,14 @@ impl AuditTriggersGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "-- Trigger to set timestamps on INSERT").unwrap();
-        writeln!(output, "DROP TRIGGER IF EXISTS {} ON {};", insert_trigger_name, table_name).unwrap();
-        writeln!(output, "CREATE TRIGGER {} BEFORE INSERT ON {}", insert_trigger_name, table_name).unwrap();
+        writeln!(output, "DROP TRIGGER IF EXISTS {} ON {};", insert_trigger_name, qualified_table).unwrap();
+        writeln!(output, "CREATE TRIGGER {} BEFORE INSERT ON {}", insert_trigger_name, qualified_table).unwrap();
         writeln!(output, "    FOR EACH ROW EXECUTE FUNCTION {}();", trigger_func_name).unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "-- Trigger to set updated_at on UPDATE").unwrap();
-        writeln!(output, "DROP TRIGGER IF EXISTS {} ON {};", update_trigger_name, table_name).unwrap();
-        writeln!(output, "CREATE TRIGGER {} BEFORE UPDATE ON {}", update_trigger_name, table_name).unwrap();
+        writeln!(output, "DROP TRIGGER IF EXISTS {} ON {};", update_trigger_name, qualified_table).unwrap();
+        writeln!(output, "CREATE TRIGGER {} BEFORE UPDATE ON {}", update_trigger_name, qualified_table).unwrap();
         writeln!(output, "    FOR EACH ROW EXECUTE FUNCTION {}();", trigger_func_name).unwrap();
 
         Ok(())
@@ -245,6 +253,52 @@ mod tests {
         // Check that jsonb_set is used for timestamps
         assert!(content.contains("jsonb_set(NEW.metadata::jsonb, '{created_at}', to_jsonb(NOW()))"));
         assert!(content.contains("jsonb_set(NEW.metadata::jsonb, '{updated_at}', to_jsonb(NOW()))"));
+    }
+
+    #[test]
+    fn test_audit_triggers_schema_qualified_table_and_function() {
+        // A schema-scoped model must emit a function qualified into its schema
+        // and trigger ON clauses against the qualified table, while the trigger
+        // *names* stay bare — matching SqlGenerator::generate_audit_triggers.
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(Model {
+            name: "Doc".to_string(),
+            collection: Some("docs".to_string()),
+            schema: Some("sapiens".to_string()),
+            fields: vec![
+                Field {
+                    name: "id".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                    attributes: vec![Attribute::new("id")],
+                    ..Default::default()
+                },
+                Field {
+                    name: "metadata".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::Json),
+                    attributes: vec![Attribute::new("audit_metadata")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let resolved = ResolvedSchema { schema };
+        let output = AuditTriggersGenerator::new().generate(&resolved).unwrap();
+        // 1 model + 0 enums => index = 0 + 1 + 2 = 3.
+        let content = output
+            .files
+            .get(&PathBuf::from("migrations/20260426220003_add_audit_triggers.up.sql"))
+            .unwrap();
+
+        // Function lives in the table's schema (no public collision).
+        assert!(content.contains("CREATE OR REPLACE FUNCTION sapiens.docs_audit_timestamp()"), "got:\n{}", content);
+        assert!(content.contains("EXECUTE FUNCTION sapiens.docs_audit_timestamp()"), "got:\n{}", content);
+        // Trigger names stay bare; ON target is qualified.
+        assert!(content.contains("CREATE TRIGGER docs_insert_audit BEFORE INSERT ON sapiens.docs"), "got:\n{}", content);
+        assert!(content.contains("CREATE TRIGGER docs_update_audit BEFORE UPDATE ON sapiens.docs"), "got:\n{}", content);
+        // No bare, unqualified function/ON references leak through.
+        assert!(!content.contains("FUNCTION docs_audit_timestamp()"), "function must be schema-qualified, got:\n{}", content);
+        assert!(!content.contains("ON docs;"), "trigger ON target must be qualified, got:\n{}", content);
     }
 
     #[test]

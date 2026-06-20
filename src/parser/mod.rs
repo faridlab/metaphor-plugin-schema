@@ -230,8 +230,13 @@ pub fn parse_yaml_model(source: &str) -> Result<ModelFile, ParseError> {
             message: e.to_string(),
         })?;
 
-    // Convert YAML schema to ModelFile
-    let models = yaml_schema.models.into_iter().map(|m| m.into_model()).collect();
+    // Convert YAML schema to ModelFile, applying the file-level `schema:` default
+    let file_schema = yaml_schema.schema.clone();
+    let models = yaml_schema.models.into_iter().map(|m| {
+        let mut model = m.into_model();
+        model.apply_schema_default(&file_schema);
+        model
+    }).collect();
     let enums = yaml_schema.enums.into_iter().map(|e| e.into_enum()).collect();
 
     Ok(ModelFile {
@@ -313,7 +318,12 @@ pub fn parse_yaml_model_flexible(source: &str) -> Result<ModelParseResult, Parse
     match result {
         YamlModelParseResult::Model(yaml_schema) => {
             let yaml_schema = *yaml_schema;
-            let models = yaml_schema.models.into_iter().map(|m| m.into_model()).collect();
+            let file_schema = yaml_schema.schema.clone();
+            let models = yaml_schema.models.into_iter().map(|m| {
+                let mut model = m.into_model();
+                model.apply_schema_default(&file_schema);
+                model
+            }).collect();
             let enums = yaml_schema.enums.into_iter().map(|e| e.into_enum()).collect();
 
             Ok(ModelParseResult::Model(ModelFile {

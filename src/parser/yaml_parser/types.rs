@@ -23,6 +23,10 @@ pub struct YamlModelSchema {
     /// Models defined in this file
     #[serde(default)]
     pub models: Vec<YamlModel>,
+    /// File-level Postgres schema default — applies to every model in this file
+    /// that does not set its own `schema:`. `None` means the default (`public`).
+    #[serde(default)]
+    pub schema: Option<String>,
     /// Enums defined in this file
     #[serde(default)]
     pub enums: Vec<YamlEnum>,
@@ -110,6 +114,10 @@ pub struct YamlModel {
     /// Database collection/table name
     #[serde(default)]
     pub collection: Option<String>,
+    /// Postgres schema for this model's table. Overrides the file-level
+    /// `schema:` default. `None` means inherit the file default (else `public`).
+    #[serde(default)]
+    pub schema: Option<String>,
     /// Enable soft delete for this model
     #[serde(default)]
     pub soft_delete: Option<bool>,
@@ -653,6 +661,11 @@ pub struct YamlModelIndexSchema {
     /// Version
     #[serde(default)]
     pub version: Option<u32>,
+    /// Module-level Postgres schema default — applies to every model in this
+    /// module that does not set its own `schema:` (per-model or file-level).
+    /// `None` means the default (`public`).
+    #[serde(default)]
+    pub schema: Option<String>,
     /// Shared types available to all models in this module
     #[serde(default)]
     pub shared_types: IndexMap<String, YamlSharedType>,

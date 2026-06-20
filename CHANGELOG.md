@@ -5,6 +5,66 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.25] — 2026-06-20
+
+### Added
+
+- **Per-module Postgres schema scoping.** Models can now declare a Postgres
+  `schema:` so a module's tables live in their own namespace (`sapiens.*`,
+  `bucket.*`) instead of a flat `public`, removing cross-module table-name
+  collisions. Resolution order (most specific wins): per-model `schema:` →
+  file-level `schema:` (top of a `*.model.yaml`) → module-level `schema:`
+  (`index.model.yaml`) → none (= `public`, unchanged). An explicit empty string
+  (`schema: ""`) pins a model to `public`, overriding any inherited default —
+  used to keep shared kernel tables (`users`, RBAC) in `public` while the rest
+  of the module is scoped.
+  - `Model` gained `schema`, `qualified_table_name()`, and
+    `audit_function_name()`.
+  - The SQL generator emits `CREATE SCHEMA IF NOT EXISTS`, schema-qualified
+    `CREATE TABLE` / index `ON` / audit-trigger `ON` / `ALTER TABLE` / down
+    `DROP TABLE`, and qualifies the audit trigger function into the table's
+    schema. Index and trigger *names* stay bare (Postgres scopes them to the
+    table's schema automatically). Same-module FK `REFERENCES` targets are
+    schema-qualified; cross-module references stay bare and resolve via the
+    search path.
+  - Repository `TABLE_NAME` is schema-qualified (`backbone_orm` interpolates it
+    raw into `FROM`, so `schema.table` resolves directly).
+  - Requires the consumer connection pool's `search_path` to include the module
+    schema (`search_path = <module>, public`) for hand-written raw SQL.
+
+### Fixed
+
+- **The standalone audit-triggers generator ignored per-model schema, so its
+  migration disagreed with the inline `CREATE TABLE` triggers.**
+  `AuditTriggersGenerator` (the `audit-triggers` target, which emits a separate
+  "add triggers to already-migrated tables" migration) still produced bare
+  `CREATE FUNCTION <table>_audit_timestamp()` and `CREATE TRIGGER … ON <table>`.
+  For a schema-scoped model that function name collided across schemas in
+  `public`, and the `ON <table>` clause wouldn't resolve under the migration-time
+  `public` search path. It now emits the schema-qualified function
+  (`<schema>.<table>_audit_timestamp()`) and qualified `ON` targets while keeping
+  trigger names bare, matching `SqlGenerator::generate_audit_triggers`. Unscoped
+  models are unchanged.
+
+### Internal
+
+- Centralized the file/module schema-default fill into
+  `Model::apply_schema_default`, replacing four hand-rolled `if schema.is_none()`
+  copies across the parser (`converters.rs`, `parser/mod.rs`) and module loader.
+- Collapsed the duplicated FK target resolver into a single
+  `resolve_relation_target_table(…, qualify)` shared by the bare
+  (`get_relation_target_table`) and qualified variants, so only the `Custom` arm
+  differs.
+
+### Known limitations
+
+- Many-to-many join tables are not schema-scoped (tracked in the proposal).
+- The migration-diff snapshot is single-schema (keyed by the bare table name);
+  regenerate clean rather than diffing for schema-scoped modules.
+- The legacy `.model.schema` format does not inherit the module-level `schema:`.
+- Schema identifiers are interpolated without quoting/validation — use plain
+  snake_case names.
+
 ## [0.2.24] — 2026-06-19
 
 ### Fixed

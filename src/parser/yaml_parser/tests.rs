@@ -478,6 +478,50 @@ enums:
     }
 
     #[test]
+    fn test_schema_default_and_per_model_override() {
+        let yaml = r#"
+schema: sapiens
+models:
+  - name: Session
+    collection: sessions
+    fields:
+      id: uuid
+  - name: User
+    collection: users
+    schema: identity
+    fields:
+      id: uuid
+  - name: AuditLog
+    collection: audit_logs
+    schema: ""
+    fields:
+      id: uuid
+"#;
+        let schema = parse_model_yaml_str(yaml).unwrap();
+        assert_eq!(schema.schema.as_deref(), Some("sapiens"));
+
+        let models = schema.into_models();
+        // Inherits the file-level default.
+        assert_eq!(models[0].schema.as_deref(), Some("sapiens"));
+        assert_eq!(models[0].qualified_table_name(), "sapiens.sessions");
+        // Per-model schema overrides the file default.
+        assert_eq!(models[1].qualified_table_name(), "identity.users");
+        // Explicit empty string overrides the default and means public (bare).
+        assert_eq!(models[2].qualified_table_name(), "audit_logs");
+    }
+
+    #[test]
+    fn test_index_schema_field_parses() {
+        // Module-level `schema:` in index.model.yaml is captured for use as the
+        // module-wide default (applied in module_loader to models without one).
+        let index = parse_model_index_yaml_str(
+            "module: bucket\nversion: 2\nschema: bucket\nshared_types: {}\n",
+        ).unwrap();
+        assert_eq!(index.module.as_deref(), Some("bucket"));
+        assert_eq!(index.schema.as_deref(), Some("bucket"));
+    }
+
+    #[test]
     fn test_file_level_types_with_shared_types_context() {
         // File-level types work together with module-level shared types
         let yaml = r#"

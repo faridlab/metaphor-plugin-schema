@@ -14,6 +14,13 @@ pub struct Model {
     pub name: String,
     /// Database collection/table name
     pub collection: Option<String>,
+    /// Postgres schema this model's table lives in. `None` (or empty) means the
+    /// default schema (`public`). When set, the table, its FK references, audit
+    /// trigger function, and `CREATE SCHEMA` prelude are schema-qualified;
+    /// index and trigger *names* stay bare (Postgres scopes them to the table's
+    /// schema automatically).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// Model fields
     pub fields: Vec<Field>,
     /// Model relations
@@ -47,6 +54,42 @@ impl Model {
         self.collection
             .clone()
             .unwrap_or_else(|| to_snake_case_plural(&self.name))
+    }
+
+    /// Schema-qualified table name (`schema.collection`) when a non-empty schema
+    /// is set, otherwise the bare collection name.
+    ///
+    /// Use this anywhere SQL references the *table* (CREATE TABLE, ALTER TABLE,
+    /// FK REFERENCES target, trigger `ON` clause). Keep [`Self::collection_name`]
+    /// for derived identifiers (index / trigger names) — Postgres scopes those to
+    /// the table's schema automatically, so they must stay unqualified.
+    pub fn qualified_table_name(&self) -> String {
+        match self.schema.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => format!("{}.{}", s, self.collection_name()),
+            None => self.collection_name(),
+        }
+    }
+
+    /// Name of the audit trigger function for this model, schema-qualified so
+    /// two same-named tables in different schemas don't collide on a single
+    /// `public` function (e.g. `sapiens.notification_preferences_audit_timestamp`
+    /// vs `public.notification_preferences_audit_timestamp`).
+    pub fn audit_function_name(&self) -> String {
+        match self.schema.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => format!("{}.{}_audit_timestamp", s, self.collection_name()),
+            None => format!("{}_audit_timestamp", self.collection_name()),
+        }
+    }
+
+    /// Fill in this model's Postgres schema from a default (file-level or
+    /// module-level) when the model didn't set its own. A per-model `schema:`
+    /// always wins; an explicit empty string counts as "set" (means `public`)
+    /// and is left untouched, so the resolution order is
+    /// per-model → file-level → module-level → none.
+    pub fn apply_schema_default(&mut self, default: &Option<String>) {
+        if self.schema.is_none() {
+            self.schema = default.clone();
+        }
     }
 
     /// Find a field by name

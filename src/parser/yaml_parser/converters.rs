@@ -52,9 +52,14 @@ impl YamlModelSchema {
     pub fn into_models(self) -> Vec<Model> {
         // Convert file-level types to IndexMap format
         let file_types = self.types_as_indexmap();
+        let file_schema = self.schema.clone();
         self.models
             .into_iter()
-            .map(|m| m.into_model_with_context(&IndexMap::new(), &file_types))
+            .map(|m| {
+                let mut model = m.into_model_with_context(&IndexMap::new(), &file_types);
+                model.apply_schema_default(&file_schema);
+                model
+            })
             .collect()
     }
 
@@ -65,9 +70,14 @@ impl YamlModelSchema {
     ) -> Vec<Model> {
         // Convert file-level types to IndexMap format
         let file_types = self.types_as_indexmap();
+        let file_schema = self.schema.clone();
         self.models
             .into_iter()
-            .map(|m| m.into_model_with_context(shared_types, &file_types))
+            .map(|m| {
+                let mut model = m.into_model_with_context(shared_types, &file_types);
+                model.apply_schema_default(&file_schema);
+                model
+            })
             .collect()
     }
 
@@ -143,6 +153,7 @@ impl YamlModel {
     ) -> Model {
         let mut model = Model::new(&self.name);
         model.collection = self.collection.clone();
+        model.schema = self.schema.clone();
 
         // Add soft_delete attribute if enabled in YAML schema
         if self.soft_delete == Some(true) {
