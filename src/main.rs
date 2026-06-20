@@ -13,6 +13,13 @@ fn main() -> Result<()> {
             kotlin::run(action)?;
         }
 
+        // Shortcut: openapi-collect → same as `schema openapi-collect`. Exists at
+        // top level so the `metaphor` orchestrator (which forwards
+        // `metaphor schema <X>` as `metaphor-schema <X>`) can reach it.
+        Commands::OpenapiCollect { module } => {
+            schema::execute(schema::SchemaAction::OpenapiCollect { module })?;
+        }
+
         // Shortcut: generate:rust → same as `schema generate`. The MODULE
         // arg is optional here too; the inner SchemaAction::Generate dispatch
         // applies the same auto-detect-or-error logic.

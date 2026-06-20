@@ -34,6 +34,21 @@ pub enum Commands {
         action: kotlin::KotlinAction,
     },
 
+    /// Vendor composed modules' generated OpenAPI specs into a consumer app
+    /// (alias for `schema openapi-collect`).
+    ///
+    /// Example: metaphor schema openapi-collect
+    ///
+    /// Reads the `openapi_vendor` section of the app's `metaphor.codegen.yaml`
+    /// and copies each module's generated `schema/openapi/openapi.yaml` into the
+    /// app (for serving via Swagger UI). Run from the app directory; MODULE is
+    /// auto-detected from CWD when omitted.
+    #[command(name = "openapi-collect")]
+    OpenapiCollect {
+        /// Consumer app/project name (auto-detected from CWD if omitted)
+        module: Option<String>,
+    },
+
     /// Generate server-side Rust code (alias for `schema generate`)
     ///
     /// Example: metaphor-schema generate:rust bersihir --target all
