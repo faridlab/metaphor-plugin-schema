@@ -141,6 +141,14 @@ impl Model {
 | `sql.rs:229–231` | trigger/func names from `collection_name` | **keep bare** (`collection_name`) |
 | `sql.rs:270` | `idx_{collection_name}_…` | **keep bare** for the identifier; `ON {qualified_table_name}` |
 | `sql.rs:551/1156` (FK) | `REFERENCES {target.collection_name}` | `REFERENCES {target.qualified_table_name}` |
+| `seeder.rs:135/385` | seed `INSERT/SELECT/DELETE` use `model.collection` | `model.qualified_table_name()` (seeds always reference the table) |
+
+Checked and intentionally left bare (not table references in the SQL sense):
+- `integration_test.rs` uses the collection only for the REST endpoint path
+  (`/api/v1/{collection}`) — a URL, must NOT be schema-qualified.
+- `event_store.rs` uses fixed infra table names (`domain_events`,
+  `aggregate_snapshots`, runtime-overridable via `with_table_name`), not per-model
+  collections — out of scope for per-model schema scoping.
 
 Plus migration prelude: when any model in the module has a schema, emit
 `CREATE SCHEMA IF NOT EXISTS {schema};` ahead of the `CREATE TABLE`s (mirrors the
