@@ -18,6 +18,7 @@ Complete reference for all `metaphor schema` commands, flags, and options.
 | `metaphor schema changed` | Show which schema files have changed (git-aware) |
 | `metaphor schema status` | Show schema drift between definitions and database |
 | `metaphor schema doctor` | Find hand-written references to handlers the generator won't emit |
+| `metaphor schema openapi-collect` | Vendor composed modules' generated OpenAPI specs into a consumer app |
 
 ---
 
@@ -539,6 +540,60 @@ metaphor schema doctor
 
 # Check a specific module
 metaphor schema doctor sapiens
+```
+
+---
+
+## `metaphor schema openapi-collect`
+
+Vendor composed modules' generated OpenAPI specs into a consumer app so it can
+serve them from a single Swagger UI.
+
+A consumer (typically a `backend-service`) composes several modules' routers but
+exposes one Swagger UI. Each module generates its own
+`schema/openapi/openapi.yaml`; this command **copies** those specs into the app
+(not references them) so they can be embedded with `include_str!` and offered as
+additional Swagger specs. A copy is required because the service's build context
+is usually just the app directory — sibling `modules/` aren't reachable at build
+time.
+
+Run it from the app directory (or pass the app name). Rebuild the app afterward
+to embed the refreshed specs.
+
+```bash
+metaphor schema openapi-collect [MODULE]
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `MODULE` | Consumer app/project name (auto-detected from CWD if omitted) |
+
+### Configuration
+
+Driven by an `openapi_vendor` section in the app's `metaphor.codegen.yaml`:
+
+```yaml
+openapi_vendor:
+  dest: src/presentation/http/openapi          # destination dir, relative to the app root
+  modules: [backbone-sapiens, backbone-bucket] # optional; defaults to the app's depends_on
+```
+
+Each module's spec lands at `<dest>/<short>.openapi.yaml`, where `<short>` is the
+module name with any `backbone-` prefix stripped (e.g. `backbone-sapiens` →
+`sapiens.openapi.yaml`). A module whose `schema/openapi/openapi.yaml` is missing
+is skipped with a warning (generate it first with
+`metaphor schema generate --target openapi --force`).
+
+### Examples
+
+```bash
+# Collect specs for the app owning the current directory
+metaphor schema openapi-collect
+
+# Collect specs for a named app
+metaphor schema openapi-collect bersihir-service
 ```
 
 ---

@@ -5,6 +5,37 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.27] — 2026-06-20
+
+### Added
+
+- **`schema openapi-collect` — vendor composed modules' OpenAPI specs into a
+  consumer app.** A consumer (typically a `backend-service`) composes several
+  modules' routers but serves a single Swagger UI. Each module generates its own
+  `schema/openapi/openapi.yaml`; this command copies them into the app so they
+  can be embedded with `include_str!` and offered as additional Swagger specs. A
+  copy (not a reference) is required because the service's build context is
+  usually just the app directory — sibling `modules/` aren't reachable at build
+  time.
+  - Driven by an `openapi_vendor` section in the app's `metaphor.codegen.yaml`:
+    `dest` (destination dir relative to the app root) and an optional `modules`
+    list (defaults to the app's `depends_on` from `metaphor.yaml`).
+  - Each spec lands at `<dest>/<short>.openapi.yaml`, where `<short>` strips any
+    `backbone-` prefix (`backbone-sapiens` → `sapiens.openapi.yaml`). Modules
+    missing a generated spec are skipped with a warning.
+  - Run from the app directory (or pass the app name); rebuild the app afterward
+    to embed the refreshed specs.
+
+## [0.2.26] — 2026-06-20
+
+### Fixed
+
+- **Seeders ignored per-model schema, so seeds targeted the wrong table under a
+  scoped module.** The seeder generator emitted bare `INSERT` / `SELECT` /
+  `DELETE` against the table name, which resolved to `public` instead of the
+  model's declared schema. Seed statements are now schema-qualified, matching the
+  migration and repository generators. Unscoped models are unchanged.
+
 ## [0.2.25] — 2026-06-20
 
 ### Added
