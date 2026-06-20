@@ -98,7 +98,6 @@ impl RepositoryGenerator {
         let mut output = String::new();
         let name = &model.name;
         let snake_name = to_snake_case(name);
-        let table_name = model.collection_name();
         let has_soft_delete = model.has_soft_delete();
         let delete_mode = if has_soft_delete { "SoftDelete" } else { "HardDelete" };
 
@@ -162,8 +161,11 @@ impl RepositoryGenerator {
         writeln!(output).unwrap();
 
         // ── Table name constant ───────────────────────────────────────────────
+        // Schema-qualified when the model declares a `schema:` — the ORM
+        // interpolates this raw into `FROM {}`, so `schema.table` resolves
+        // directly without relying on search_path.
         writeln!(output, "/// Table name for {name} entities").unwrap();
-        writeln!(output, "pub const TABLE_NAME: &str = \"{table_name}\";").unwrap();
+        writeln!(output, "pub const TABLE_NAME: &str = \"{}\";", model.qualified_table_name()).unwrap();
         writeln!(output).unwrap();
 
         // ── Newtype struct ────────────────────────────────────────────────────
