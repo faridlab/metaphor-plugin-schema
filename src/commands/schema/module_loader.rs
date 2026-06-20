@@ -37,6 +37,9 @@ pub(super) fn build_module_schema(
 
     // First pass: collect shared_types from index files
     let mut resolved_shared_types: IndexMap<String, IndexMap<String, YamlField>> = IndexMap::new();
+    // Module-level Postgres schema default (from `index.model.yaml` → `schema:`),
+    // applied to any model that doesn't set its own (per-model or file-level).
+    let mut module_schema_default: Option<String> = None;
 
     for file in schema_files {
         let content = fs::read_to_string(file)
@@ -53,6 +56,7 @@ pub(super) fn build_module_schema(
                     if let Some(config) = &index_schema.config {
                         module_schema.generators_config = config.generators.clone();
                     }
+                    module_schema_default = index_schema.schema.clone();
                     resolved_shared_types = resolve_shared_types(&index_schema.shared_types);
                 }
                 Ok(ModelParseResult::Model(_)) => {
@@ -241,7 +245,13 @@ pub(super) fn build_module_schema(
                     );
 
                     // Convert models with shared-types context (for `extends` and JSONB support)
-                    let models = yaml_schema.into_models_with_context(&resolved_shared_types);
+                    let mut models = yaml_schema.into_models_with_context(&resolved_shared_types);
+                    // Apply the module-level schema default last: per-model and
+                    // file-level `schema:` have already been resolved, so only
+                    // models still without a schema inherit the module default.
+                    for model in &mut models {
+                        model.apply_schema_default(&module_schema_default);
+                    }
                     for model in models {
                         if module_schema
                             .models
