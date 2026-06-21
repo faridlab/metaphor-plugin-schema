@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-21
+
 ### Fixed
 
 - **Event-store generator now schema-qualifies its tables.** The repository,
