@@ -146,9 +146,12 @@ impl Model {
 Checked and intentionally left bare (not table references in the SQL sense):
 - `integration_test.rs` uses the collection only for the REST endpoint path
   (`/api/v1/{collection}`) — a URL, must NOT be schema-qualified.
-- `event_store.rs` uses fixed infra table names (`domain_events`,
-  `aggregate_snapshots`, runtime-overridable via `with_table_name`), not per-model
-  collections — out of scope for per-model schema scoping.
+
+`event_store.rs` was originally left out of scope (its `domain_events` /
+`aggregate_snapshots` / `projector_positions` are fixed infra table names, not
+per-model collections), but a scoped module whose connection pool runs without
+`public` on its `search_path` still needs these resolved. As of 0.3.1 it is
+schema-qualified too — see "Event-store generator" under Known limitations.
 
 Plus migration prelude: when any model in the module has a schema, emit
 `CREATE SCHEMA IF NOT EXISTS {schema};` ahead of the `CREATE TABLE`s (mirrors the
@@ -244,6 +247,15 @@ The `schema:` DSL key is implemented and tested in this crate:
    string raw, so a reserved word or non-snake_case name would emit invalid DDL
    that a non-stopping runner swallows. Use plain snake_case schema names; add a
    parse-time check if user-supplied schemas ever become untrusted.
+6. ~~**Event-store generator emits bare infra table names.**~~ **RESOLVED
+   (0.3.1).** The event-store generator hard-coded `domain_events`,
+   `aggregate_snapshots` (as `table_name` defaults) and `projector_positions`
+   (in the projector-position queries) without a schema prefix, so a scoped
+   module whose pool ran without `public` on its `search_path` failed at runtime
+   with `relation "..." does not exist`. It now derives the module schema from
+   the resolved models (`EventStoreGenerator::schema_prefix` — first non-empty
+   `model.schema`) and prefixes all three; modules targeting `public` still emit
+   bare names. Tested both paths.
 
 ## Out of scope (already handled)
 
