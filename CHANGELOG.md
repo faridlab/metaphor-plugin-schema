@@ -5,6 +5,20 @@ All notable changes to `metaphor-plugin-schema` are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Event-store generator now schema-qualifies its tables.** The repository,
+  seeder, and migration generators already emit `schema.table` for modules that
+  isolate their tables in a dedicated Postgres schema, but the event-store
+  generator still emitted bare names: the `domain_events` / `aggregate_snapshots`
+  table-name defaults and the hard-coded `projector_positions` references. When
+  the module's schema isn't on the connection's `search_path`, generated event
+  sourcing code failed with `relation "..." does not exist`. The generator now
+  derives the module schema from the resolved models and prefixes all three, with
+  bare names preserved for modules targeting `public`.
+
 ## [0.2.27] — 2026-06-20
 
 ### Added

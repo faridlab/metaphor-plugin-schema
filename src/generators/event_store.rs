@@ -32,6 +32,19 @@ impl EventStoreGenerator {
         Self
     }
 
+    /// Schema prefix (`"<schema>."`) shared by this module's tables, derived
+    /// from the resolved models (which all carry the module's Postgres schema
+    /// after default resolution). Empty when the module targets `public`, so
+    /// event-store tables land in the same schema as the migrations that
+    /// create them instead of defaulting to an unqualified name.
+    fn schema_prefix(models: &[&Model]) -> String {
+        models
+            .iter()
+            .find_map(|m| m.schema.as_deref().filter(|s| !s.is_empty()))
+            .map(|s| format!("{}.", s))
+            .unwrap_or_default()
+    }
+
     /// Collect all snapshot configurations from event sourced entities
     fn collect_snapshot_configs<'a>(
         &self,
@@ -182,8 +195,9 @@ impl EventStoreGenerator {
     }
 
     /// Generate event store trait and implementation
-    fn generate_event_store(&self, _models: &[&Model]) -> String {
+    fn generate_event_store(&self, models: &[&Model]) -> String {
         let mut output = String::new();
+        let schema = Self::schema_prefix(models);
 
         writeln!(output, "//! Event Store").unwrap();
         writeln!(output, "//!").unwrap();
@@ -273,7 +287,7 @@ impl EventStoreGenerator {
         writeln!(output, "    pub fn new(pool: PgPool) -> Self {{").unwrap();
         writeln!(output, "        Self {{").unwrap();
         writeln!(output, "            pool,").unwrap();
-        writeln!(output, "            table_name: \"domain_events\".to_string(),").unwrap();
+        writeln!(output, "            table_name: \"{}domain_events\".to_string(),", schema).unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -448,7 +462,7 @@ impl EventStoreGenerator {
         // get_projector_position implementation
         writeln!(output, "    async fn get_projector_position(&self, projector_name: &str) -> Result<i64> {{").unwrap();
         writeln!(output, "        let query = \"SELECT COALESCE(").unwrap();
-        writeln!(output, "            (SELECT last_position FROM projector_positions WHERE projector_name = $1),").unwrap();
+        writeln!(output, "            (SELECT last_position FROM {}projector_positions WHERE projector_name = $1),", schema).unwrap();
         writeln!(output, "            0").unwrap();
         writeln!(output, "        )\";").unwrap();
         writeln!(output).unwrap();
@@ -463,7 +477,7 @@ impl EventStoreGenerator {
 
         // save_projector_position implementation
         writeln!(output, "    async fn save_projector_position(&self, projector_name: &str, position: i64) -> Result<()> {{").unwrap();
-        writeln!(output, "        let query = \"INSERT INTO projector_positions (projector_name, last_position, updated_at)").unwrap();
+        writeln!(output, "        let query = \"INSERT INTO {}projector_positions (projector_name, last_position, updated_at)", schema).unwrap();
         writeln!(output, "            VALUES ($1, $2, NOW())").unwrap();
         writeln!(output, "            ON CONFLICT (projector_name) DO UPDATE SET").unwrap();
         writeln!(output, "            last_position = EXCLUDED.last_position,").unwrap();
@@ -492,10 +506,11 @@ impl EventStoreGenerator {
     /// Generate snapshot store
     fn generate_snapshot_store(
         &self,
-        _models: &[&Model],
+        models: &[&Model],
         snapshot_configs: &[(&String, &SnapshotConfig)],
     ) -> String {
         let mut output = String::new();
+        let schema = Self::schema_prefix(models);
 
         writeln!(output, "//! Snapshot Store").unwrap();
         writeln!(output, "//!").unwrap();
@@ -563,7 +578,7 @@ impl EventStoreGenerator {
         writeln!(output, "    pub fn new(pool: PgPool) -> Self {{").unwrap();
         writeln!(output, "        Self {{").unwrap();
         writeln!(output, "            pool,").unwrap();
-        writeln!(output, "            table_name: \"aggregate_snapshots\".to_string(),").unwrap();
+        writeln!(output, "            table_name: \"{}aggregate_snapshots\".to_string(),", schema).unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -921,5 +936,46 @@ mod tests {
         assert!(content.contains("SnapshotStrategy"));
         assert!(content.contains("every_n_events"));
         assert!(content.contains("should_snapshot"));
+    }
+
+    #[test]
+    fn test_event_store_tables_are_schema_qualified() {
+        let mut model = create_test_model();
+        model.schema = Some("sapiens".to_string());
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let output = EventStoreGenerator::new()
+            .generate(&ResolvedSchema { schema })
+            .unwrap();
+
+        let event_store = output
+            .files
+            .get(&PathBuf::from("src/infrastructure/event_store/event_store.rs"))
+            .unwrap();
+        // Default table and the hard-coded projector table both carry the schema.
+        assert!(event_store.contains("\"sapiens.domain_events\""));
+        assert!(event_store.contains("FROM sapiens.projector_positions"));
+        assert!(event_store.contains("INSERT INTO sapiens.projector_positions"));
+        assert!(!event_store.contains("FROM projector_positions"));
+
+        let snapshot_store = output
+            .files
+            .get(&PathBuf::from("src/infrastructure/event_store/snapshot_store.rs"))
+            .unwrap();
+        assert!(snapshot_store.contains("\"sapiens.aggregate_snapshots\""));
+    }
+
+    #[test]
+    fn test_event_store_tables_unqualified_without_schema() {
+        // A module targeting `public` (no schema) keeps bare table names.
+        let output = EventStoreGenerator::new()
+            .generate(&create_test_schema())
+            .unwrap();
+        let event_store = output
+            .files
+            .get(&PathBuf::from("src/infrastructure/event_store/event_store.rs"))
+            .unwrap();
+        assert!(event_store.contains("\"domain_events\""));
+        assert!(event_store.contains("INSERT INTO projector_positions"));
     }
 }
