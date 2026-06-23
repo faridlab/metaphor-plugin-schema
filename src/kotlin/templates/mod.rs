@@ -200,9 +200,9 @@ interface {{entity_name}}Repository {
 pub const API_CLIENT_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
-import {{base_package}}.core.api.BaseCrudApiClient
+import {{framework base_package}}.core.api.BaseCrudApiClient
 import {{base_package}}.infrastructure.pagination.BackendPaginatedResponse
-import {{base_package}}.infrastructure.pagination.BackendSingleResponse
+import {{framework base_package}}.infrastructure.pagination.BackendSingleResponse
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.statement.*
@@ -247,12 +247,12 @@ pub const OFFLINE_REPOSITORY_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
 import {{api_package}}.{{entity_name}}ApiClient
-import {{base_package}}.domain.types.Result
-import {{base_package}}.infrastructure.cache.CacheTTL
-import {{base_package}}.infrastructure.database.dao.CacheDao
-import {{base_package}}.infrastructure.network.ConnectivityMonitor
+import {{framework base_package}}.domain.types.Result
+import {{framework base_package}}.infrastructure.cache.CacheTTL
+import {{framework base_package}}.infrastructure.database.dao.CacheDao
+import {{framework base_package}}.infrastructure.network.ConnectivityMonitor
 import {{base_package}}.infrastructure.pagination.PaginatedApiResponse
-import {{base_package}}.infrastructure.repository.OfflineFirstRepository
+import {{framework base_package}}.infrastructure.repository.OfflineFirstRepository
 import kotlinx.serialization.encodeToString
 
 /**
@@ -411,11 +411,11 @@ pub const VIEWMODEL_TEMPLATE: &str = r#"package {{package}}
 import {{entity_package}}.{{entity_name}}
 import {{mapper_package}}.{{entity_name}}DTO
 import {{mapper_package}}.{{entity_name}}Mapper
-import {{base_package}}.core.usecase.CrudUseCases
-import {{base_package}}.core.viewmodel.BaseCrudListViewModel
-import {{base_package}}.core.viewmodel.CrudListEffect
-import {{base_package}}.core.viewmodel.CrudListIntent
-import {{base_package}}.core.viewmodel.CrudListState
+import {{framework base_package}}.core.usecase.CrudUseCases
+import {{framework base_package}}.core.viewmodel.BaseCrudListViewModel
+import {{framework base_package}}.core.viewmodel.CrudListEffect
+import {{framework base_package}}.core.viewmodel.CrudListIntent
+import {{framework base_package}}.core.viewmodel.CrudListState
 
 // Backward-compatible typealiases — existing UI code can keep using these names
 typealias {{entity_name}}ListState = CrudListState<{{entity_name}}DTO>
@@ -538,7 +538,7 @@ fun {{entity_name}}LazyList(
 pub const USECASE_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
-import {{base_package}}.core.usecase.CrudUseCases
+import {{framework base_package}}.core.usecase.CrudUseCases
 
 /**
  * {{entity_name}} use cases — thin typealias over CrudUseCases<{{entity_name}}>
@@ -559,8 +559,8 @@ import {{application_base_package}}.mappers.{{entity_name}}DTO
 import {{application_base_package}}.mappers.{{entity_name}}FormData
 import {{application_base_package}}.mappers.{{entity_name}}Mapper
 import {{application_base_package}}.validators.{{entity_name}}Validator
-import {{base_package}}.core.service.BaseCrudService
-import {{base_package}}.core.usecase.CrudUseCases
+import {{framework base_package}}.core.service.BaseCrudService
+import {{framework base_package}}.core.usecase.CrudUseCases
 
 /**
  * {{entity_name}} Application Service
@@ -582,10 +582,10 @@ class {{entity_name}}Service(
 pub const MAPPER_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
-import {{base_package}}.core.mapper.BaseEntityMapper
-import {{base_package}}.core.mapper.ListDTO
+import {{framework base_package}}.core.mapper.BaseEntityMapper
+import {{framework base_package}}.core.mapper.ListDTO
 {{#if needs_required}}
-import {{base_package}}.core.mapper.required
+import {{framework base_package}}.core.mapper.required
 {{/if}}
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
@@ -674,11 +674,11 @@ fun {{entity_name}}.asDTO(): {{entity_name}}DTO = {{entity_name}}Mapper().toDto(
 pub const VALIDATOR_TEMPLATE: &str = r#"package {{package}}
 
 import {{mapper_package}}.{{entity_name}}FormData
-import {{base_package}}.core.validator.BaseEntityValidator
-import {{base_package}}.core.validator.ValidationResult
-import {{base_package}}.core.validator.applyRules
-import {{base_package}}.core.validator.requiredString
-import {{base_package}}.core.validator.maxLength
+import {{framework base_package}}.core.validator.BaseEntityValidator
+import {{framework base_package}}.core.validator.ValidationResult
+import {{framework base_package}}.core.validator.applyRules
+import {{framework base_package}}.core.validator.requiredString
+import {{framework base_package}}.core.validator.maxLength
 
 /**
  * {{entity_name}} Validator
@@ -915,8 +915,8 @@ data class BackendPaginatedResponse<T>(
 /// Validator unit test template
 pub const VALIDATOR_TEST_TEMPLATE: &str = r#"package {{package}}
 
-import {{base_package}}.application.{{module_lower}}.validators.{{entity_name}}Validator
-import {{base_package}}.application.{{module_lower}}.mappers.{{entity_name}}FormData
+import {{base_package}}.{{module_lower}}.application.validators.{{entity_name}}Validator
+import {{base_package}}.{{module_lower}}.application.mappers.{{entity_name}}FormData
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -971,8 +971,8 @@ class {{entity_name}}ValidatorTest {
 /// MVI ListViewModel unit test template
 pub const VIEWMODEL_TEST_TEMPLATE: &str = r#"package {{package}}
 
-import {{base_package}}.domain.{{module_lower}}.entity.{{entity_name}}
-import {{base_package}}.presentation.state.{{module_lower}}.{{entity_name}}ListViewModel
+import {{base_package}}.{{module_lower}}.domain.entity.{{entity_name}}
+import {{base_package}}.{{module_lower}}.presentation.state.{{entity_name}}ListViewModel
 import com.bersihir.core.test.FakeCrudRepository
 import com.bersihir.core.usecase.toUseCases
 import com.bersihir.core.viewmodel.CrudListIntent
@@ -1077,8 +1077,8 @@ class {{entity_name}}ListViewModelTest {
 /// Ktor MockEngine API client test template (3C)
 pub const API_CLIENT_TEST_TEMPLATE: &str = r#"package {{package}}
 
-import {{base_package}}.infrastructure.{{module_lower}}.api.{{entity_name}}ApiClient
-import {{base_package}}.domain.{{module_lower}}.entity.{{entity_name}}
+import {{base_package}}.{{module_lower}}.infrastructure.api.{{entity_name}}ApiClient
+import {{base_package}}.{{module_lower}}.domain.entity.{{entity_name}}
 import com.bersihir.domain.types.Result
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -1185,10 +1185,10 @@ pub const SYNC_HANDLER_TEMPLATE: &str = r#"package {{package}}
 import {{entity_package}}.{{entity_name}}
 import {{mapper_package}}.{{entity_name}}FormData
 import {{api_package}}.{{entity_name}}ApiClient
-import {{base_package}}.domain.types.Result
-import {{base_package}}.infrastructure.sync.PullResult
-import {{base_package}}.infrastructure.sync.PushResult
-import {{base_package}}.infrastructure.sync.SyncEntityHandler
+import {{framework base_package}}.domain.types.Result
+import {{framework base_package}}.infrastructure.sync.PullResult
+import {{framework base_package}}.infrastructure.sync.PushResult
+import {{framework base_package}}.infrastructure.sync.SyncEntityHandler
 import kotlinx.serialization.json.Json
 
 /**

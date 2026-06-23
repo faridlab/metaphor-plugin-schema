@@ -126,7 +126,7 @@ impl EntityData {
                     } else {
                         "common"
                     };
-                    let enum_import = format!("{}.domain.{}.enums.{}", base_package, module_name, type_name);
+                    let enum_import = format!("{}.{}.domain.enums.{}", base_package, module_name, type_name);
                     if !imports.iter().any(|i| i.ends_with(type_name)) {
                         imports.push(enum_import);
                     }
@@ -206,7 +206,7 @@ impl EntityData {
     /// Outputs to: domain/{module}/entity/{Entity}.kt
     pub fn relative_path(&self, module_name: &str) -> String {
         format!(
-            "domain/{}/entity/{}.kt",
+            "{}/domain/entity/{}.kt",
             module_name,
             self.name
         )
@@ -313,7 +313,7 @@ fn generate_entity(
     // Format: {base_package}.domain.{module}.entity
     let module_lower = module_name.to_lowercase();
     let base_package = &generator.package_name;
-    let package_name = format!("{}.domain.{}.entity", base_package, module_lower);
+    let package_name = format!("{}.{}.domain.entity", base_package, module_lower);
     let entity_data = EntityData::from_model_with_base(generator, model, &package_name, base_package)?;
 
     // Render the template

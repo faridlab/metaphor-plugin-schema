@@ -79,8 +79,8 @@ fn generate_repository(
     // Use package from generator
     let base_package = &generator.package_name;
     let module_lower = module_name.to_lowercase();
-    let package_name = format!("{}.domain.{}.repository", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
+    let package_name = format!("{}.{}.domain.repository", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
     let entity_name = model.name.clone();
 
     // Prepare template data
@@ -102,7 +102,7 @@ fn generate_repository(
 
     // Create output path: domain/{module}/repository/{Entity}Repository.kt
     let relative_path = format!(
-        "domain/{}/repository/{}Repository.kt",
+        "{}/domain/repository/{}Repository.kt",
         module_name,
         entity_name
     );

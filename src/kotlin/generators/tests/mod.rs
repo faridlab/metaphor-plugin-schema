@@ -57,7 +57,7 @@ fn generate_validator_test(
     let entity_name = model.name.clone();
 
     let package = format!(
-        "{}.application.{}.validators",
+        "{}.{}.application.validators",
         base_package, module_lower
     );
 
@@ -77,7 +77,7 @@ fn generate_validator_test(
         .map_err(|e| MobileGenError::template(format!("ValidatorTest template error: {}", e)))?;
 
     let relative_path = format!(
-        "application/{}/validators/{}ValidatorTest.kt",
+        "{}/application/validators/{}ValidatorTest.kt",
         module_name, entity_name
     );
 
@@ -99,7 +99,7 @@ fn generate_viewmodel_test(
     let entity_name = model.name.clone();
 
     let package = format!(
-        "{}.presentation.state.{}",
+        "{}.{}.presentation.state",
         base_package, module_lower
     );
 
@@ -124,7 +124,7 @@ fn generate_viewmodel_test(
         .map_err(|e| MobileGenError::template(format!("ViewModelTest template error: {}", e)))?;
 
     let relative_path = format!(
-        "presentation/state/{}/{}ListViewModelTest.kt",
+        "{}/presentation/state/{}ListViewModelTest.kt",
         module_name, entity_name
     );
 
@@ -146,7 +146,7 @@ fn generate_api_client_test(
     let entity_name = model.name.clone();
 
     let package = format!(
-        "{}.infrastructure.{}.api",
+        "{}.{}.infrastructure.api",
         base_package, module_lower
     );
 
@@ -174,7 +174,7 @@ fn generate_api_client_test(
         .map_err(|e| MobileGenError::template(format!("ApiClientTest template error: {}", e)))?;
 
     let relative_path = format!(
-        "infrastructure/{}/api/{}ApiClientTest.kt",
+        "{}/infrastructure/api/{}ApiClientTest.kt",
         module_name, entity_name
     );
 

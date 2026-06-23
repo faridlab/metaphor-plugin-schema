@@ -68,7 +68,7 @@ fn generate_nav_config(
     let base_package = &generator.package_name;
     let module_pascal = &schema.name;
     let module_lower = schema.name.to_lowercase();
-    let package = format!("{}.presentation.navigation", base_package);
+    let package = format!("{}.{}.presentation.navigation", base_package, module_lower);
 
     let entities: Vec<NavEntityData> = schema
         .models
@@ -98,7 +98,7 @@ fn generate_nav_config(
         .render("nav_config", &data)
         .map_err(|e| MobileGenError::template(format!("NavConfig template error: {}", e)))?;
 
-    let relative_path = format!("presentation/navigation/{}NavConfig.kt", module_pascal);
+    let relative_path = format!("{}/presentation/navigation/{}NavConfig.kt", module_lower, module_pascal);
 
     match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
         crate::kotlin::generators::WriteOutcome::Written(p) => Ok(Some(p)),
@@ -118,7 +118,7 @@ fn generate_deep_links(
     let base_package = &generator.package_name;
     let module_pascal = &schema.name;
     let module_lower = schema.name.to_lowercase();
-    let package = format!("{}.presentation.navigation", base_package);
+    let package = format!("{}.{}.presentation.navigation", base_package, module_lower);
 
     let entities: Vec<NavEntityData> = schema
         .models
@@ -133,7 +133,7 @@ fn generate_deep_links(
     let data = NavDeepLinkData {
         package,
         module_pascal: module_pascal.clone(),
-        module_lower,
+        module_lower: module_lower.clone(),
         entities,
     };
 
@@ -142,7 +142,7 @@ fn generate_deep_links(
         .render("nav_deep_link", &data)
         .map_err(|e| MobileGenError::template(format!("NavDeepLink template error: {}", e)))?;
 
-    let relative_path = format!("presentation/navigation/{}DeepLinks.kt", module_pascal);
+    let relative_path = format!("{}/presentation/navigation/{}DeepLinks.kt", module_lower, module_pascal);
 
     match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
         crate::kotlin::generators::WriteOutcome::Written(p) => Ok(Some(p)),
@@ -164,14 +164,14 @@ fn generate_entity_destination(
     let module_lower = module_name.to_lowercase();
     let entity_name = model.name.clone();
 
-    let package_name = format!("{}.presentation.navigation.{}", base_package, module_lower);
+    let package_name = format!("{}.{}.presentation.navigation", base_package, module_lower);
 
     let content = format!(
         r#"package {package}
 
-import {base}.domain.{module}.entity.{entity}
-import {base}.presentation.state.{module}.{entity}ListViewModel
-import {base}.core.usecase.CrudUseCases
+import {base}.{module}.domain.entity.{entity}
+import {base}.{module}.presentation.state.{entity}ListViewModel
+import {framework}.core.usecase.CrudUseCases
 
 /**
  * Navigation destination for {entity}.
@@ -193,12 +193,13 @@ class {entity}Destination(
 "#,
         package = package_name,
         base = base_package,
+        framework = generator.framework_package(),
         module = module_lower,
         entity = entity_name,
     );
 
     let relative_path = format!(
-        "presentation/navigation/{module_name}/{entity}Destination.kt",
+        "{module_name}/presentation/navigation/{entity}Destination.kt",
         entity = entity_name,
     );
 

@@ -138,13 +138,11 @@ fn generate_offline_repository(
     let entity_name = model.name.clone();
     let collection = model.collection_name();
 
-    // Offline repos live at infrastructure/repository/offline/, NOT under a
-    // per-module folder — this matches the existing consumer-codebase
-    // convention so all `Offline*Repository.kt` files share one DI lookup
-    // location.
-    let package = format!("{}.infrastructure.repository.offline", base_package);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
-    let api_package = format!("{}.infrastructure.{}.api", base_package, module_lower);
+    // Offline repos live at <module>/infrastructure/repository/offline/ so the
+    // whole generated tree is grouped module-first.
+    let package = format!("{}.{}.infrastructure.repository.offline", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
+    let api_package = format!("{}.{}.infrastructure.api", base_package, module_lower);
 
     let data = OfflineRepositoryData {
         base_package: base_package.clone(),
@@ -161,8 +159,8 @@ fn generate_offline_repository(
         .map_err(|e| MobileGenError::template(format!("OfflineRepository template error: {}", e)))?;
 
     let relative_path = format!(
-        "infrastructure/repository/offline/Offline{}Repository.kt",
-        entity_name
+        "{}/infrastructure/repository/offline/Offline{}Repository.kt",
+        module_lower, entity_name
     );
 
     match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
@@ -184,10 +182,10 @@ fn generate_sync_handler(
     let entity_name_lowercase = entity_name.to_lowercase();
     let collection = model.collection_name();
 
-    let package = format!("{}.infrastructure.{}.sync", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
-    let mapper_package = format!("{}.application.{}.mappers", base_package, module_lower);
-    let api_package = format!("{}.infrastructure.{}.api", base_package, module_lower);
+    let package = format!("{}.{}.infrastructure.sync", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
+    let mapper_package = format!("{}.{}.application.mappers", base_package, module_lower);
+    let api_package = format!("{}.{}.infrastructure.api", base_package, module_lower);
 
     let data = SyncHandlerData {
         base_package: base_package.clone(),
@@ -207,7 +205,7 @@ fn generate_sync_handler(
         .map_err(|e| MobileGenError::template(format!("SyncHandler template error: {}", e)))?;
 
     let relative_path = format!(
-        "infrastructure/{}/sync/{}SyncHandler.kt",
+        "{}/infrastructure/sync/{}SyncHandler.kt",
         module_name, entity_name
     );
 
@@ -227,8 +225,8 @@ fn generate_api_client(
     // Use package from generator
     let base_package = &generator.package_name;
     let module_lower = module_name.to_lowercase();
-    let package_name = format!("{}.infrastructure.{}.api", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
+    let package_name = format!("{}.{}.infrastructure.api", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
     let entity_name = model.name.clone();
     let entity_name_lowercase = entity_name.to_lowercase();
     let collection = model.collection_name();
@@ -252,7 +250,7 @@ fn generate_api_client(
 
     // Create output path: infrastructure/{module}/api/{Entity}ApiClient.kt
     let relative_path = format!(
-        "infrastructure/{}/api/{}ApiClient.kt",
+        "{}/infrastructure/api/{}ApiClient.kt",
         module_name,
         entity_name
     );
@@ -414,8 +412,8 @@ mod tests {
         generate_offline_repositories(&generator, &schema, dir.path()).unwrap();
         let content = read_generated(
             dir.path(),
-            "com.test",
-            "infrastructure/repository/offline/OfflineWidgetRepository.kt",
+            "com.test.generated",
+            "widgets/infrastructure/repository/offline/OfflineWidgetRepository.kt",
         );
 
         // Class declaration
@@ -446,7 +444,7 @@ mod tests {
             "should not emit delta-sync override (opt-in via *RepositoryCustom.kt); got:\n{}", content
         );
         // Imports line up with the consumer convention
-        assert!(content.contains("import com.test.infrastructure.widgets.api.WidgetApiClient"));
+        assert!(content.contains("import com.test.generated.widgets.infrastructure.api.WidgetApiClient"));
         assert!(content.contains("import com.test.infrastructure.repository.OfflineFirstRepository"));
         assert!(content.contains("import com.test.infrastructure.cache.CacheTTL"));
         // Default TTL keeps the generator decoupled from per-entity tuning
@@ -490,11 +488,10 @@ mod tests {
         let path = &result.generated_files[0];
         let path_str = path.to_string_lossy();
 
-        // Path is shared across modules: infrastructure/repository/offline/<file>.kt
-        // (NOT infrastructure/{module}/repository/offline/...)
+        // Module-first layout: <module>/infrastructure/repository/offline/<file>.kt
         assert!(
-            path_str.contains("infrastructure/repository/offline/OfflineWidgetRepository.kt"),
-            "expected shared offline path; got: {}", path_str
+            path_str.contains("widgets/infrastructure/repository/offline/OfflineWidgetRepository.kt"),
+            "expected module-first offline path; got: {}", path_str
         );
     }
 }

@@ -74,10 +74,10 @@ fn generate_viewmodel(
     let entity_name_lowercase = entity_name.to_lowercase();
 
     // Package for presentation/state/{module}
-    let package_name = format!("{}.presentation.state.{}", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
-    let repository_package = format!("{}.domain.{}.repository", base_package, module_lower);
-    let mapper_package = format!("{}.application.{}.mappers", base_package, module_lower);
+    let package_name = format!("{}.{}.presentation.state", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
+    let repository_package = format!("{}.{}.domain.repository", base_package, module_lower);
+    let mapper_package = format!("{}.{}.application.mappers", base_package, module_lower);
 
     // Find the primary key field name (first primary key field)
     let primary_key_field = model.fields.iter()
@@ -105,7 +105,7 @@ fn generate_viewmodel(
 
     // Create output path: presentation/state/{module}/{Entity}ListViewModel.kt
     let relative_path = format!(
-        "presentation/state/{}/{}ListViewModel.kt",
+        "{}/presentation/state/{}ListViewModel.kt",
         module_name,
         entity_name
     );
@@ -129,8 +129,8 @@ fn generate_component(
     let entity_name = model.name.clone();
 
     // Package for presentation/components/{module}
-    let package_name = format!("{}.presentation.components.{}", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
+    let package_name = format!("{}.{}.presentation.components", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
 
     // Find the primary key field name (first primary key field)
     let primary_key_field = model.fields.iter()
@@ -138,7 +138,7 @@ fn generate_component(
         .map(|f| generator.type_mapper.to_kotlin_property_name(&f.name))
         .unwrap_or_else(|| "id".to_string());
 
-    let mapper_package = format!("{}.application.{}.mappers", base_package, module_lower);
+    let mapper_package = format!("{}.{}.application.mappers", base_package, module_lower);
 
     // Prepare template data
     let component_data = ComponentData {
@@ -158,7 +158,7 @@ fn generate_component(
 
     // Create output path: presentation/components/{module}/{Entity}Card.kt
     let relative_path = format!(
-        "presentation/components/{}/{}Card.kt",
+        "{}/presentation/components/{}Card.kt",
         module_name,
         entity_name
     );

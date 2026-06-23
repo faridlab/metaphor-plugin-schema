@@ -41,7 +41,7 @@ fn generate_enum(
     // Get package from generator and format for enum layer
     // Format: {base_package}.domain.{module}.enums
     let module_lower = module_name.to_lowercase();
-    let package_name = format!("{}.domain.{}.enums", generator.package_name, module_lower);
+    let package_name = format!("{}.{}.domain.enums", generator.package_name, module_lower);
 
     // Prepare template data - convert snake_case to Title Case for display name
     let variants: Vec<EnumVariantData> = enum_def
@@ -91,7 +91,7 @@ fn generate_enum(
 
     // Create output path: domain/{module}/enums/{EnumName}.kt
     let relative_path = format!(
-        "domain/{}/enums/{}.kt",
+        "{}/domain/enums/{}.kt",
         module_name,
         enum_def.name
     );

@@ -121,9 +121,9 @@ fn generate_usecase(
     let entity_name_lowercase = entity_name.to_lowercase();
 
     // Package for application/{module}/usecases
-    let package_name = format!("{}.application.{}.usecases", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
-    let repository_package = format!("{}.domain.{}.repository", base_package, module_lower);
+    let package_name = format!("{}.{}.application.usecases", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
+    let repository_package = format!("{}.{}.domain.repository", base_package, module_lower);
 
     // Prepare template data
     let usecase_data = UseCaseData {
@@ -143,7 +143,7 @@ fn generate_usecase(
 
     // Create output path: application/{module}/usecases/{Entity}UseCases.kt
     let relative_path = format!(
-        "application/{}/usecases/{}UseCases.kt",
+        "{}/application/usecases/{}UseCases.kt",
         module_name,
         entity_name
     );
@@ -178,10 +178,10 @@ fn generate_app_service(
     let entity_name_lowercase = entity_name.to_lowercase();
 
     // Package for application/{module}/services
-    let package_name = format!("{}.application.{}.services", base_package, module_lower);
-    let application_base_package = format!("{}.application.{}", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
-    let repository_package = format!("{}.domain.{}.repository", base_package, module_lower);
+    let package_name = format!("{}.{}.application.services", base_package, module_lower);
+    let application_base_package = format!("{}.{}.application", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
+    let repository_package = format!("{}.{}.domain.repository", base_package, module_lower);
 
     // Prepare template data
     let service_data = AppServiceData {
@@ -202,7 +202,7 @@ fn generate_app_service(
 
     // Create output path: application/{module}/services/{Entity}Service.kt
     let relative_path = format!(
-        "application/{}/services/{}Service.kt",
+        "{}/application/services/{}Service.kt",
         module_name,
         entity_name
     );
@@ -227,9 +227,9 @@ fn generate_mapper(
     let entity_name_lowercase = entity_name.to_lowercase();
 
     // Package for application/{module}/mappers
-    let package_name = format!("{}.application.{}.mappers", base_package, module_lower);
-    let entity_package = format!("{}.domain.{}.entity", base_package, module_lower);
-    let enums_package = format!("{}.domain.{}.enums", base_package, module_lower);
+    let package_name = format!("{}.{}.application.mappers", base_package, module_lower);
+    let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
+    let enums_package = format!("{}.{}.domain.enums", base_package, module_lower);
 
     // Get fields for mapper and collect custom enum types + special type flags
     let mut enum_types = std::collections::BTreeSet::new();
@@ -331,7 +331,7 @@ fn generate_mapper(
 
     // Create output path: application/{module}/mappers/{Entity}Mapper.kt
     let relative_path = format!(
-        "application/{}/mappers/{}Mapper.kt",
+        "{}/application/mappers/{}Mapper.kt",
         module_name,
         entity_name
     );
@@ -403,9 +403,9 @@ fn generate_validator(
     let entity_name_lowercase = entity_name.to_lowercase();
 
     // Package for application/{module}/validators
-    let package_name = format!("{}.application.{}.validators", base_package, module_lower);
-    let mapper_package = format!("{}.application.{}.mappers", base_package, module_lower);
-    let enums_package = format!("{}.domain.{}.enums", base_package, module_lower);
+    let package_name = format!("{}.{}.application.validators", base_package, module_lower);
+    let mapper_package = format!("{}.{}.application.mappers", base_package, module_lower);
+    let enums_package = format!("{}.{}.domain.enums", base_package, module_lower);
 
     // Collect custom enum types and check for special types that need imports
     let mut enum_types = std::collections::BTreeSet::new();
@@ -510,7 +510,7 @@ fn generate_validator(
 
     // Create output path: application/{module}/validators/{Entity}Validator.kt
     let relative_path = format!(
-        "application/{}/validators/{}Validator.kt",
+        "{}/application/validators/{}Validator.kt",
         module_name,
         entity_name
     );
@@ -593,8 +593,8 @@ mod tests {
         generate_mappers(&generator, &schema, dir.path()).unwrap();
         let content = read_generated(
             dir.path(),
-            "com.test",
-            "application/orders/mappers/OrderMapper.kt",
+            "com.test.generated",
+            "orders/application/mappers/OrderMapper.kt",
         );
 
         assert!(
