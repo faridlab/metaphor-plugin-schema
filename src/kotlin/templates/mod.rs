@@ -714,7 +714,6 @@ class {{entity_name}}Validator : BaseEntityValidator<{{entity_name}}FormData>() 
 pub const PAGINATION_TEMPLATE: &str = r#"package {{base_package}}.infrastructure.pagination
 
 import kotlinx.coroutines.flow.Flow
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -774,11 +773,8 @@ data class PaginatedApiResponse<T>(
     val total: Int,
     val page: Int,
     val limit: Int,
-    @SerialName("total_pages")
     val totalPages: Int,
-    @SerialName("has_next")
     val hasNext: Boolean,
-    @SerialName("has_prev")
     val hasPrev: Boolean
 ) {
     /**
@@ -839,11 +835,8 @@ data class PaginationMeta(
     val total: Int,
     val page: Int,
     val limit: Int,
-    @SerialName("total_pages")
     val totalPages: Int,
-    @SerialName("has_next")
     val hasNext: Boolean = false,
-    @SerialName("has_prev")
     val hasPrev: Boolean = false
 ) {
     /**
@@ -1135,7 +1128,7 @@ class {{entity_name}}ApiClientTest {
     @Test
     fun `getById returns Success on 200`() = runTest {
         // TODO: replace null fields with real values matching your entity
-        val body = """{"success":true,"data":{"{{primary_key_field}}":"test-id"{{#each fields}}{{#unless is_primary_key}},"{{original_name}}":null{{/unless}}{{/each}}}}"""
+        val body = """{"success":true,"data":{"{{primary_key_field}}":"test-id"{{#each fields}}{{#unless is_primary_key}},"{{name}}":null{{/unless}}{{/each}}}}"""
         val client = {{entity_name}}ApiClient(buildClient(body), "http://localhost")
         val result = client.getById("test-id")
         assertIs<Result.Success<{{entity_name}}>>(result)
@@ -1147,7 +1140,7 @@ class {{entity_name}}ApiClientTest {
 
     @Test
     fun `getAll returns empty paginated list`() = runTest {
-        val body = """{"success":true,"data":[],"meta":{"total":0,"page":1,"limit":20,"total_pages":0,"has_next":false,"has_prev":false}}"""
+        val body = """{"success":true,"data":[],"meta":{"total":0,"page":1,"limit":20,"totalPages":0,"hasNext":false,"hasPrev":false}}"""
         val client = {{entity_name}}ApiClient(buildClient(body), "http://localhost")
         val result = client.getAll()
         assertIs<Result.Success<*>>(result)
@@ -1156,7 +1149,7 @@ class {{entity_name}}ApiClientTest {
     @Test
     fun `getAll with items returns populated list`() = runTest {
         // TODO: populate data array with a real entity JSON payload
-        val body = """{"success":true,"data":[{"{{primary_key_field}}":"item-1"{{#each fields}}{{#unless is_primary_key}},"{{original_name}}":null{{/unless}}{{/each}}}],"meta":{"total":1,"page":1,"limit":20,"total_pages":1,"has_next":false,"has_prev":false}}"""
+        val body = """{"success":true,"data":[{"{{primary_key_field}}":"item-1"{{#each fields}}{{#unless is_primary_key}},"{{name}}":null{{/unless}}{{/each}}}],"meta":{"total":1,"page":1,"limit":20,"totalPages":1,"hasNext":false,"hasPrev":false}}"""
         val client = {{entity_name}}ApiClient(buildClient(body), "http://localhost")
         val result = client.getAll()
         assertIs<Result.Success<*>>(result)
