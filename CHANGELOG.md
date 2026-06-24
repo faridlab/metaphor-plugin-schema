@@ -7,6 +7,19 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-06-24
+
+### Changed
+
+- **The `database` (per-entity SQLDelight `.sq`) target is no longer part of
+  `all`.** Under the offline-first cache architecture, entities are persisted as
+  JSON in a generic cache table (`CacheDao`), and the emitted `.sq` files land
+  under `generated/sqldelight/` — which is not a SQLDelight source root — so they
+  were never compiled. Dropping `database` from the default `all` set stops the
+  generator from writing dead files on every run. The target is still available
+  explicitly via `--target database`.
+  [`config`](src/kotlin/config.rs).
+
 ## [0.4.1] — 2026-06-24
 
 ### Changed

@@ -77,7 +77,7 @@ metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 
 | Target | Layer | Description |
 |--------|-------|-------------|
-| `all` | - | Generate all targets (default) |
+| `all` | - | Generate all targets except `database` (default) |
 | `entities` | Domain | Kotlin data classes for domain entities |
 | `enums` | Domain | Sealed classes / enums |
 | `repositories` | Domain | Repository interfaces |
@@ -87,7 +87,7 @@ metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 | `validators` | Application | Input validation logic |
 | `api-clients` | Infrastructure | Ktor HTTP API clients |
 | `offline-repositories` | Infrastructure | Offline-first repository implementations wrapping `*ApiClient` (cache-first reads, cache-aware writes, offline fallback) |
-| `database` | Infrastructure | SQLDelight database schemas and queries |
+| `database` | Infrastructure | SQLDelight database schemas and queries. **Excluded from `all`** — request explicitly with `--target database`. Under the offline-first cache architecture, entities are stored as JSON in a generic cache table (`CacheDao`); the emitted `.sq` files land under `generated/sqldelight/` (not a SQLDelight source root) and are never compiled. |
 | `sync` | Infrastructure | Offline sync managers |
 | `view-models` | Presentation | MVI ViewModels (Decompose) |
 | `components` | Presentation | Reusable Compose UI components |
