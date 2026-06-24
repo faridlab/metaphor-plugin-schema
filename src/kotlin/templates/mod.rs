@@ -579,14 +579,12 @@ class {{entity_name}}Service(
 "#;
 
 /// Mapper template — extends BaseEntityMapper (Phase 1 composition)
-pub const MAPPER_TEMPLATE: &str = r#"package {{package}}
+// DTO + FormData are emitted to a separate `{{entity_name}}DTO.kt` so wide
+// entities stay under the generated-file size gate. Same package as the mapper,
+// so no import is needed between the two files.
+pub const MAPPER_DTO_TEMPLATE: &str = r#"package {{package}}
 
-import {{entity_package}}.{{entity_name}}
-import {{framework base_package}}.core.mapper.BaseEntityMapper
 import {{framework base_package}}.core.mapper.ListDTO
-{{#if needs_required}}
-import {{framework base_package}}.core.mapper.required
-{{/if}}
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 {{#if needs_instant}}
@@ -605,8 +603,6 @@ import {{enums_package}}.Metadata
 import {{../enums_package}}.{{this}}
 {{/each}}
 
-// ─── DTO ─────────────────────────────────────────────────────────────────────
-
 // 7A — @Immutable guarantees all fields are val and deeply immutable,
 // allowing Compose to skip recomposition when the DTO reference is unchanged.
 @Immutable
@@ -617,10 +613,7 @@ data class {{entity_name}}DTO(
 {{/each}}
 )
 
-// Backward-compatible alias — replaces the old XxxListDTO data class
 typealias {{entity_name}}ListDTO = ListDTO<{{entity_name}}DTO>
-
-// ─── Form Data ────────────────────────────────────────────────────────────────
 
 data class {{entity_name}}FormData(
 {{#each fields}}
@@ -629,13 +622,19 @@ data class {{entity_name}}FormData(
 {{/unless}}
 {{/each}}
 )
+"#;
 
-// ─── Mapper ───────────────────────────────────────────────────────────────────
+pub const MAPPER_TEMPLATE: &str = r#"package {{package}}
+
+import {{entity_package}}.{{entity_name}}
+import {{framework base_package}}.core.mapper.BaseEntityMapper
+{{#if needs_required}}
+import {{framework base_package}}.core.mapper.required
+{{/if}}
 
 /**
- * {{entity_name}} Mapper
- *
- * Extends BaseEntityMapper — override methods to customise field mapping.
+ * {{entity_name}} Mapper — extends BaseEntityMapper.
+ * DTO / FormData are declared in {{entity_name}}DTO.kt (same package).
  *
  * Generated from Backbone schema
  */
@@ -1306,47 +1305,21 @@ pub const NAV_CONFIG_TEMPLATE: &str = r#"package {{package}}
 import kotlinx.serialization.Serializable
 
 /**
- * Navigation configuration for the {{module_pascal}} module.
- *
- * Contains one `List` and one `Detail` destination per entity.
- * Register with a Decompose `ChildStack`:
- * ```kotlin
- * val childStack = childStack(
- *     source = navigation,
- *     serializer = {{module_pascal}}NavConfig.serializer(),
- *     initialConfiguration = {{module_pascal}}NavConfig.{{first_entity}}List(),
- *     handleBackButton = true,
- *     childFactory = ::createChild,
- * )
- * ```
+ * Navigation configuration for the {{module_pascal}} module — one `List` and one
+ * `Detail` destination per entity. Register with a Decompose `ChildStack` using
+ * `{{module_pascal}}NavConfig.serializer()`.
  *
  * Generated from Backbone schema — add detail navigation callbacks as needed.
  */
 @Serializable
 sealed class {{module_pascal}}NavConfig {
 {{#each entities}}
-    /** Navigate to the [{{entity_name}}] list screen (optional filter string). */
-    @Serializable
-    data class {{entity_name}}List(val filter: String? = null) : {{../module_pascal}}NavConfig()
-
-    /** Navigate to a single [{{entity_name}}] detail screen. */
-    @Serializable
-    data class {{entity_name}}Detail(val id: String) : {{../module_pascal}}NavConfig()
+    @Serializable data class {{entity_name}}List(val filter: String? = null) : {{../module_pascal}}NavConfig()
+    @Serializable data class {{entity_name}}Detail(val id: String) : {{../module_pascal}}NavConfig()
 {{/each}}
 
     companion object {
-        /**
-         * Role-based visibility check for a destination.
-         *
-         * TODO (5C): implement per-destination role rules.
-         * Example:
-         * ```kotlin
-         * fun isVisibleForRole(config: {{module_pascal}}NavConfig, role: String): Boolean = when (config) {
-         *     is XxxList   -> role in listOf("owner", "manager")
-         *     is XxxDetail -> role in listOf("owner", "manager", "operator")
-         * }
-         * ```
-         */
+        // TODO (5C): implement per-destination role rules.
         fun isVisibleForRole(config: {{module_pascal}}NavConfig, role: String): Boolean = true
     }
 }
@@ -1361,11 +1334,8 @@ pub const NAV_DEEP_LINK_TEMPLATE: &str = r#"package {{package}}
 /**
  * Deep link parsing for the {{module_pascal}} module.
  *
- * Supported URL patterns:
-{{#each entities}}
- *   app://{{../module_lower}}/{{collection}}           -> {{entity_name}}List
- *   app://{{../module_lower}}/{{collection}}/<id>      -> {{entity_name}}Detail
-{{/each}}
+ * URL patterns: `app://{{module_lower}}/<collection>` -> entity List,
+ *               `app://{{module_lower}}/<collection>/<id>` -> entity Detail.
  *
  * Generated from Backbone schema.
  */
@@ -1378,10 +1348,8 @@ fun {{module_pascal}}NavConfig.Companion.fromDeepLink(uri: String): {{module_pas
 
     return when {
 {{#each entities}}
-        segments.size == 1 && segments[0] == "{{collection}}" ->
-            {{../module_pascal}}NavConfig.{{entity_name}}List()
-        segments.size == 2 && segments[0] == "{{collection}}" ->
-            {{../module_pascal}}NavConfig.{{entity_name}}Detail(segments[1])
+        segments.size == 1 && segments[0] == "{{collection}}" -> {{../module_pascal}}NavConfig.{{entity_name}}List()
+        segments.size == 2 && segments[0] == "{{collection}}" -> {{../module_pascal}}NavConfig.{{entity_name}}Detail(segments[1])
 {{/each}}
         else -> null
     }

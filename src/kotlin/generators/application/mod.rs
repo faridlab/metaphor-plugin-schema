@@ -70,11 +70,12 @@ pub fn generate_mappers(
             continue;
         }
         match generate_mapper(generator, model, &schema.name, output_dir) {
-            Ok(Some(path)) => {
-                result.generated_files.push(path);
-                result.mappers_count += 1;
+            Ok(paths) => {
+                if !paths.is_empty() {
+                    result.mappers_count += 1;
+                }
+                result.generated_files.extend(paths);
             }
-            Ok(None) => {}
             Err(e) => return Err(e),
         }
     }
@@ -219,8 +220,8 @@ fn generate_mapper(
     model: &Model,
     module_name: &str,
     output_dir: &Path,
-) -> Result<Option<std::path::PathBuf>> {
-    // Use package from generator
+) -> Result<Vec<std::path::PathBuf>> {
+    // Use base package from generator
     let base_package = &generator.package_name;
     let module_lower = module_name.to_lowercase();
     let entity_name = model.name.clone();
@@ -323,23 +324,30 @@ fn generate_mapper(
         fields,
     };
 
-    // Render the template
-    let content = generator
+    // Render both templates: DTO/FormData split into {Entity}DTO.kt so wide
+    // entities stay under the generated-file size gate; the Mapper class in
+    // {Entity}Mapper.kt (same package, references the DTO/FormData directly).
+    let dto_content = generator
+        .handlebars
+        .render("mapper_dto", &mapper_data)
+        .map_err(|e| MobileGenError::template(format!("Mapper DTO template error: {}", e)))?;
+    let mapper_content = generator
         .handlebars
         .render("mapper", &mapper_data)
         .map_err(|e| MobileGenError::template(format!("Mapper template error: {}", e)))?;
 
-    // Create output path: application/{module}/mappers/{Entity}Mapper.kt
-    let relative_path = format!(
-        "{}/application/mappers/{}Mapper.kt",
-        module_name,
-        entity_name
-    );
-
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
-        crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
-        crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
+    let mut written = Vec::new();
+    for (relative_path, content) in [
+        (format!("{}/application/mappers/{}DTO.kt", module_name, entity_name), dto_content),
+        (format!("{}/application/mappers/{}Mapper.kt", module_name, entity_name), mapper_content),
+    ] {
+        if let crate::kotlin::generators::WriteOutcome::Written(path) =
+            write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)?
+        {
+            written.push(path);
+        }
     }
+    Ok(written)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

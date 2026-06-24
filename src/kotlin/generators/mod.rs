@@ -83,6 +83,7 @@ impl MobileGenerator {
         handlebars.register_template_string("usecase", templates::USECASE_TEMPLATE)?;
         handlebars.register_template_string("app_service", templates::APP_SERVICE_TEMPLATE)?;
         handlebars.register_template_string("mapper", templates::MAPPER_TEMPLATE)?;
+        handlebars.register_template_string("mapper_dto", templates::MAPPER_DTO_TEMPLATE)?;
         handlebars.register_template_string("validator", templates::VALIDATOR_TEMPLATE)?;
 
         // Infrastructure templates
