@@ -99,13 +99,15 @@ metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 
 ## Architecture
 
-The generated code follows a **Clean Architecture** layout for Kotlin Multiplatform:
+The generated code follows a **Clean Architecture** layout for Kotlin
+Multiplatform. The tree is **module-first** under the `<base>.generated`
+namespace (`generated/<module>/<layer>/…`):
 
 ```
-shared/src/commonMain/kotlin/{package}/
+shared/src/commonMain/kotlin/{base}/generated/{module}/
   ├── domain/
   │   ├── entity/          # Data classes (entities target)
-  │   ├── enum/            # Sealed classes (enums target)
+  │   ├── enums/           # Sealed classes + the Metadata typealias (enums target)
   │   └── repository/      # Repository interfaces (repositories target)
   ├── application/
   │   ├── usecase/         # Use cases (usecases target)
@@ -140,12 +142,33 @@ When `--package` is not provided, the tool auto-detects the Kotlin package name 
 3. **Existing Kotlin files** -- Scans for `package` declarations in existing source files
 4. **Fallback** -- Uses a default package based on the project name
 
-The detected package is used as the base, with layer and module suffixes appended:
+The detected package is the **true base** (the hand-written framework root,
+e.g. `com.bersihir`). Generated code is never written directly under it —
+everything lands under a generator-owned `<base>.generated` namespace, laid out
+**module-first**, with the layer last:
 
 ```
-{base_package}.{layer}.{module}
-# Example: com.bersihir.domain.sapiens
+{base_package}.generated.{module}.{layer}
+# Example: com.bersihir.generated.sapiens.domain.entity
 ```
+
+The constructor normalizes the package to exactly one trailing `.generated`
+segment, so passing either the true base (`com.bersihir`) or an already-suffixed
+value (`com.bersihir.generated`) yields the same result — it is never doubled.
+
+### Framework vs generated split
+
+The whole `generated/` subtree is **owned by the generator** and overwritten on
+every regen — a `metaphor.codegen.yaml` manifest (`generated: ["**"]`) is dropped
+at its root to make that explicit. **Never hand-edit a file inside it.**
+
+Hand-written framework code lives *outside* the tree, in sibling packages under
+the true base (`<base>.core`, `<base>.infrastructure.di`, the pagination
+contracts, `OfflineFirstRepository`, …). Generated files import these framework
+base classes from the true base package, while everything else stays under
+`<base>.generated`. Customize generated code via extension functions,
+subclasses, or wrapper DTOs in your own packages — never by editing a generated
+file.
 
 You can override this entirely with `--package`:
 
@@ -171,11 +194,12 @@ Resolution rules are described in [How MODULE and --output Resolve](#how-module-
   └── kotlin/
       └── com/
           └── myapp/
-              └── sapiens/
-                  ├── domain/
-                  ├── application/
-                  ├── infrastructure/
-                  └── presentation/
+              └── generated/          # generator-owned; metaphor.codegen.yaml at this root
+                  └── sapiens/         # module-first
+                      ├── domain/
+                      ├── application/
+                      ├── infrastructure/
+                      └── presentation/
 ```
 
 Examples:
@@ -220,7 +244,10 @@ The generated Kotlin code uses these libraries:
 - **`@audit_metadata` fields** are emitted as the `Metadata` typealias
   (`typealias Metadata = Map<String, JsonElement?>`), not as raw `JsonElement`.
   This lets the derived helpers (e.g. `metadata["deleted_at"]`) compile and
-  keeps DTOs / FormData / Mappers all in agreement on the type.
+  keeps DTOs / FormData / Mappers all in agreement on the type. The typealias
+  itself is generated **once per module** into the module's enums package
+  (`<base>.generated.<module>.domain.enums.Metadata`), so the generated tree is
+  self-contained and compiles without a hand-written `Metadata` declaration.
 - **Soft-delete derived helper.** When a model has `@soft_delete` *and* an
   `@audit_metadata` field, the entity gains a derived
   `val isDeleted: Boolean get() = metadata["deleted_at"] != null` helper.
@@ -236,7 +263,14 @@ The generated Kotlin code uses these libraries:
   included in the URL. Mount each module's routes under a flat
   `/api/v1/<collection>` namespace on the backend.
 - Error handling with sealed result types
-- Pagination support
+- **Pagination types are framework contracts, not generated.**
+  `PaginatedResult` / `PaginatedApiResponse` / `BackendPaginatedResponse` /
+  `PaginationMeta` are hand-written in the framework (consumed by the base
+  `BaseCrudApiClient` / `OfflineFirstRepository`); the generator no longer emits
+  a copy. Generated clients import them from the true base package
+  (`<base>.infrastructure.pagination.…`, via the `{{framework base_package}}`
+  helper). Their meta serializes as camelCase (`totalPages`, `hasNext`,
+  `hasPrev`) to match the backend — no `@SerialName` remapping.
 
 ### Offline-First Repositories
 
