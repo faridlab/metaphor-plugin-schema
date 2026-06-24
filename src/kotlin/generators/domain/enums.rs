@@ -28,7 +28,38 @@ pub fn generate_enums(
         }
     }
 
+    // Emit the `Metadata` typealias helper into the module's enums package.
+    // Entities and mappers reference a `metadata: Metadata` field and import it
+    // from `<base>.<module>.domain.enums.Metadata`, so the generated tree must
+    // be self-contained and provide it (it is not a schema enum).
+    if let Some(path) = generate_metadata_typealias(generator, &schema.name, output_dir)? {
+        result.generated_files.push(path);
+    }
+
     Ok(result)
+}
+
+/// Generate the `Metadata` typealias (`Map<String, JsonElement?>`) used by every
+/// entity's audit `metadata` field. One per module, in the enums package.
+fn generate_metadata_typealias(
+    generator: &MobileGenerator,
+    module_name: &str,
+    output_dir: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>> {
+    let module_lower = module_name.to_lowercase();
+    let package_name = format!("{}.{}.domain.enums", generator.package_name, module_lower);
+    let content = format!(
+        "package {package}\n\nimport kotlinx.serialization.json.JsonElement\n\n\
+/**\n * Metadata type for entity audit fields (created_at, updated_at, deleted_at, ...).\n \
+* Typealias over Map to support bracket-access notation.\n *\n * Generated from Backbone schema\n */\n\
+typealias Metadata = Map<String, JsonElement?>\n",
+        package = package_name
+    );
+    let relative_path = format!("{}/domain/enums/Metadata.kt", module_name);
+    match write_generated_file(output_dir, &generator.package_name, &relative_path, &content, generator.skip_existing)? {
+        crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
+        crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
+    }
 }
 
 /// Generate a single sealed class enum

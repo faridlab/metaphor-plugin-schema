@@ -116,16 +116,13 @@ impl EntityData {
 
                 // Skip built-in Kotlin types and kotlinx types
                 if !Self::is_builtin_type(type_name) {
-                    // Import from the enums subdirectory
-                    // Package format: {base_package}.domain.{module}.enums
-                    // We need to extract the module name (second to last element)
-                    let parts: Vec<&str> = package.split('.').collect();
-                    let module_name = if parts.len() >= 4 {
-                        // Get the second-to-last element (module name before 'entity')
-                        parts.get(parts.len() - 2).copied().unwrap_or("common")
-                    } else {
-                        "common"
-                    };
+                    // Import from the enums subdirectory of the same module.
+                    // Module-first package format: {base_package}.{module}.domain.entity
+                    // -> the module is the first segment after the base package.
+                    let module_name = package
+                        .strip_prefix(&format!("{}.", base_package))
+                        .and_then(|rest| rest.split('.').next())
+                        .unwrap_or("common");
                     let enum_import = format!("{}.{}.domain.enums.{}", base_package, module_name, type_name);
                     if !imports.iter().any(|i| i.ends_with(type_name)) {
                         imports.push(enum_import);
