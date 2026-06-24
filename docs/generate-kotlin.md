@@ -314,8 +314,17 @@ serialization helpers.
 
 ### Mappers
 
-One `<Entity>Mapper.kt` per model translating between the entity, its DTO, and
-its `FormData`. Extends `BaseEntityMapper<Entity, EntityDTO>`.
+Two files per model, in the same `application/mappers/` package:
+
+- `<Entity>DTO.kt` — the `@Immutable` `<Entity>DTO`, its `<Entity>ListDTO`
+  typealias, and the `<Entity>FormData` data class.
+- `<Entity>Mapper.kt` — the mapper itself, translating between the entity, its
+  DTO, and its `FormData`. Extends `BaseEntityMapper<Entity, EntityDTO>`.
+
+The DTO / FormData declarations are split into their own file so wide entities
+keep each generated file under the 250-line size gate. Both files share the same
+package, so the mapper references the DTO and FormData directly with no extra
+import.
 
 - **Required-but-optional-on-form fields use the catchable `required("field")`
   helper, not `!!`.** When a field is required by the entity (`!is_nullable`)

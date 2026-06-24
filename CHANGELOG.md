@@ -7,6 +7,28 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-24
+
+### Changed
+
+- **Mapper generation now emits two files per entity, keeping each generated
+  file under the 250-line size gate.** The DTO / FormData declarations
+  (`<Entity>DTO`, the `<Entity>ListDTO` typealias, and `<Entity>FormData`) are
+  split out of the mapper into a sibling `<Entity>DTO.kt` in the same
+  `application/mappers/` package, so the mapper class in `<Entity>Mapper.kt`
+  references them directly with no extra import. Wide entities that previously
+  pushed the combined file over the limit now stay within it. `generate_mapper`
+  returns the list of files it wrote (`Vec<PathBuf>`) instead of an
+  `Option<PathBuf>`, and a new `mapper_dto` Handlebars template
+  (`MAPPER_DTO_TEMPLATE`) backs the split.
+  [`application`](src/kotlin/generators/application/mod.rs),
+  [`templates`](src/kotlin/templates/mod.rs).
+- **Compacted the navigation config and deep-link templates.** The `NavConfig`
+  destinations, role-visibility companion, and `fromDeepLink` parser were
+  condensed (one-line `data class` destinations, trimmed doc blocks) so the
+  generated navigation files also stay under the size gate without changing
+  behavior. [`templates`](src/kotlin/templates/mod.rs).
+
 ## [0.4.0] — 2026-06-24
 
 ### Changed
