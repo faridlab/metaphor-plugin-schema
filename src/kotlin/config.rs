@@ -213,7 +213,11 @@ impl GenerationTarget {
             GenerationTarget::UseCases,
             GenerationTarget::AppServices,
             GenerationTarget::ApiClients,
-            GenerationTarget::Database,
+            // Database (per-entity SQLDelight `.sq`) is intentionally excluded from
+            // `all`: the offline-first architecture stores entities as JSON in a
+            // generic cache table (CacheDao), and the emitted `.sq` land under
+            // `kotlin/.../generated/sqldelight/` — not a SQLDelight source root — so
+            // they are never compiled. Still available via explicit `--target database`.
             GenerationTarget::Sync,
             GenerationTarget::ViewModels,
             GenerationTarget::Components,
