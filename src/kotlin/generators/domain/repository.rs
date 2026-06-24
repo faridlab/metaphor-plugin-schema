@@ -6,24 +6,20 @@ use crate::kotlin::generators::MobileGenerator;
 use crate::kotlin::generators::write_generated_file;
 use crate::ast::{Model, ModuleSchema};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Atomic flag to track if pagination file has been generated
-static PAGINATION_GENERATED: AtomicBool = AtomicBool::new(false);
-
-/// Generate repository interfaces for all models in a schema
+/// Generate repository interfaces for all models in a schema.
+///
+/// Note: pagination types (`PaginatedResult`, `PaginatedApiResponse`,
+/// `BackendPaginatedResponse`, `PaginationMeta`) are NOT generated — they are
+/// hand-written framework contracts used by the base `BaseCrudApiClient` /
+/// `OfflineFirstRepository`, so generated code imports them from the framework
+/// package (see the `{{framework base_package}}` imports in the templates).
 pub fn generate_repositories(
     generator: &MobileGenerator,
     schema: &ModuleSchema,
     output_dir: &Path,
 ) -> Result<GenerationResult> {
     let mut result = GenerationResult::default();
-
-    // Generate common pagination file first (only once per build)
-    if !PAGINATION_GENERATED.load(Ordering::Relaxed) {
-        generate_pagination_file(generator, output_dir)?;
-        PAGINATION_GENERATED.store(true, Ordering::Relaxed);
-    }
 
     for model in &schema.models {
         if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Repositories) {
@@ -44,30 +40,6 @@ pub fn generate_repositories(
     Ok(result)
 }
 
-/// Generate the common pagination file (only once per generation)
-fn generate_pagination_file(
-    generator: &MobileGenerator,
-    output_dir: &Path,
-) -> Result<()> {
-    // Create data for pagination template
-    #[derive(serde::Serialize)]
-    struct PaginationData {
-        base_package: String,
-    }
-    let data = PaginationData {
-        base_package: generator.package_name.clone(),
-    };
-
-    let content = generator
-        .handlebars
-        .render("pagination", &data)
-        .map_err(|e| MobileGenError::template(format!("Pagination template error: {}", e)))?;
-
-    let relative_path = "infrastructure/pagination/PaginatedResult.kt";
-    // Pagination file: ignore skip outcome, it's a shared utility
-    let _ = write_generated_file(output_dir, &generator.package_name, relative_path, &content, generator.skip_existing)?;
-    Ok(())
-}
 
 /// Generate a single repository interface
 fn generate_repository(

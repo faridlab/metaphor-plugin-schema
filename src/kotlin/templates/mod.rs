@@ -117,7 +117,7 @@ internal object {{name}}Serializer : KSerializer<{{name}}> {
 pub const REPOSITORY_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
-import {{base_package}}.infrastructure.pagination.PaginatedResult
+import {{framework base_package}}.infrastructure.pagination.PaginatedResult
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -201,7 +201,7 @@ pub const API_CLIENT_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
 import {{framework base_package}}.core.api.BaseCrudApiClient
-import {{base_package}}.infrastructure.pagination.BackendPaginatedResponse
+import {{framework base_package}}.infrastructure.pagination.BackendPaginatedResponse
 import {{framework base_package}}.infrastructure.pagination.BackendSingleResponse
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -251,7 +251,7 @@ import {{framework base_package}}.domain.types.Result
 import {{framework base_package}}.infrastructure.cache.CacheTTL
 import {{framework base_package}}.infrastructure.database.dao.CacheDao
 import {{framework base_package}}.infrastructure.network.ConnectivityMonitor
-import {{base_package}}.infrastructure.pagination.PaginatedApiResponse
+import {{framework base_package}}.infrastructure.pagination.PaginatedApiResponse
 import {{framework base_package}}.infrastructure.repository.OfflineFirstRepository
 import kotlinx.serialization.encodeToString
 
