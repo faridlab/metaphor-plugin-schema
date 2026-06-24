@@ -7,6 +7,71 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-24
+
+### Changed
+
+- **Generated Kotlin now lives under a module-first `<base>.generated`
+  namespace, split from the hand-written framework.** Previously the generator
+  emitted layer-first packages directly under the base
+  (`com.bersihir.domain.sapiens`), interleaving generated files with
+  hand-written ones. Generation now writes everything under a single
+  generator-owned subtree — `<base>.generated.<module>.<layer>` (e.g.
+  `com.bersihir.generated.sapiens.domain.entity`) — physically
+  `kotlin/<base-path>/generated/…`. The constructor normalizes the package to
+  exactly one trailing `.generated` segment (an already-suffixed value is
+  accepted and not doubled), and a `metaphor.codegen.yaml` ownership manifest
+  (`generated: ["**"]`) is dropped at the tree root so it's unmistakable that
+  the whole subtree is overwritten on every regen. Hand-written code lives
+  *outside* the tree (sibling packages like `<base>.core`,
+  `<base>.infrastructure.di`) and customizes generated code via extension
+  functions / subclasses / wrapper DTOs. A new `{{framework base_package}}`
+  Handlebars helper (and `MobileGenerator::framework_package`) strips the
+  trailing `.generated` so generated files still import the framework base
+  classes (`core.*`, `OfflineFirstRepository`, `domain.types.*`, pagination
+  contracts) from the true base package.
+  [`mod`](src/kotlin/generators/mod.rs), [`templates`](src/kotlin/templates/mod.rs).
+- **Module-first enum-import extraction.** With the namespace flipped to
+  module-first, the entity generator derived the wrong module for enum imports
+  (it took the second-to-last package segment, which is now the layer). It now
+  strips the base prefix and takes the *first* segment after it, so an entity's
+  `import <base>.generated.<module>.domain.enums.<Enum>` resolves to the
+  entity's own module. [`entity`](src/kotlin/generators/domain/entity.rs).
+
+### Added
+
+- **Per-module `Metadata` typealias is now generated, making the tree
+  self-contained.** Entities and mappers reference a `metadata: Metadata` audit
+  field imported from `<base>.generated.<module>.domain.enums.Metadata`, but the
+  typealias was never emitted (it isn't a schema enum), so the generated tree
+  didn't compile on its own. The enums generator now emits one
+  `Metadata.kt` per module (`typealias Metadata = Map<String, JsonElement?>`)
+  into the module's enums package. [`enums`](src/kotlin/generators/domain/enums.rs).
+
+### Fixed
+
+- **Pagination meta now serializes as camelCase, matching the backend.** The
+  generated `PaginatedApiResponse` / `PaginationMeta` carried
+  `@SerialName("total_pages")` / `@SerialName("has_next")` / `@SerialName(
+  "has_prev")`, expecting snake_case keys — but the backend serializes the whole
+  response in camelCase (`totalPages`, `hasNext`, `hasPrev`). The `@SerialName`
+  annotations (and the now-unused `kotlinx.serialization.SerialName` import) are
+  dropped so the Kotlin property names match the wire keys directly; the
+  generated API-client test fixtures were updated to camelCase to match.
+  [`templates`](src/kotlin/templates/mod.rs).
+- **Pagination types are no longer generated — they are framework contracts.**
+  The generator emitted `PaginatedResult` / `PaginatedApiResponse` /
+  `BackendPaginatedResponse` / `PaginationMeta` into each app's
+  `infrastructure/pagination/`, guarded by a process-global `AtomicBool` so it
+  only ran once per build. These types are consumed by the hand-written base
+  `BaseCrudApiClient` / `OfflineFirstRepository`, so generating a second copy
+  under `<base>.generated` split the type identity. The generator now stops
+  emitting them entirely; repository, API-client, and offline-repository
+  templates import them from the framework package via `{{framework
+  base_package}}.infrastructure.pagination.…`.
+  [`repository`](src/kotlin/generators/domain/repository.rs),
+  [`templates`](src/kotlin/templates/mod.rs).
+
 ## [0.3.1] — 2026-06-21
 
 ### Fixed
