@@ -240,9 +240,10 @@ class {{entity_name}}ApiClient(
 ///
 /// Delta-sync is intentionally NOT generated. To opt in, extend the API
 /// client's `getAll` to accept an `updatedSince: String?` parameter and
-/// override `fetchListSinceFromApi` in a companion
-/// `Offline<Entity>RepositoryCustom.kt` file marked with `// <<< CUSTOM`.
-/// The base class falls back to plain TTL caching when the override is absent.
+/// override `fetchListSinceFromApi` — hand-write the repository and disable the
+/// `offlinerepositories` target for that app. The base class falls back to plain
+/// TTL caching when the override is absent. This generated file is marker-free
+/// and fully generator-owned (overwritten on every regen).
 pub const OFFLINE_REPOSITORY_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
@@ -283,12 +284,13 @@ import kotlinx.serialization.encodeToString
  * Inherits `observeAll(page, limit, sortBy, sortDesc)` from
  * [OfflineFirstRepository] for free — list screens can use it directly to
  * render cached data instantly while the server is asked for changes.
- * If you add a parameterized `getAllFiltered` in `*RepositoryCustom.kt`,
- * **also add a matching `observeAllFiltered` next to it** (5-line wrapper
- * around `observeWithCache(...)`) so screens get SWR for that filter shape too.
+ * For a parameterized `getAllFiltered`, add it as an extension in a separate
+ * `*RepositoryExtensions.kt` (and **a matching `observeAllFiltered`** — a 5-line
+ * wrapper around `observeWithCache(...)`) so screens get SWR for that filter too.
  *
- * Generated from Backbone schema — extend behavior in a custom partial
- * marked with `// <<< CUSTOM` so future regenerations don't clobber it.
+ * Generated from Backbone schema — this file is generator-owned and overwritten
+ * on every regen. To change its behavior, hand-write the repository and disable
+ * the `offlinerepositories` target for this app (metaphor.codegen.yaml).
  */
 class Offline{{entity_name}}Repository(
     private val api: {{entity_name}}ApiClient,
@@ -1176,9 +1178,10 @@ class {{entity_name}}ApiClientTest {
 
 /// Offline sync handler template — implements SyncEntityHandler for one entity.
 ///
-/// The generated stub handles standard CRUD push/pull operations.
-/// Entity-specific operations (e.g. state transitions) should be added
-/// in a companion `*SyncHandlerCustom.kt` file marked with // <<< CUSTOM.
+/// The generated stub handles standard CRUD push/pull operations and is fully
+/// generator-owned (marker-free, overwritten on every regen). Entity-specific
+/// operations (e.g. state transitions) are added by hand-writing the handler and
+/// disabling the `sync` target for that app.
 pub const SYNC_HANDLER_TEMPLATE: &str = r#"package {{package}}
 
 import {{entity_package}}.{{entity_name}}
@@ -1194,8 +1197,9 @@ import kotlinx.serialization.json.Json
  * Offline sync handler for [{{entity_name}}].
  *
  * Implements push/pull operations against the [{{entity_name}}ApiClient].
- * Standard CRUD operations are generated — add entity-specific push operations
- * (e.g. transitions) in a `{{entity_name}}SyncHandlerCustom.kt` file.
+ * Standard CRUD operations are generated. For entity-specific push operations
+ * (e.g. transitions) hand-write the handler and disable the `sync` target for
+ * this app (metaphor.codegen.yaml).
  *
  * ## Registration
  * Register this handler in your DI module:
@@ -1203,7 +1207,7 @@ import kotlinx.serialization.json.Json
  * syncRegistry.register({{entity_name}}SyncHandler({{entity_name_lowercase}}ApiClient))
  * ```
  *
- * Generated from Backbone schema — modify push/pull stubs as needed.
+ * Generated from Backbone schema — generator-owned, overwritten on every regen.
  */
 class {{entity_name}}SyncHandler(
     private val apiClient: {{entity_name}}ApiClient,
@@ -1238,7 +1242,7 @@ class {{entity_name}}SyncHandler(
                 //       is Result.Success -> Result.Success(PushResult(serverId = r.data.id))
                 //       is Result.Error   -> Result.Error(r.error)
                 //   }
-                Result.Success(PushResult()) // <<< CUSTOM — implement CREATE push
+                Result.Success(PushResult()) // no-op stub — hand-write the handler to implement CREATE push
             }
             "UPDATE" -> {
                 // TODO: decode payload and call entity-specific update endpoint.
@@ -1248,7 +1252,7 @@ class {{entity_name}}SyncHandler(
                 //       is Result.Success -> Result.Success(PushResult(serverId = r.data.id))
                 //       is Result.Error   -> Result.Error(r.error)
                 //   }
-                Result.Success(PushResult()) // <<< CUSTOM — implement UPDATE push
+                Result.Success(PushResult()) // no-op stub — hand-write the handler to implement UPDATE push
             }
             "DELETE" -> {
                 when (val r = apiClient.delete(entityId)) {

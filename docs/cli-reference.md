@@ -209,6 +209,14 @@ metaphor schema generate:kotlin [MODULE] [OPTIONS]
 | `--skip-existing` | flag | — | Skip files that already exist on disk |
 | `--verbose`, `-v` | flag | — | Verbose output (auto-detected MODULE, resolved schema path, output path) |
 
+### App-level disabled targets
+
+The output app can skip targets it hand-writes by listing them under
+`disabled_targets:` in its `metaphor.codegen.yaml` (resolved from the nearest
+ancestor of the Kotlin source root). They are removed from the effective target
+set after `all` is expanded, so every module — including read-only deps — honors
+the choice. See [generate-kotlin.md § Disabling targets app-wide](generate-kotlin.md#disabling-targets-app-wide-metaphorcodegenyaml).
+
 ### Package Auto-Detection
 
 When `--package` is not provided, the tool automatically detects the Kotlin package from:

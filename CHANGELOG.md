@@ -7,6 +7,26 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-06-25
+
+### Added
+
+- **App-level `disabled_targets` in `metaphor.codegen.yaml` — skip Kotlin
+  targets the consuming app hand-writes, across every module.** A mobile app
+  that fully owns a target (e.g. `offline-repositories`, `sync`) can now opt out
+  of generating it without touching the shared product schema or its read-only
+  upstream module schemas. The Kotlin generator walks up from the resolved
+  output (source root) to the nearest ancestor holding a `metaphor.codegen.yaml`,
+  reads its `disabled_targets:` list, and removes those targets from the
+  effective set — applied **after** `all` is expanded, so every module
+  (including read-only transitive deps) honors the app's choice. Names are
+  matched case-insensitively; unknown / non-Kotlin entries are ignored; a missing
+  or unparseable file disables nothing. The skipped targets are echoed on each
+  run. This complements the per-model `generators.disabled:` schema field: that
+  gates one model for all consumers, while `disabled_targets` gates whole targets
+  for one app across all models and modules.
+  [`kotlin`](src/commands/kotlin.rs).
+
 ## [0.4.2] — 2026-06-24
 
 ### Changed

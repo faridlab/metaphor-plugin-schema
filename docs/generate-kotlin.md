@@ -95,6 +95,35 @@ metaphor schema generate:kotlin --output bersihir-mobile-laundry --no-deps
 | `theme` | Presentation | Material 3 theme definitions |
 | `tests` | Testing | Test stubs (validator tests, ViewModel tests, API client mock tests) |
 
+### Disabling targets app-wide (`metaphor.codegen.yaml`)
+
+A consuming app can persistently skip Kotlin targets it fully hand-writes
+(e.g. `offline-repositories`, `sync`) without editing the shared product schema
+or its read-only upstream module schemas. Add a `disabled_targets:` list to the
+app's `metaphor.codegen.yaml`:
+
+```yaml
+# <app-root>/metaphor.codegen.yaml
+disabled_targets:
+  - offline-repositories
+  - sync
+```
+
+- Resolved from the **output project's** `metaphor.codegen.yaml` — the generator
+  walks up from the resolved Kotlin source root to find the nearest ancestor
+  holding the file (the generator-owned manifest below the source root is never
+  matched).
+- Applied **after** expanding `all`, so every module honors the app's choice —
+  including read-only transitive deps you can't (or don't want to) edit.
+- Entries are matched case-insensitively against target names; unknown or
+  non-Kotlin names are ignored. A missing or unparseable file disables nothing.
+- Disabled targets are reported on each run (`→ disabled targets (app
+  metaphor.codegen.yaml): …`).
+
+This complements the per-model `generators.disabled:` schema field (which gates
+one model across all consumers); `disabled_targets` gates whole targets for one
+app across all models and modules.
+
 ---
 
 ## Architecture
