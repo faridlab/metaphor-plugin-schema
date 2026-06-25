@@ -220,6 +220,44 @@ fn run_generate(
         }
     }
 
+    // --- App-level codegen config: honor `disabled_targets` ---
+    // Lets a consuming app persistently skip Kotlin targets it fully hand-writes
+    // (e.g. offlinerepositories/sync) without editing the shared product schema
+    // or read-only upstream module schemas. Resolved from the output project's
+    // `metaphor.codegen.yaml`; applied AFTER expanding `all`, so every module —
+    // including read-only transitive deps — honors the app's choice.
+    // Walk up from the resolved output (the mobile kotlin source root) to the app
+    // root holding `metaphor.codegen.yaml`. Done via ancestors rather than the
+    // workspace project lookup because mobile apps may resolve through the
+    // on-disk fallback (not declared as a metaphor.yaml project). The generated
+    // ownership manifest lives *below* the source root, so it is never matched.
+    let disabled_targets: Vec<GenerationTarget> = resolved_output
+        .as_deref()
+        .and_then(|out| {
+            out.ancestors()
+                .take(7)
+                .find(|dir| dir.join("metaphor.codegen.yaml").is_file())
+                .map(read_disabled_targets)
+        })
+        .unwrap_or_default();
+
+    let effective_target: Vec<GenerationTarget> = {
+        let mut t = if target.contains(&GenerationTarget::All) {
+            GenerationTarget::all_targets().to_vec()
+        } else {
+            target.clone()
+        };
+        if !disabled_targets.is_empty() {
+            t.retain(|x| !disabled_targets.contains(x));
+            println!(
+                "{} {}",
+                "→ disabled targets (app metaphor.codegen.yaml):".dimmed(),
+                disabled_targets.iter().map(|d| d.as_str()).collect::<Vec<_>>().join(", ").yellow()
+            );
+        }
+        t
+    };
+
     // --- Generate primary ---
     generate_one(
         &cwd,
@@ -227,7 +265,7 @@ fn run_generate(
         &primary_schema,
         resolved_output.as_deref(),
         package.as_deref(),
-        &target,
+        &effective_target,
         skip_existing,
         verbose,
     )?;
@@ -296,7 +334,7 @@ fn run_generate(
                     &dep_schema,
                     resolved_output.as_deref(),
                     package.as_deref(),
-                    &target,
+                    &effective_target,
                     skip_existing,
                     verbose,
                 ) {
@@ -326,6 +364,38 @@ fn run_generate(
 /// output formatting of the original single-module command so users see the
 /// same per-module breakdown they're used to.
 #[allow(clippy::too_many_arguments)]
+/// Read the app-level `disabled_targets:` list from `<app_root>/metaphor.codegen.yaml`.
+///
+/// Returns the Kotlin [`GenerationTarget`]s the consuming app wants skipped on
+/// every regen — used for targets the app fully hand-writes (offline repos,
+/// sync handlers) so the generator stops emitting dead duplicate files. Unknown
+/// / non-Kotlin names are ignored. Missing or unparseable file → empty list.
+fn read_disabled_targets(app_root: &Path) -> Vec<GenerationTarget> {
+    #[derive(serde::Deserialize)]
+    struct CodegenConfig {
+        #[serde(default)]
+        disabled_targets: Vec<String>,
+    }
+    let path = app_root.join("metaphor.codegen.yaml");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let cfg: CodegenConfig = match serde_yaml::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let all = GenerationTarget::all_targets();
+    cfg.disabled_targets
+        .iter()
+        .filter_map(|name| {
+            all.iter()
+                .find(|t| t.as_str().eq_ignore_ascii_case(name.trim()))
+                .cloned()
+        })
+        .collect()
+}
+
 fn generate_one(
     cwd: &Path,
     module: &str,
