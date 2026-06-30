@@ -7,6 +7,31 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-06-30
+
+### Fixed
+
+- **Generated module `lib.rs` / `mod.rs` no longer declares modules whose
+  files are never emitted.** The module generator unconditionally wrote
+  `pub mod permission;` (domain layer) and `pub mod middleware;` (application
+  layer), but no generator emits `domain/permission.rs` or
+  `application/middleware.rs` — the Permission target is unimplemented and no
+  application-middleware generator exists — so every generated crate failed to
+  compile with `E0583` (file not found for module). Both declarations are
+  dropped; each will be re-added gated on the same condition that writes its
+  file when the corresponding generator lands.
+  [`module`](src/generators/module.rs).
+
+### Changed
+
+- **Generated `lib.rs` now carries a crate-level `#![allow(unused_imports)]`.**
+  Each per-file generator emits a uniform import block and not every file uses
+  every import, which produced widespread `unused_imports` warnings on freshly
+  generated crates. The allow is applied crate-wide rather than teaching each
+  generator to prune; real unused imports in hand-written `// <<< CUSTOM`
+  blocks and `*_custom.rs` are still surfaced by clippy in review.
+  [`module`](src/generators/module.rs).
+
 ## [0.4.3] — 2026-06-25
 
 ### Added

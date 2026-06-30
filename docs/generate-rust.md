@@ -262,8 +262,9 @@ Generates Axum REST handlers with:
 - Bulk operation endpoints
 - Request/response DTOs
 - Error handling
-- Authentication middleware integration via `middleware::AuthContext`
-  extracted from `Extension<AuthContext>` (the bearer token is read from
+- Authentication middleware integration via
+  `backbone_auth::middleware::AuthContext` (an external crate, not a generated
+  module) extracted from `Extension<AuthContext>` (the bearer token is read from
   the `Authorization` header inside the handler). All async dependencies
   carry `Send + Sync` bounds so handlers compose with Axum's `Router`.
 
@@ -375,6 +376,17 @@ service-registration plumbing used by the host backend service.
   that overflow Rust's default limit of 128 when the crate is compiled as
   a **library** (e.g. linked by integration tests under `tests/**`); the
   bin crate sets the same attribute in its hand-written `main.rs`.
+- **Suppresses import-level noise crate-wide.** The generated `lib.rs`
+  also carries `#![allow(unused_imports)]`. Each per-file generator emits a
+  uniform import block and not every file uses every import, so this avoids
+  widespread `unused_imports` warnings on freshly generated crates rather
+  than pruning per generator. Real unused imports in hand-written
+  `// <<< CUSTOM` blocks and `*_custom.rs` are still flagged by clippy.
+- **Only declares modules whose files are emitted.** `pub mod` declarations
+  in the generated `lib.rs` / `mod.rs` are gated on the same conditions that
+  write the corresponding files, so the crate never references an absent
+  module. In particular `permission` (domain) and `middleware` (application)
+  are not declared while their generators remain unimplemented.
 - Inserts an empty `// <<< CUSTOM` placeholder immediately after the
   `with_database(...)` call so consumers have a stable, merge-safe slot
   for extra setup (custom indexes, seed bootstraps, etc.).

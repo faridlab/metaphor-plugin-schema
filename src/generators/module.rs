@@ -66,6 +66,11 @@ impl ModuleGenerator {
         // (e.g. linked by integration tests). The user-owned main.rs sets this; the
         // lib crate needs its own copy. See KNOWN_ISSUES.md RUST-GEN-001.
         writeln!(output, "#![recursion_limit = \"1024\"]").unwrap();
+        // Each per-file generator emits a uniform import block; not every file uses
+        // every import. Suppress import-level noise crate-wide rather than teaching each
+        // generator to prune. Real unused imports in hand-written CUSTOM / *_custom.rs are
+        // still surfaced by clippy in review.
+        writeln!(output, "#![allow(unused_imports)]").unwrap();
         writeln!(output).unwrap();
 
         // Module declarations
@@ -599,8 +604,11 @@ impl ModuleGenerator {
             writeln!(output, "pub mod event;").unwrap();
         }
 
-        // Always add permission module for RBAC support
-        writeln!(output, "pub mod permission;").unwrap();
+        // NOTE: `pub mod permission;` is intentionally NOT declared here. The Permission
+        // generation target is unimplemented (see generators/mod.rs TODO), so
+        // `domain/permission.rs` is never emitted — declaring it produced E0583. When the
+        // permission generator lands, emit this declaration gated on the same condition
+        // that writes the file (hooks with `permissions`), matching the re-export in lib.rs.
 
         // Add computed fields module if any hook has computed fields
         if schema.schema.hooks.iter().any(|h| !h.computed_fields.is_empty()) {
@@ -667,8 +675,10 @@ impl ModuleGenerator {
 
         writeln!(output, "pub mod service;").unwrap();
 
-        // Always add middleware module for Auth & RBAC
-        writeln!(output, "pub mod middleware;").unwrap();
+        // NOTE: `pub mod middleware;` is intentionally NOT declared here. No generator
+        // emits `application/middleware.rs`, so declaring it produced E0583. When an
+        // application-middleware generator lands, emit this declaration gated on the
+        // condition that writes the file.
 
         // Add triggers module if any hook has triggers
         if schema.schema.hooks.iter().any(|h| !h.triggers.is_empty()) {
