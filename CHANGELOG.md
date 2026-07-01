@@ -7,6 +7,58 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-07-01
+
+### Added
+
+- **The `integration-test` target now emits the `integration` module root and
+  its support files, so the generated test crate compiles standalone.** The
+  top-level `integration_tests.rs` does `mod integration;` and references
+  `integration::{framework, helpers}`, but those files were never generated —
+  every generated crate failed with `E0583` (file not found) plus unresolved
+  `ApiTest` / `CommonUtils` types. The generator now writes
+  `tests/integration/mod.rs`, `tests/integration/framework.rs` (the reqwest
+  HTTP harness: `ApiTest`, `ApiResponse`, `TestResult`), and
+  `tests/integration/helpers.rs` (`CommonUtils`).
+  [`integration_test`](src/generators/integration_test.rs).
+
+- **Required foreign-key parents are seeded before a child entity is created.**
+  A new `TestDataGenerator::seed_dependencies` trait method (default: none) plus
+  a `create_and_get_id` helper let a child entity's test POST a real parent row
+  and inject its id into the payload, so create/update satisfy referential
+  integrity. Only required, intra-module FKs are seeded — optional FKs,
+  self-references, cross-module logical refs
+  (`@exclude_from_foreign_key_check`), and out-of-module targets are skipped
+  (no DB constraint to satisfy). [`integration_test`](src/generators/integration_test.rs).
+
+- **Generated test crate carries `#![recursion_limit = "512"]`.** Entity
+  test-data generators build large `json!{}` literals (one key per field) that
+  exceed the default macro recursion limit (128) in this separate test crate.
+  [`integration_test`](src/generators/integration_test.rs).
+
+### Changed
+
+- **`get_test_value_for_field` is now type-aware instead of name-guessing.** It
+  emits a value from the field's declared `TypeRef`/`PrimitiveType` (unwrapping
+  `Optional` when `@required` was set), so required fields get a value that
+  actually deserializes and optional fields get `null` (always valid). Required
+  enum fields emit a real variant (looked up from the schema's enums) instead of
+  `null`, which previously 422'd. A few name-based niceties (`email`, `slug`,
+  `url`, `code`) are kept for readability.
+  [`integration_test`](src/generators/integration_test.rs).
+
+- **`extract_id` reads the `{"data": {"id": …}}` response envelope.** Id
+  extraction now looks under `data.id` first, falling back to a top-level `id`,
+  matching the handler response shape.
+  [`integration_test`](src/generators/integration_test.rs).
+
+- **Batch soft-delete/restore steps are gated on soft-delete support.** The
+  `run_all` flow only runs `test_bulk_delete` / `test_bulk_restore` /
+  `test_restore_all` when the entity carries audit metadata (`deleted_at`).
+  Entities without it (cascade children like `JournalLine`) hard-delete, which
+  would 404 the subsequent cleanup. A new `CrudTestConfig.supports_soft_delete`
+  flag drives the gate. [`integration_test`](src/generators/integration_test.rs).
+
 ## [0.4.4] — 2026-06-30
 
 ### Fixed
