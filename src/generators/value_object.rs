@@ -625,15 +625,16 @@ impl ValueObjectGenerator {
         writeln!(output, "/// Builder for Metadata value object").unwrap();
         writeln!(output, "///").unwrap();
         writeln!(output, "/// # Example").unwrap();
-        writeln!(output, "/// ```").unwrap();
+        writeln!(output, "/// ```ignore").unwrap();
         writeln!(output, "/// use chrono::Utc;").unwrap();
         writeln!(output, "/// use uuid::Uuid;").unwrap();
         writeln!(output, "///").unwrap();
+        writeln!(output, "/// let user_id = Uuid::new_v4();").unwrap();
         writeln!(output, "/// let metadata = Metadata::builder()").unwrap();
         writeln!(output, "///     .created_at(Utc::now())").unwrap();
         writeln!(output, "///     .updated_at(Utc::now())").unwrap();
         writeln!(output, "///     .created_by(Some(user_id))").unwrap();
-        writeln!(output, "///     .build()").unwrap();
+        writeln!(output, "///     .build();").unwrap();
         writeln!(output, "/// ```").unwrap();
         writeln!(output, "#[derive(Debug, Clone, Default)]").unwrap();
         writeln!(output, "pub struct MetadataBuilder {{").unwrap();
