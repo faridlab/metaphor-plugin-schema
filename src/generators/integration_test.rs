@@ -11,9 +11,10 @@
 //! - `tests/integration/tests/mod.rs` - Module declarations
 
 use super::{GenerateError, GeneratedOutput, Generator};
-use crate::ast::Model;
+use crate::ast::{Model, PrimitiveType, TypeRef};
 use crate::resolver::ResolvedSchema;
 use crate::utils::to_snake_case;
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -111,14 +112,43 @@ impl IntegrationTestGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "/// Trait for entity-specific test data generation").unwrap();
+        writeln!(output, "#[allow(async_fn_in_trait)]").unwrap();
         writeln!(output, "pub trait TestDataGenerator: Send + Sync {{").unwrap();
         writeln!(output, "    fn generate_create_payload(&self, utils: &CommonUtils) -> Value;").unwrap();
         writeln!(output, "    fn generate_update_payload(&self, id: &str, utils: &CommonUtils) -> Value;").unwrap();
         writeln!(output, "    fn generate_invalid_payload(&self) -> Value;").unwrap();
         writeln!(output).unwrap();
+        writeln!(output, "    /// Extract the created id from the response envelope (`{{\"data\": {{\"id\": ...}}}}`).").unwrap();
         writeln!(output, "    fn extract_id(&self, response: &Value) -> Option<String> {{").unwrap();
-        writeln!(output, "        response.get(\"id\").and_then(|v| v.as_str()).map(String::from)").unwrap();
+        writeln!(output, "        response").unwrap();
+        writeln!(output, "            .get(\"data\")").unwrap();
+        writeln!(output, "            .and_then(|d| d.get(\"id\"))").unwrap();
+        writeln!(output, "            .or_else(|| response.get(\"id\"))").unwrap();
+        writeln!(output, "            .and_then(|v| v.as_str())").unwrap();
+        writeln!(output, "            .map(String::from)").unwrap();
         writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "    /// Seed required foreign-key parents; returns (payload_field, parent_id) overrides.").unwrap();
+        writeln!(output, "    /// Default: none. Overridden for entities with required intra-module FKs.").unwrap();
+        writeln!(output, "    async fn seed_dependencies(&self, _api: &ApiTest) -> Vec<(String, String)> {{").unwrap();
+        writeln!(output, "        Vec::new()").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "/// Create an entity (seeding its own required FK parents first) and return its id.").unwrap();
+        writeln!(output, "pub async fn create_and_get_id<G: TestDataGenerator>(").unwrap();
+        writeln!(output, "    api: &ApiTest,").unwrap();
+        writeln!(output, "    base_path: &str,").unwrap();
+        writeln!(output, "    generator: &G,").unwrap();
+        writeln!(output, ") -> Option<String> {{").unwrap();
+        writeln!(output, "    let utils = CommonUtils::default();").unwrap();
+        writeln!(output, "    let mut payload = generator.generate_create_payload(&utils);").unwrap();
+        writeln!(output, "    for (field, id) in generator.seed_dependencies(api).await {{").unwrap();
+        writeln!(output, "        payload[field.as_str()] = json!(id);").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output, "    let response = api.post(base_path, &payload, None).await.ok()?;").unwrap();
+        writeln!(output, "    let body = response.json_value().ok()?;").unwrap();
+        writeln!(output, "    body.get(\"data\").and_then(|d| d.get(\"id\")).or_else(|| body.get(\"id\")).and_then(|v| v.as_str()).map(String::from)").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -205,7 +235,10 @@ impl IntegrationTestGenerator {
         writeln!(output, "    /// Test: Create entity (POST /collection)").unwrap();
         writeln!(output, "    pub async fn test_create(&mut self) -> TestResult {{").unwrap();
         writeln!(output, "        let test_name = format!(\"{{}} - Create\", self.config.entity_name);").unwrap();
-        writeln!(output, "        let payload = self.generator.generate_create_payload(&self.utils);").unwrap();
+        writeln!(output, "        let mut payload = self.generator.generate_create_payload(&self.utils);").unwrap();
+        writeln!(output, "        for (field, id) in self.generator.seed_dependencies(&self.api_test).await {{").unwrap();
+        writeln!(output, "            payload[field.as_str()] = json!(id);").unwrap();
+        writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        match self.api_test.post(&self.endpoint(\"\"), &payload, None).await {{").unwrap();
         writeln!(output, "            Ok(response) => {{").unwrap();
@@ -237,7 +270,10 @@ impl IntegrationTestGenerator {
         writeln!(output, "    /// Test: Update entity (PUT /collection/:id)").unwrap();
         writeln!(output, "    pub async fn test_update(&self, id: &str) -> TestResult {{").unwrap();
         writeln!(output, "        let test_name = format!(\"{{}} - Update\", self.config.entity_name);").unwrap();
-        writeln!(output, "        let payload = self.generator.generate_update_payload(id, &self.utils);").unwrap();
+        writeln!(output, "        let mut payload = self.generator.generate_update_payload(id, &self.utils);").unwrap();
+        writeln!(output, "        for (field, pid) in self.generator.seed_dependencies(&self.api_test).await {{").unwrap();
+        writeln!(output, "            payload[field.as_str()] = json!(pid);").unwrap();
+        writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        match self.api_test.put(&self.endpoint(&format!(\"/{{}}\", id)), &payload, None).await {{").unwrap();
         writeln!(output, "            Ok(response) => self.api_test.create_result(&test_name, &response, 200, \"Update works\"),").unwrap();
@@ -361,10 +397,10 @@ impl IntegrationTestGenerator {
         writeln!(output, "        results.push(self.test_invalid_create().await);").unwrap();
         writeln!(output, "        results.push(self.test_not_found().await);").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        // Batch operations (exercised on the created entities;").unwrap();
-        writeln!(output, "        // soft-delete then restore so they remain for cleanup below)").unwrap();
+        writeln!(output, "        // Batch soft-delete ops — only for entities that support soft-delete.").unwrap();
+        writeln!(output, "        // (No-soft-delete entities hard-delete here, which would 404 the cleanup below.)").unwrap();
         writeln!(output, "        let batch_ids: Vec<String> = self.created_ids.clone();").unwrap();
-        writeln!(output, "        if !batch_ids.is_empty() {{").unwrap();
+        writeln!(output, "        if self.config.supports_soft_delete && !batch_ids.is_empty() {{").unwrap();
         writeln!(output, "            results.push(self.test_bulk_delete(&batch_ids).await);").unwrap();
         writeln!(output, "            results.push(self.test_bulk_restore(&batch_ids).await);").unwrap();
         writeln!(output, "            results.push(self.test_restore_all().await);").unwrap();
@@ -393,13 +429,37 @@ impl IntegrationTestGenerator {
     }
 
     /// Generate entity-specific API test
-    fn generate_entity_test(&self, model: &Model, _module_name: &str) -> String {
+    fn generate_entity_test(&self, model: &Model, _module_name: &str, enums: &HashMap<String, String>, entity_paths: &HashMap<String, String>) -> String {
         let mut output = String::new();
         let pascal_name = &model.name;
         let snake_name = to_snake_case(&model.name);
         let table_name = model.collection.as_ref()
             .cloned()
             .unwrap_or_else(|| format!("{}s", snake_name));
+
+        // Required intra-module foreign-key dependencies that must be seeded (a real parent
+        // row must exist) before this entity can be created. (field, parent_entity, parent_path).
+        // Skips: optional FKs, cross-module logical refs (@exclude_from_foreign_key_check),
+        // self-references, and targets outside this module (no DB constraint to satisfy).
+        let mut fk_deps: Vec<(String, String, String)> = Vec::new();
+        for field in &model.fields {
+            if !field.is_required() || field.has_attribute("exclude_from_foreign_key_check") {
+                continue;
+            }
+            let Some(attr) = field.get_attribute("foreign_key") else { continue };
+            let target = match attr.args.first() {
+                Some((_, crate::ast::AttributeValue::String(s)))
+                | Some((_, crate::ast::AttributeValue::Ident(s))) => s.clone(),
+                _ => continue,
+            };
+            let parent = target.split('.').next().unwrap_or("").to_string();
+            if parent.is_empty() || parent == model.name {
+                continue;
+            }
+            if let Some(path) = entity_paths.get(&parent) {
+                fk_deps.push((field.name.clone(), parent, path.clone()));
+            }
+        }
 
         writeln!(output, "//! {} API Integration Tests", pascal_name).unwrap();
         writeln!(output, "//!").unwrap();
@@ -414,6 +474,7 @@ impl IntegrationTestGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "use super::crud_test_base::{{CrudTestConfig, GenericCrudTest, TestDataGenerator}};").unwrap();
+        writeln!(output, "use crate::integration::framework::ApiTest;").unwrap();
         writeln!(output, "use crate::integration::helpers::CommonUtils;").unwrap();
         writeln!(output).unwrap();
 
@@ -442,7 +503,7 @@ impl IntegrationTestGenerator {
                 continue;
             }
 
-            let field_value = self.get_test_value_for_field(field);
+            let field_value = self.get_test_value_for_field(field, enums);
             writeln!(output, "            \"{}\": {},", field_name, field_value).unwrap();
         }
 
@@ -465,7 +526,7 @@ impl IntegrationTestGenerator {
                 continue;
             }
 
-            let field_value = self.get_test_value_for_field(field);
+            let field_value = self.get_test_value_for_field(field, enums);
             writeln!(output, "            \"{}\": {},", field_name, field_value).unwrap();
         }
 
@@ -478,6 +539,23 @@ impl IntegrationTestGenerator {
         writeln!(output, "            // Missing required fields").unwrap();
         writeln!(output, "        }})").unwrap();
         writeln!(output, "    }}").unwrap();
+
+        // Seed required foreign-key parents (recursively) and return the resulting IDs to
+        // override in the payload, so create/update satisfy referential integrity.
+        if !fk_deps.is_empty() {
+            writeln!(output).unwrap();
+            writeln!(output, "    async fn seed_dependencies(&self, api: &ApiTest) -> Vec<(String, String)> {{").unwrap();
+            writeln!(output, "        let mut deps: Vec<(String, String)> = Vec::new();").unwrap();
+            for (field, parent, path) in &fk_deps {
+                let parent_snake = to_snake_case(parent);
+                writeln!(output, "        if let Some(id) = super::crud_test_base::create_and_get_id(api, \"{}\", &super::{}_api_test::{}TestData).await {{", path, parent_snake, parent).unwrap();
+                writeln!(output, "            deps.push((\"{}\".to_string(), id));", field).unwrap();
+                writeln!(output, "        }}").unwrap();
+            }
+            writeln!(output, "        deps").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -493,9 +571,15 @@ impl IntegrationTestGenerator {
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
+        // Soft-delete support = the entity carries audit metadata (deleted_at). Entities
+        // without it (cascade children like JournalLine) hard-delete, so the bulk
+        // soft-delete/restore steps must be skipped for them.
+        let supports_soft_delete = model.fields.iter().any(|f| f.has_attribute("audit_metadata"));
+
         writeln!(output, "impl {}ApiTest {{", pascal_name).unwrap();
         writeln!(output, "    pub fn new() -> Self {{").unwrap();
-        writeln!(output, "        let config = CrudTestConfig::new(\"/api/v1/{}\", \"{}\");", table_name, pascal_name).unwrap();
+        writeln!(output, "        let mut config = CrudTestConfig::new(\"/api/v1/{}\", \"{}\");", table_name, pascal_name).unwrap();
+        writeln!(output, "        config.supports_soft_delete = {};", supports_soft_delete).unwrap();
         writeln!(output, "        Self {{").unwrap();
         writeln!(output, "            inner: GenericCrudTest::new(config, {}TestData),", pascal_name).unwrap();
         writeln!(output, "        }}").unwrap();
@@ -555,42 +639,73 @@ impl IntegrationTestGenerator {
     }
 
     /// Get a test value for a field based on its type
-    fn get_test_value_for_field(&self, field: &crate::ast::Field) -> String {
-        let field_name = &field.name;
+    /// Produce a JSON value (as a Rust expression string) for a field in a test payload.
+    ///
+    /// Required fields get a type-appropriate value so the payload deserializes (sending
+    /// `null` for a non-optional field is a 422). Optional fields get `null`, which is always
+    /// valid. Enum fields emit a real variant (looked up in `enums`).
+    ///
+    /// NOTE: required *intra-module* foreign keys get a fresh UUID — valid for deserialization,
+    /// but the DB insert may still fail referential integrity for entities that require a real
+    /// parent row (e.g. JournalLine.journal_id). Satisfying full FK graphs needs seeded
+    /// fixtures, which is out of scope for generic payload generation.
+    fn get_test_value_for_field(&self, field: &crate::ast::Field, enums: &HashMap<String, String>) -> String {
+        let field_name = field.name.as_str();
 
-        // Handle specific field names
-        match field_name.as_str() {
-            "id" => return "Uuid::new_v4().to_string()".to_string(),
-            "code" => return "format!(\"TEST_{}\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
-            "name" => return "format!(\"Test {}\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
-            "slug" => return "format!(\"test-{}\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
-            "email" => return "format!(\"test{}@example.com\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
-            "url" | "logo_url" | "cover_url" => return "\"https://example.com/test\"".to_string(),
-            "description" | "tagline" => return "\"Test description\"".to_string(),
-            "is_active" | "is_verified" => return "true".to_string(),
-            "sort_order" | "level" | "max_users" | "max_branches" | "year_founded" => return "1".to_string(),
-            "parent_id" | "industry_id" | "organization_id" => return "null".to_string(),
-            "verified_at" | "updated_at" => return "now".to_string(),
-            "settings" | "metadata" => return "json!({})".to_string(),
-            "tax_id" | "registration_number" => return "null".to_string(),
-            "icon" => return "\"icon-default\"".to_string(),
-            "materialized_path" => return "\"\"".to_string(),
-            _ => {}
-        }
-
-        // Handle by type pattern
-        if field_name.ends_with("_id") {
-            return "null".to_string();
-        }
+        // Managed timestamps: a valid RFC3339 value is harmless whether required or optional.
         if field_name.ends_with("_at") {
             return "now".to_string();
         }
-        if field_name.starts_with("is_") {
-            return "false".to_string();
+
+        // Optional fields: null is always a valid value.
+        if !field.is_required() {
+            return "null".to_string();
         }
 
-        // Default to null for unknown fields
-        "null".to_string()
+        // Name-based niceties for readability (all valid for their string type).
+        match field_name {
+            "email" => return "format!(\"test{}@example.com\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
+            "slug" => return "format!(\"test-{}\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
+            "url" | "logo_url" | "cover_url" => return "\"https://example.com/test\"".to_string(),
+            "code" | "account_code" => return "format!(\"TEST_{}\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
+            _ => {}
+        }
+
+        // Required: emit a value matching the declared type (unwrap Optional if @required was set on it).
+        let ty = match &field.type_ref {
+            TypeRef::Optional(inner) => inner.as_ref(),
+            other => other,
+        };
+
+        match ty {
+            TypeRef::Primitive(p) => match p {
+                PrimitiveType::Uuid => "Uuid::new_v4().to_string()".to_string(),
+                PrimitiveType::Bool => "false".to_string(),
+                PrimitiveType::Int | PrimitiveType::Int32 | PrimitiveType::Int64 => "1".to_string(),
+                PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64
+                | PrimitiveType::Percentage => "1.0".to_string(),
+                PrimitiveType::Decimal | PrimitiveType::Money => "0".to_string(),
+                PrimitiveType::Email => "format!(\"test{}@example.com\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
+                PrimitiveType::Url => "\"https://example.com/test\"".to_string(),
+                PrimitiveType::Json => "json!({})".to_string(),
+                PrimitiveType::DateTime | PrimitiveType::Timestamp => "now".to_string(),
+                PrimitiveType::Date => "Utc::now().format(\"%Y-%m-%d\").to_string()".to_string(),
+                PrimitiveType::Time => "\"12:00:00\"".to_string(),
+                PrimitiveType::Duration => "\"PT1H\"".to_string(),
+                PrimitiveType::Bytes | PrimitiveType::Binary | PrimitiveType::Base64 => "\"\"".to_string(),
+                // String + validated-string types (Slug, Phone, Ip, Markdown, Html, Mac, …)
+                _ => "format!(\"Test {}\", Uuid::new_v4().to_string().split('-').next().unwrap())".to_string(),
+            },
+            TypeRef::Custom(name) => match enums.get(name) {
+                Some(variant) => format!("\"{}\"", variant),
+                // Non-enum composite (value object) — best-effort empty object.
+                None => "json!({})".to_string(),
+            },
+            TypeRef::Array(_) => "json!([])".to_string(),
+            TypeRef::Map { .. } => "json!({})".to_string(),
+            TypeRef::ModuleRef { .. } => "Uuid::new_v4().to_string()".to_string(),
+            TypeRef::Optional(_) => "null".to_string(),
+        }
     }
 
     /// Generate main integration_tests.rs entry point
@@ -602,6 +717,12 @@ impl IntegrationTestGenerator {
         writeln!(output, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
         writeln!(output, "//!").unwrap();
         writeln!(output, "//! Run with: cargo test --package backbone-{} --test integration_tests", module_name).unwrap();
+        writeln!(output).unwrap();
+
+        // Entity test-data generators build large `json!{}` literals (one key per field)
+        // that exceed the default macro recursion limit (128) in this separate test crate.
+        // The lib crate sets its own limit; the test binary needs its own copy.
+        writeln!(output, "#![recursion_limit = \"512\"]").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "mod integration;").unwrap();
@@ -633,6 +754,155 @@ impl IntegrationTestGenerator {
 
         output
     }
+
+    /// `tests/integration/mod.rs` — the `integration` module root referenced by the
+    /// top-level `integration_tests.rs` (`mod integration;`).
+    fn generate_integration_mod() -> String {
+        r##"//! Integration test support root.
+//!
+//! Generated by metaphor-schema. Do not edit manually.
+
+pub mod framework;
+pub mod helpers;
+pub mod tests;
+"##
+        .to_string()
+    }
+
+    /// `tests/integration/framework.rs` — the HTTP harness (ApiTest / ApiResponse /
+    /// TestResult) used by the generated CRUD test base.
+    fn generate_framework() -> String {
+        r##"//! HTTP integration-test harness.
+//!
+//! Generated by metaphor-schema. Do not edit manually.
+#![allow(dead_code)]
+
+use std::collections::HashMap;
+
+use serde_json::Value;
+
+/// Outcome of a single API test case.
+#[derive(Debug, Clone)]
+pub struct TestResult {
+    pub test_name: String,
+    pub success: bool,
+    pub details: String,
+}
+
+impl TestResult {
+    pub fn success(test_name: impl Into<String>, details: impl Into<String>) -> Self {
+        Self { test_name: test_name.into(), success: true, details: details.into() }
+    }
+
+    pub fn failure(test_name: impl Into<String>, details: impl Into<String>) -> Self {
+        Self { test_name: test_name.into(), success: false, details: details.into() }
+    }
+}
+
+/// Captured HTTP response.
+#[derive(Debug, Clone)]
+pub struct ApiResponse {
+    pub status_code: u16,
+    pub body: String,
+}
+
+impl ApiResponse {
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status_code)
+    }
+
+    pub fn json_value(&self) -> Result<Value, serde_json::Error> {
+        serde_json::from_str(&self.body)
+    }
+}
+
+/// Thin reqwest wrapper for exercising a running service over HTTP.
+pub struct ApiTest {
+    entity_name: String,
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl ApiTest {
+    pub fn new(entity_name: &str, base_url: &str) -> Self {
+        Self {
+            entity_name: entity_name.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    async fn send(
+        &self,
+        req: reqwest::RequestBuilder,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<ApiResponse, reqwest::Error> {
+        let mut req = req;
+        if let Some(hs) = headers {
+            for (k, v) in hs {
+                req = req.header(k, v);
+            }
+        }
+        let resp = req.send().await?;
+        let status_code = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        Ok(ApiResponse { status_code, body })
+    }
+
+    pub async fn get(&self, path: &str, headers: Option<HashMap<String, String>>) -> Result<ApiResponse, reqwest::Error> {
+        self.send(self.client.get(self.url(path)), headers).await
+    }
+
+    pub async fn post(&self, path: &str, body: &Value, headers: Option<HashMap<String, String>>) -> Result<ApiResponse, reqwest::Error> {
+        self.send(self.client.post(self.url(path)).json(body), headers).await
+    }
+
+    pub async fn put(&self, path: &str, body: &Value, headers: Option<HashMap<String, String>>) -> Result<ApiResponse, reqwest::Error> {
+        self.send(self.client.put(self.url(path)).json(body), headers).await
+    }
+
+    pub async fn delete(&self, path: &str, headers: Option<HashMap<String, String>>) -> Result<ApiResponse, reqwest::Error> {
+        self.send(self.client.delete(self.url(path)), headers).await
+    }
+
+    /// Build a `TestResult` by asserting the response status equals `expected_status`.
+    pub fn create_result(&self, test_name: &str, response: &ApiResponse, expected_status: u16, success_msg: &str) -> TestResult {
+        if response.status_code == expected_status {
+            TestResult::success(test_name, success_msg)
+        } else {
+            let snippet: String = response.body.chars().take(200).collect();
+            TestResult::failure(
+                test_name,
+                format!(
+                    "[{}] expected HTTP {}, got {} (body: {})",
+                    self.entity_name, expected_status, response.status_code, snippet
+                ),
+            )
+        }
+    }
+}
+"##
+        .to_string()
+    }
+
+    /// `tests/integration/helpers.rs` — `CommonUtils` handed to entity data generators.
+    fn generate_helpers() -> String {
+        r##"//! Common integration-test helpers.
+//!
+//! Generated by metaphor-schema. Do not edit manually.
+#![allow(dead_code)]
+
+/// Shared utilities handed to entity test-data generators. Generators accept this by
+/// reference for forward-compatibility (seeded RNG, fixtures, …) even when unused today.
+#[derive(Debug, Clone, Default)]
+pub struct CommonUtils;
+"##
+        .to_string()
+    }
 }
 
 impl Default for IntegrationTestGenerator {
@@ -656,6 +926,30 @@ impl Generator for IntegrationTestGenerator {
         let models: Vec<&Model> = schema.schema.models.iter().collect();
         let module_name = &schema.schema.name;
 
+        // Map each enum name -> a valid variant (the first), so test payloads can emit a
+        // concrete value for required enum fields instead of null.
+        let enum_values: HashMap<String, String> = schema
+            .schema
+            .enums
+            .iter()
+            .filter_map(|e| e.variants.first().map(|v| (e.name.clone(), v.name.clone())))
+            .collect();
+
+        // Map each entity name -> its collection API path, so a child entity's test can seed
+        // required foreign-key parents by POSTing to the right endpoint.
+        let entity_paths: HashMap<String, String> = schema
+            .schema
+            .models
+            .iter()
+            .map(|m| {
+                let table = m
+                    .collection
+                    .clone()
+                    .unwrap_or_else(|| format!("{}s", to_snake_case(&m.name)));
+                (m.name.clone(), format!("/api/v1/{}", table))
+            })
+            .collect();
+
         // Generate tests/integration/tests/mod.rs
         let tests_mod = self.generate_tests_mod(&models);
         output.add_file(
@@ -670,10 +964,26 @@ impl Generator for IntegrationTestGenerator {
             crud_base,
         );
 
+        // Generate the `integration` module root + its support files. Without these the
+        // top-level `integration_tests.rs` (which does `mod integration;` and references
+        // `integration::{framework, helpers}`) fails to compile (E0583 + unresolved types).
+        output.add_file(
+            PathBuf::from("tests/integration/mod.rs"),
+            Self::generate_integration_mod(),
+        );
+        output.add_file(
+            PathBuf::from("tests/integration/framework.rs"),
+            Self::generate_framework(),
+        );
+        output.add_file(
+            PathBuf::from("tests/integration/helpers.rs"),
+            Self::generate_helpers(),
+        );
+
         // Generate entity-specific tests
         for model in &models {
             let snake_name = to_snake_case(&model.name);
-            let entity_test = self.generate_entity_test(model, module_name);
+            let entity_test = self.generate_entity_test(model, module_name, &enum_values, &entity_paths);
             output.add_file(
                 PathBuf::from(format!("tests/integration/tests/{}_api_test.rs", snake_name)),
                 entity_test,
