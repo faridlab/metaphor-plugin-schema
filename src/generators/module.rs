@@ -198,7 +198,8 @@ impl ModuleGenerator {
         writeln!(output, "///     .with_database(pool.clone())").unwrap();
         writeln!(output, "///     .build()?;").unwrap();
         writeln!(output, "///").unwrap();
-        writeln!(output, "/// let router = {}.routes();", to_snake_case(module_name)).unwrap();
+        writeln!(output, "/// // Unguarded full CRUD (trusted/admin); compose a guarded router for production.").unwrap();
+        writeln!(output, "/// let router = {}.all_crud_routes();", to_snake_case(module_name)).unwrap();
         writeln!(output, "/// ```").unwrap();
         writeln!(output, "pub struct {}Module {{", pascal_name).unwrap();
 
@@ -225,11 +226,15 @@ impl ModuleGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
-        // Configure routes method - returns Axum Router using BackboneCrudHandler
-        writeln!(output, "    /// Configure HTTP routes for this module using Axum").unwrap();
-        writeln!(output, "    ///").unwrap();
-        writeln!(output, "    /// Returns an Axum Router with all 12 Backbone CRUD endpoints per entity.").unwrap();
-        writeln!(output, "    pub fn routes(&self) -> Router {{").unwrap();
+        // Routes: the UNGUARDED full-CRUD mount is `all_crud_routes`; `routes()` is kept as a
+        // #[deprecated] alias so a naive `.routes()` call can't silently expose unvalidated writes
+        // (soft-delete/patch/upsert/bulk) on every entity. Compose a guarded router for production.
+        writeln!(output, "    /// Mount ALL generated CRUD endpoints (12 per entity) with NO domain").unwrap();
+        writeln!(output, "    /// validation — the fully **unguarded** surface. A well-formed request can").unwrap();
+        writeln!(output, "    /// create invalid rows or soft-delete a referenced master out from under its").unwrap();
+        writeln!(output, "    /// dependents. Prefer a guarded composition (read + validated writes) for any").unwrap();
+        writeln!(output, "    /// real deployment; use this only in trusted/admin/seeding contexts.").unwrap();
+        writeln!(output, "    pub fn all_crud_routes(&self) -> Router {{").unwrap();
         writeln!(output, "        use presentation::http::{{").unwrap();
         for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             writeln!(output, "            create_{}_routes,", to_snake_case(&model.name)).unwrap();
@@ -242,6 +247,18 @@ impl ModuleGenerator {
             writeln!(output, "            .merge(create_{}_routes(self.{}_service.clone()))",
                 snake_name, snake_name).unwrap();
         }
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Deprecated alias: `routes()` reads like "the routes" but mounts the unguarded surface.
+        writeln!(output, "    /// Deprecated alias for [`Self::all_crud_routes`]. `routes()` reads like").unwrap();
+        writeln!(output, "    /// \"the routes\" but mounts UNVALIDATED generic CRUD on every entity — a naive").unwrap();
+        writeln!(output, "    /// mount exposes unguarded writes. Compose a guarded router (read + validated").unwrap();
+        writeln!(output, "    /// writes) for production, or call `all_crud_routes()` to opt into the full").unwrap();
+        writeln!(output, "    /// unguarded surface explicitly.").unwrap();
+        writeln!(output, "    #[deprecated(note = \"mounts unvalidated generic CRUD on every entity; compose a guarded router for production, or call all_crud_routes() for the intentional full/unguarded surface\")]").unwrap();
+        writeln!(output, "    pub fn routes(&self) -> Router {{").unwrap();
+        writeln!(output, "        self.all_crud_routes()").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -948,6 +965,10 @@ mod tests {
         assert!(lib_content.contains("pub fn build"));
         // Routes method is defined on the module struct, not as configure_routes
         assert!(lib_content.contains("pub fn routes(&self)"));
+        // The unguarded full-CRUD mount is `all_crud_routes`; `routes()` is a deprecated alias.
+        assert!(lib_content.contains("pub fn all_crud_routes(&self)"));
+        assert!(lib_content.contains("#[deprecated"));
+        assert!(lib_content.contains("self.all_crud_routes()"));
     }
 
     #[test]
