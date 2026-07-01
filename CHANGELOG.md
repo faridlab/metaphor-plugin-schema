@@ -7,6 +7,40 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-07-02
+
+### Changed
+
+- **The generated module's unguarded full-CRUD mount is now named
+  `all_crud_routes()`, and `routes()` is a `#[deprecated]` alias for it.**
+  `routes()` reads like "the routes" but mounts all 12 generic CRUD endpoints per
+  entity with **no domain validation** — a naive `.routes()` mount silently
+  exposes unvalidated writes (soft-delete/patch/upsert/bulk), so a well-formed
+  request can create invalid rows or soft-delete a referenced master out from
+  under its dependents. The generator now emits `all_crud_routes()` as the
+  explicit, self-documenting full/unguarded surface and keeps `routes()` as a
+  `#[deprecated]` alias (still compiles, but nudges callers to compose a guarded
+  router — read + validated writes — for production). The struct doc example now
+  calls `all_crud_routes()`. [`module`](src/generators/module.rs).
+
+### Fixed
+
+- **The generated `Metadata` builder doc example is marked `ignore` and made
+  self-contained.** It referenced an undeclared `user_id`, so the doctest failed
+  to compile in the generated crate. The example now declares
+  `let user_id = Uuid::new_v4();`, terminates the `.build();` statement, and is
+  fenced ```ignore``` (it illustrates usage against the generated crate rather
+  than being independently runnable). [`value_object`](src/generators/value_object.rs).
+
+### Docs
+
+- **New triage note: [Codegen Wiring Gaps](docs/codegen-module-wiring-gaps.md).**
+  Documents generated-but-undeclared module trees (`handlers/`, `routes/`,
+  `exports/`, and the `usecases/auth/bulk_operations/subscriptions` application
+  layers) that fall out of the compile because `lib.rs` / `application/mod.rs`
+  hard-code a fixed set of `pub mod` lines, plus the `subscriptions/registry.rs`
+  incomplete-type-alias gap. Linked from the docs index. [`docs/README`](docs/README.md).
+
 ## [0.4.5] — 2026-07-01
 
 ### Added
