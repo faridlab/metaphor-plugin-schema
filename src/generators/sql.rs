@@ -157,8 +157,23 @@ impl SqlGenerator {
     }
 
     fn generate_column(&self, field: &Field) -> Result<String, GenerateError> {
-        let sql_type = self.type_to_sql(&field.type_ref);
+        let mut sql_type = self.type_to_sql(&field.type_ref);
         let mut constraints: Vec<String> = Vec::new();
+
+        // @precision(p, s) → NUMERIC(p, s). Without this the schema attribute was silently dropped and the
+        // column emitted as a bare, unbounded NUMERIC (a program-wide gap the 2026-07-11 hardening audit
+        // flagged: unbounded scale + no enforced precision). Applies to any type that maps to NUMERIC.
+        if sql_type == "NUMERIC" {
+            if let Some(prec) = field.find_attribute("precision") {
+                let p = prec.args.first().and_then(|(_, v)| v.as_int());
+                let s = prec.args.get(1).and_then(|(_, v)| v.as_int());
+                if let (Some(p), Some(s)) = (p, s) {
+                    sql_type = format!("NUMERIC({}, {})", p, s);
+                } else if let Some(p) = p {
+                    sql_type = format!("NUMERIC({})", p);
+                }
+            }
+        }
 
         // Special handling for @audit_metadata: JSONB column with audit fields default
         // This handles its own NOT NULL and DEFAULT, so check first to avoid duplicates
@@ -192,6 +207,15 @@ impl SqlGenerator {
                     }
                 }
             }
+        }
+
+        // @non_negative → a column CHECK. Without this the attribute was enforced only in hand-authored
+        // write services, and every OTHER writer (the generic 12-endpoint CRUD stack, a raw INSERT) could
+        // write a negative value — the recurring defect the hardening audit found being hand-patched with a
+        // DB CHECK module after module. Emitting it here closes every writer for every future module. A
+        // column CHECK also passes for NULL, so it is safe on optional fields.
+        if field.has_attribute("non_negative") {
+            constraints.push(format!("CHECK ({} >= 0)", field.name));
         }
 
         let constraint_str = if constraints.is_empty() {
