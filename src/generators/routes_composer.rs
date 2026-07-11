@@ -78,7 +78,11 @@ impl RoutesComposerGenerator {
             .collect();
         let imports: Vec<String> = routed_models
             .iter()
-            .map(|m| format!("create_{}_routes", to_snake_case(&m.name)))
+            .flat_map(|m| {
+                let s = to_snake_case(&m.name);
+                // Both the full-CRUD composer and the read-only composer (the latter feeds the guarded mount).
+                vec![format!("create_{}_routes", s), format!("create_{}_read_routes", s)]
+            })
             .collect();
         for (i, import) in imports.iter().enumerate() {
             let comma = if i < imports.len() - 1 { "," } else { "" };
@@ -121,6 +125,30 @@ impl RoutesComposerGenerator {
             writeln!(output, "        .merge(create_{}_routes(module.{}_service.clone()))", snake_name, snake_name).unwrap();
         }
 
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
+        // ============================================================
+        // Read-only-by-default composer (the guarded base)
+        // ============================================================
+        // The generic `create_stateless_routes` exposes full mutable CRUD on every entity, backed by generic
+        // services with NO domain validation — so a caller can bypass the hand-authored write service's
+        // invariants (the recurring gap the 2026-07-11 hardening audit found hand-patched module after
+        // module). This composer mounts every entity READ-ONLY: the safe default. A module with domain
+        // invariants mounts THIS instead of `create_stateless_routes`, and merges its own validated-write
+        // endpoints onto it — `create_readonly_{name}_routes(m).merge(my_validated_writes)`. (A distinct name
+        // from any hand-authored `create_guarded_{name}_routes`, so both can coexist / layer.)
+        writeln!(output, "/// Read-only routes for the {} module — every entity mounted READ-ONLY (the guarded base).", pascal_name).unwrap();
+        writeln!(output, "///").unwrap();
+        writeln!(output, "/// The generic `create_stateless_routes` exposes full mutable CRUD with no domain").unwrap();
+        writeln!(output, "/// validation; this exposes only reads, so generic mutation can't bypass a write").unwrap();
+        writeln!(output, "/// service's invariants. Extend it: `create_readonly_{}_routes(m).merge(my_validated_writes)`.", module_name).unwrap();
+        writeln!(output, "pub fn create_readonly_{}_routes(module: &crate::{}Module) -> Router<()> {{", module_name, pascal_name).unwrap();
+        writeln!(output, "    Router::new()").unwrap();
+        for model in &routed_models {
+            let snake_name = to_snake_case(&model.name);
+            writeln!(output, "        .merge(create_{}_read_routes(module.{}_service.clone()))", snake_name, snake_name).unwrap();
+        }
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
