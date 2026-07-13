@@ -7,6 +7,38 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-07-13
+
+### Added
+
+- **The `routes-composer` target now emits a read-only-by-default composer,
+  `create_readonly_<module>_routes()`, as the guarded base.** The generic
+  `create_stateless_routes` mounts full mutable CRUD on every entity backed by
+  generic services with **no domain validation**, so a caller can bypass a
+  hand-authored write service's invariants — the recurring gap the 2026-07-11
+  hardening audit found hand-patched module after module (audit residual #2).
+  The new composer mounts every entity **read-only**: a module with domain
+  invariants mounts this instead of `create_stateless_routes` and merges its own
+  validated-write endpoints onto it —
+  `create_readonly_<module>_routes(m).merge(my_validated_writes)`. It carries a
+  distinct name from any hand-authored `create_guarded_<name>_routes`, so both
+  can coexist and layer. The composer imports the per-entity
+  `create_<name>_read_routes` alongside the existing `create_<name>_routes`.
+  [`routes_composer`](src/generators/routes_composer.rs).
+
+- **The `sql` target now emits `NUMERIC(p, s)` from `@precision(p, s)` and a
+  `CHECK (<col> >= 0)` column constraint from `@non_negative`, so the generated
+  DDL enforces the bounds the schema declares.** Previously `@precision` was
+  silently dropped and the column emitted as a bare, unbounded `NUMERIC`
+  (unbounded scale, no enforced precision), and `@non_negative` was enforced only
+  in hand-authored write services — every other writer (the generic 12-endpoint
+  CRUD stack, a raw `INSERT`) could still write a negative value. Both were being
+  hand-patched with a DB `CHECK`/typed `NUMERIC` module after module; emitting
+  them from the schema closes every writer for every future module. `@precision`
+  applies to any type that maps to `NUMERIC` (`decimal`, `money`); a lone
+  precision arg emits `NUMERIC(p)`. The `@non_negative` CHECK also passes for
+  `NULL`, so it is safe on optional fields. [`sql`](src/generators/sql.rs).
+
 ## [0.4.6] — 2026-07-02
 
 ### Changed
