@@ -242,6 +242,12 @@ Generates SQL migration scripts with:
 - Partial indexes via `@where(...)` (audit-metadata keys auto-rewritten to JSONB form)
 - Automatic timestamp trigger functions
 - CHECK constraints for JSONB structure validation
+- `NUMERIC(p, s)` columns from `@precision(p, s)` on `decimal`/`money` fields
+  (a lone arg emits `NUMERIC(p)`); without the attribute the column is a bare,
+  unbounded `NUMERIC`
+- `CHECK (<col> >= 0)` column constraints from `@non_negative`, so every writer
+  — not just the hand-authored write service — is blocked from storing a
+  negative value (the CHECK passes for `NULL`, safe on optional fields)
 
 ### `repository` -- Repository Implementations
 
@@ -394,6 +400,22 @@ service-registration plumbing used by the host backend service.
   **`SchemaMutation`** (the `Schema` suffix is always appended, even when
   the module name already ends in `Query`/`Mutation`), so the host
   service can `MergedObject!((SchemaQuery, …))` without name clashes.
+
+### `routes-composer` -- Routes Composition (Axum router)
+
+Generates the module's router composers:
+
+- `create_stateless_routes(...)` — the full mutable CRUD surface, mounting all
+  generic endpoints on every entity backed by generic services with **no domain
+  validation**.
+- `create_readonly_<module>_routes(module)` — the **read-only-by-default guarded
+  base**. Every entity is mounted read-only (via the per-entity
+  `create_<name>_read_routes`), so generic mutation can't bypass a write
+  service's invariants. A module with domain invariants mounts this instead of
+  `create_stateless_routes` and merges its own validated-write endpoints onto it:
+  `create_readonly_<module>_routes(m).merge(my_validated_writes)`. Its name is
+  distinct from any hand-authored `create_guarded_<name>_routes`, so both can
+  coexist and layer.
 
 ---
 

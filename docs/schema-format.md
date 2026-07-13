@@ -325,6 +325,8 @@ Used in the legacy DSL format and in relation `attributes` arrays:
 | `@min(n)` | Minimum length/value | `@min(3)` |
 | `@max(n)` | Maximum length/value | `@max(255)` |
 | `@pattern(regex)` | Regex validation pattern | `@pattern([a-z0-9-]+)` |
+| `@precision(p, s)` | Decimal precision/scale for `NUMERIC` columns. Emits `NUMERIC(p, s)` in the generated DDL (a lone arg emits `NUMERIC(p)`); without it a `decimal`/`money` field is a bare, unbounded `NUMERIC`. Applies to any type that maps to `NUMERIC`. | `amount money @precision(12, 2)` |
+| `@non_negative` | Emits a column `CHECK (<col> >= 0)` in the generated DDL, so every writer (not just the hand-authored write service) is blocked from storing a negative value. The CHECK passes for `NULL`, so it is safe on optional fields. | `balance decimal @non_negative` |
 | `@foreign_key(ref)` | Foreign key reference | `@foreign_key(User.id)` |
 | `@soft_delete` | Enable soft-delete on model. On the Kotlin side, when paired with an `@audit_metadata` field, the entity gains a derived `val isDeleted: Boolean get() = metadata["deleted_at"] != null` helper. If the schema also declares an explicit `is_deleted` column, the helper is suppressed (the column wins) so there is exactly one canonical `isDeleted` property. | - |
 | `@hashed` | Field is stored hashed (e.g., passwords) | `password string @hashed` |
