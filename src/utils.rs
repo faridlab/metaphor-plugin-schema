@@ -56,9 +56,12 @@ pub fn to_snake_case(name: &str) -> String {
 ///
 /// assert_eq!(to_pascal_case("mfa_device"), "MfaDevice");
 /// assert_eq!(to_pascal_case("user_id"), "UserId");
+/// assert_eq!(to_pascal_case("serpa-posman-service"), "SerpaPosmanService");
 /// ```
 pub fn to_pascal_case(name: &str) -> String {
-    name.split('_')
+    // Split on '_', '-' and ' ' so hyphenated package names (e.g. `serpa-posman-service`) become a
+    // valid Rust identifier (`SerpaPosmanService`), not `Serpa-posman-service`.
+    name.split(['_', '-', ' '])
         .map(|part| {
             let mut chars = part.chars();
             match chars.next() {

@@ -153,6 +153,13 @@ enums:
 # pub enum RelationshipType { Lead, Customer, Partner }
 ```
 
+PascalCase conversion splits on `_`, `-`, and spaces, so a hyphenated or spaced
+name still produces a valid Rust identifier — `serpa-posman-service` becomes
+`SerpaPosmanService`, not `Serpa-posman-service`. `snake_case` remains the
+recommended convention for schema names; the extra separators exist so that names
+carried in from elsewhere (a project or package name, for instance) convert
+cleanly rather than emitting code that will not compile.
+
 ### Shared Types
 
 Define reusable type compositions:

@@ -444,7 +444,7 @@ use crate::utils::to_snake_case;
 
 
 fn to_pascal_case(name: &str) -> String {
-    name.split('_')
+    name.split(['_', '-', ' '])
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {

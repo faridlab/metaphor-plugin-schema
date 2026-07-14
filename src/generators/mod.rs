@@ -439,7 +439,7 @@ impl Drop for Timer {
 /// This is a centralized utility for consistent PascalCase conversion
 /// across all generators.
 fn to_pascal_case(name: &str) -> String {
-    name.split('_')
+    name.split(['_', '-', ' '])
         .map(|s| {
             let mut chars = s.chars();
             match chars.next() {

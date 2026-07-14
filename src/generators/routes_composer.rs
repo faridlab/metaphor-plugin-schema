@@ -248,7 +248,7 @@ impl RoutesComposerGenerator {
 
 /// Convert string to PascalCase
 fn to_pascal_case(s: &str) -> String {
-    s.split('_')
+    s.split(['_', '-', ' '])
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
