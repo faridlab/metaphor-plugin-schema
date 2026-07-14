@@ -606,8 +606,10 @@ impl ModuleGenerator {
             writeln!(output, "pub mod specifications;").unwrap();
         }
 
-        // Add value_objects module if any models exist
-        if !schema.schema.models.is_empty() {
+        // Add value_objects module ONLY if DDD value objects exist — the value_object generator emits
+        // src/domain/value_objects/ only then, so gating on models (as before) produced E0583 for a
+        // model with no value objects (same failure mode as `permission` below).
+        if !schema.schema.value_objects.is_empty() {
             writeln!(output, "pub mod value_objects;").unwrap();
         }
 
@@ -640,6 +642,9 @@ impl ModuleGenerator {
             writeln!(output, "pub use repositories::*;").unwrap();
             writeln!(output, "pub use services::*;").unwrap();
             writeln!(output, "pub use specifications::*;").unwrap();
+        }
+        // Only re-export value_objects when the module was actually declared (DDD value objects exist).
+        if !schema.schema.value_objects.is_empty() {
             writeln!(output, "pub use value_objects::*;").unwrap();
         }
         if schema.schema.hooks.iter().any(|h| h.state_machine.is_some()) {

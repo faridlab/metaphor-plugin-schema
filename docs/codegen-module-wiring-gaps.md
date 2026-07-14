@@ -110,6 +110,25 @@ auto-discovers as a `seeder` binary (the crate has `[lib]` and no `[[bin]]`, so
 `[[bin]]` guarded behind a `seeder` feature, or a library function invoked by an
 existing CLI — not an always-on `src/bin/*.rs`.
 
+## The inverse gap — declared but never emitted (E0583)
+
+Gaps A–C are all *emitted but never declared*. The mirror image also occurs: a
+`mod.rs` template declares a module the corresponding generator never writes, and
+the generated crate then fails to compile with **E0583 (file not found for
+module)**. Unlike Gaps A–C this one is loud — it breaks the build immediately
+rather than silently dropping code.
+
+Two instances, both closed:
+
+| Declaration | Written only when | Resolution |
+|---|---|---|
+| `pub mod value_objects;` in `domain/mod.rs` | schema declares `value_objects:` | Fixed in 0.4.8 — declaration and re-export now gated on `!value_objects.is_empty()` (was gated on `models`, so any module with entities but no value objects hit E0583) |
+| `pub mod permission;` in `domain/mod.rs` | never — the Permission target is unimplemented | Intentionally not declared; see the note at `src/generators/module.rs`. Declare it when the generator lands, gated on the condition that writes the file |
+
+The rule for any new declaration in a `mod.rs` template: gate it on **exactly the
+condition its generator uses to write the file**, not on a broader proxy such as
+"any models exist".
+
 ## Repro
 
 ```bash
