@@ -7,6 +7,32 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-07-15
+
+### Fixed
+
+- **The generated `domain/mod.rs` now declares and re-exports `value_objects`
+  only when the schema actually declares DDD value objects.** The declaration was
+  gated on `models` being non-empty, but the `value-object` target writes
+  `src/domain/value_objects/` only when `value_objects:` is non-empty — so any
+  module with entities but no value objects got a `pub mod value_objects;` (plus
+  `pub use value_objects::*;`) pointing at a directory that was never emitted, and
+  the generated crate failed to compile with **E0583 (file not found for module)**.
+  Both the declaration and the re-export are now gated on the same condition that
+  writes the files. This is the same declared-but-never-emitted failure mode
+  already documented in-place for `domain/permission.rs`.
+  [`module`](src/generators/module.rs).
+
+- **`to_pascal_case` now splits on `-` and ` ` as well as `_`, so hyphenated and
+  spaced names become valid Rust identifiers.** A name like
+  `serpa-posman-service` previously converted to `Serpa-posman-service` — only the
+  first segment was capitalized and the hyphens survived into the output, which is
+  not a legal identifier, so the generated code did not compile. It now yields
+  `SerpaPosmanService`. Applied to the shared [`utils::to_pascal_case`](src/utils.rs)
+  and to the per-generator copies in `app_state`, `config`, `export`,
+  `handlers_module`, `mod`, `module`, and `routes_composer`, so every generator
+  converts names identically. Existing `snake_case` inputs are unaffected.
+
 ## [0.4.7] — 2026-07-13
 
 ### Added
