@@ -2059,6 +2059,98 @@ mod tests {
         ResolvedSchema { schema }
     }
 
+    // ── Row-level tenant fence: the polarity guard ────────────────────────────
+    //
+    // These pin the ONE property that matters: an entity carrying the tenant column is
+    // fenced unless someone explicitly wrote `@global`. The `@private`/`@owner` feature
+    // shipped complete and correct and enforced nothing for a year because it was opt-in
+    // and nobody ever opted in — a permissive default is an invisible one. If a future
+    // refactor flips this back to opt-in, `tenant_fence_is_structural_not_declared` fails.
+
+    /// A model carrying the tenant column, with no security annotations at all.
+    fn make_tenant_scoped_model() -> Model {
+        let mut model = Model::new("SalesInvoice");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "company_id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("required")],
+                ..Default::default()
+            },
+        ];
+        model
+    }
+
+    fn generate_entity_file(model: Model, file: &str) -> String {
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        output
+            .files
+            .get(&PathBuf::from(file))
+            .unwrap_or_else(|| panic!("{file} should be generated"))
+            .clone()
+    }
+
+    #[test]
+    fn tenant_fence_is_structural_not_declared() {
+        // No `@owner`, no `@tenant`, no annotation whatsoever — the fence must come from the
+        // column's presence, a fact the author cannot forget to state.
+        let file = generate_entity_file(make_tenant_scoped_model(), "src/domain/entity/sales_invoice.rs");
+        assert!(
+            file.contains("fn tenant_field() -> Option<&'static str>"),
+            "an entity with a tenant column must be fenced without being annotated"
+        );
+        assert!(
+            file.contains("Some(\"company_id\")"),
+            "the fence must name the DB column (snake_case) — it lands in SQL, not in a response"
+        );
+    }
+
+    #[test]
+    fn global_opt_out_unfences_and_must_be_written_deliberately() {
+        let mut model = make_tenant_scoped_model();
+        model
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "company_id")
+            .unwrap()
+            .attributes
+            .push(Attribute::new("global"));
+
+        let file = generate_entity_file(model, "src/domain/entity/sales_invoice.rs");
+        assert!(
+            !file.contains("fn tenant_field()"),
+            "@global must unfence — but only because someone wrote it, in a diff, on purpose"
+        );
+    }
+
+    #[test]
+    fn an_entity_without_a_tenant_column_is_not_fenced() {
+        // Reference data (currencies, tax codes) must still read without a tenant.
+        //
+        // NOTE the known gap this encodes: a CHILD row scoped by its parent (e.g.
+        // SalesInvoiceItem) also has no tenant column and is indistinguishable here from
+        // true reference data. It yields no fence. That is closed by classification, not by
+        // this generator — do not read "no fence" as "verified global".
+        let mut model = Model::new("Currency");
+        model.fields = vec![Field {
+            name: "id".to_string(),
+            type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+            attributes: vec![Attribute::new("id")],
+            ..Default::default()
+        }];
+
+        let file = generate_entity_file(model, "src/domain/entity/currency.rs");
+        assert!(!file.contains("fn tenant_field()"), "global reference data must not be fenced");
+    }
+
     #[test]
     fn test_state_machine_generates_transition_to() {
         let schema = make_schema_with_state_machine();
