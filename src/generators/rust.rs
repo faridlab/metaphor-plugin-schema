@@ -1139,6 +1139,28 @@ impl RustGenerator {
             .find(|f| f.has_attribute("owner"))
             .map(|f| crate::webgen::parser::to_camel_case(&f.name));
 
+        // Row-level tenant isolation: STRUCTURAL, not declared. If the model carries the
+        // tenant column, it is fenced — unless it explicitly opts out with `@global`.
+        //
+        // Deliberately the inverse of `@owner`/`@private` above: those are opt-in, and in a
+        // year not one model ever declared them, so `apply_field_security` short-circuited on
+        // every request and nobody noticed — a permissive default is an invisible one. Deriving
+        // from column presence uses a fact the generator already has and cannot forget, so a new
+        // entity (a `make entity`, a schema PR, an ERPNext import) is fenced by default and an
+        // author must sign their name to `@global` to unfence it.
+        //
+        // NOTE: this only sees entities that HAVE the column. A child row scoped by its parent
+        // (e.g. SalesInvoiceItem) has no `company_id` and is indistinguishable here from true
+        // reference data — it yields `None` and is NOT fenced. That gap is closed by
+        // classification + the CI guard, not by this function. Do not read `None` as "verified
+        // global"; read it as "not fenced here".
+        const TENANT_COLUMN: &str = "company_id";
+        let tenant_field: Option<String> = model
+            .fields
+            .iter()
+            .find(|f| f.name == TENANT_COLUMN && !f.has_attribute("global"))
+            .map(|f| f.name.clone());
+
         // To-one relations expandable via `?include=` — (relation_name, target_table,
         // local_fk). relation_name + local_fk are response keys (camelCase); the
         // target table comes from the target model's collection.
@@ -1218,6 +1240,16 @@ impl RustGenerator {
         if let Some(of) = &owner_field {
             writeln!(output, "    fn owner_field() -> Option<&'static str> {{").unwrap();
             writeln!(output, "        Some(\"{of}\")").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
+        // tenant_field() — emitted whenever the tenant column is present and not `@global`.
+        // Unlike every other override here, this one is derived from structure rather than a
+        // declaration, so the unsafe state (a tenant-scoped entity with no fence) cannot be
+        // reached by forgetting — only by writing `@global` on purpose.
+        if let Some(tf) = &tenant_field {
+            writeln!(output, "    fn tenant_field() -> Option<&'static str> {{").unwrap();
+            writeln!(output, "        Some(\"{tf}\")").unwrap();
             writeln!(output, "    }}").unwrap();
         }
 
