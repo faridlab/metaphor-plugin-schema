@@ -1154,11 +1154,11 @@ impl RustGenerator {
         // reference data — it yields `None` and is NOT fenced. That gap is closed by
         // classification + the CI guard, not by this function. Do not read `None` as "verified
         // global"; read it as "not fenced here".
-        const TENANT_COLUMN: &str = "company_id";
-        let tenant_field: Option<String> = model
+        const COMPANY_COLUMN: &str = "company_id";
+        let company_field: Option<String> = model
             .fields
             .iter()
-            .find(|f| f.name == TENANT_COLUMN && !f.has_attribute("global"))
+            .find(|f| f.name == COMPANY_COLUMN && !f.has_attribute("global"))
             .map(|f| f.name.clone());
 
         // To-one relations expandable via `?include=` — (relation_name, target_table,
@@ -1243,12 +1243,12 @@ impl RustGenerator {
             writeln!(output, "    }}").unwrap();
         }
 
-        // tenant_field() — emitted whenever the tenant column is present and not `@global`.
+        // company_field() — emitted whenever the tenant column is present and not `@global`.
         // Unlike every other override here, this one is derived from structure rather than a
         // declaration, so the unsafe state (a tenant-scoped entity with no fence) cannot be
         // reached by forgetting — only by writing `@global` on purpose.
-        if let Some(tf) = &tenant_field {
-            writeln!(output, "    fn tenant_field() -> Option<&'static str> {{").unwrap();
+        if let Some(tf) = &company_field {
+            writeln!(output, "    fn company_field() -> Option<&'static str> {{").unwrap();
             writeln!(output, "        Some(\"{tf}\")").unwrap();
             writeln!(output, "    }}").unwrap();
         }
@@ -2065,7 +2065,7 @@ mod tests {
     // fenced unless someone explicitly wrote `@global`. The `@private`/`@owner` feature
     // shipped complete and correct and enforced nothing for a year because it was opt-in
     // and nobody ever opted in — a permissive default is an invisible one. If a future
-    // refactor flips this back to opt-in, `tenant_fence_is_structural_not_declared` fails.
+    // refactor flips this back to opt-in, `company_fence_is_structural_not_declared` fails.
 
     /// A model carrying the tenant column, with no security annotations at all.
     fn make_tenant_scoped_model() -> Model {
@@ -2099,12 +2099,12 @@ mod tests {
     }
 
     #[test]
-    fn tenant_fence_is_structural_not_declared() {
+    fn company_fence_is_structural_not_declared() {
         // No `@owner`, no `@tenant`, no annotation whatsoever — the fence must come from the
         // column's presence, a fact the author cannot forget to state.
         let file = generate_entity_file(make_tenant_scoped_model(), "src/domain/entity/sales_invoice.rs");
         assert!(
-            file.contains("fn tenant_field() -> Option<&'static str>"),
+            file.contains("fn company_field() -> Option<&'static str>"),
             "an entity with a tenant column must be fenced without being annotated"
         );
         assert!(
@@ -2126,7 +2126,7 @@ mod tests {
 
         let file = generate_entity_file(model, "src/domain/entity/sales_invoice.rs");
         assert!(
-            !file.contains("fn tenant_field()"),
+            !file.contains("fn company_field()"),
             "@global must unfence — but only because someone wrote it, in a diff, on purpose"
         );
     }
@@ -2148,7 +2148,7 @@ mod tests {
         }];
 
         let file = generate_entity_file(model, "src/domain/entity/currency.rs");
-        assert!(!file.contains("fn tenant_field()"), "global reference data must not be fenced");
+        assert!(!file.contains("fn company_field()"), "global reference data must not be fenced");
     }
 
     #[test]
