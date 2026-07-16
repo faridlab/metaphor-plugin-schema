@@ -69,18 +69,9 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
     let errors = validate_cross_module_fks(&registry, &all_refs);
 
     println!(
-        "  scanned {} module(s), {} cross-module reference(s) on direct model fields",
+        "  scanned {} module(s), {} cross-module reference(s) (direct fields + shared types)",
         modules_scanned,
         all_refs.len()
-    );
-    // Honest coverage boundary — do not let a green here read as "all cross-module FKs checked".
-    // FKs declared on a *shared type* (e.g. the audit `Actors.created_by -> sapiens.User.id`,
-    // inherited across every model) are NOT expanded into model fields at load time, so they are not
-    // yet validated here. In practice they all target `sapiens.User`, which exists; a phantom would
-    // have to be introduced on a shared type to slip past. Expanding shared-type FKs is a follow-up.
-    println!(
-        "  {} shared-type FKs (e.g. audit created_by/updated_by) are not covered yet — direct model fields only",
-        "note:".yellow().bold()
     );
 
     if !parse_failures.is_empty() {
