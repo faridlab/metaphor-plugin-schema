@@ -6,6 +6,7 @@
 //! - Schema validation (business rules, completeness checks)
 //! - Flow validation (step references, unreachable steps, terminal steps)
 
+pub mod cross_module_fk;
 pub mod flow_resolver;
 pub mod reference_resolver;
 pub mod type_resolver;

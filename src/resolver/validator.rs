@@ -113,7 +113,10 @@ impl<'a> SchemaValidator<'a> {
             // Verifying those needs a workspace-level pass over the full model registry (the
             // `corpus.Organization` phantom was cross-module and lives beyond this guard's reach).
             if let Some(fk) = field.attributes.iter().find(|a| a.name == "foreign_key") {
-                if let Some((_, crate::ast::AttributeValue::String(target))) = fk.args.first() {
+                // `@foreign_key(Entity.id)` is written unquoted, so the parser yields `Ident`, not
+                // `String`. Matching only `String` here made this check a silent no-op on every real
+                // schema; `fk_target` accepts both.
+                if let Some(target) = fk.args.first().and_then(|(_, v)| crate::resolver::cross_module_fk::fk_target(v)) {
                     let parts: Vec<&str> = target.split('.').collect();
                     // `Entity.column` = intra-module (2 parts). `module.Entity.column` = cross (3).
                     if parts.len() == 2 {
