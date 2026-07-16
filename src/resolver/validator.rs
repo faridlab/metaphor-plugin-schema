@@ -100,6 +100,35 @@ impl<'a> SchemaValidator<'a> {
                 )));
             }
 
+            // Check that an intra-module @foreign_key names a model that actually exists.
+            //
+            // Declaring a @foreign_key is not the same as its target being real: a whole
+            // `Organization` subsystem pointed five FKs at `corpus.Organization`, an entity that
+            // never existed in any module, and every validation passed — because nothing checked
+            // the target. This closes the same-module case (the one this single-module validator
+            // CAN see): `@foreign_key(Ghost.id)` where `Ghost` is not a model here is now an error.
+            //
+            // Cross-module targets (`module.Entity.id`) are intentionally NOT flagged here: this
+            // validator sees only the current module, so it cannot know another module's entities.
+            // Verifying those needs a workspace-level pass over the full model registry (the
+            // `corpus.Organization` phantom was cross-module and lives beyond this guard's reach).
+            if let Some(fk) = field.attributes.iter().find(|a| a.name == "foreign_key") {
+                if let Some((_, crate::ast::AttributeValue::String(target))) = fk.args.first() {
+                    let parts: Vec<&str> = target.split('.').collect();
+                    // `Entity.column` = intra-module (2 parts). `module.Entity.column` = cross (3).
+                    if parts.len() == 2 {
+                        let entity = parts[0];
+                        if !known_models.contains(entity) && !entity.is_empty() {
+                            errors.push(ResolveError::validation(format!(
+                                "Model '{}' field '{}' has @foreign_key({}) but no model '{}' exists in this module \
+                                 (declare it, fix the name, or use `module.{}` if it lives in another module)",
+                                model.name, field.name, target, entity, target
+                            )));
+                        }
+                    }
+                }
+            }
+
             // PHASE 2: Check that metadata fields use 'json' type, not custom types
             if field.name == "metadata" {
                 if let crate::ast::TypeRef::Custom(ref type_name) = field.type_ref {
@@ -405,5 +434,77 @@ impl<'a> SchemaValidator<'a> {
         // TODO: Implement reachability analysis
 
         errors
+    }
+}
+
+#[cfg(test)]
+mod fk_target_tests {
+    use super::*;
+    use crate::ast::{Attribute, AttributeValue, Field, Model, PrimitiveType, TypeRef};
+
+    fn id_field() -> Field {
+        let mut f = Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(Attribute::new("id"));
+        f
+    }
+
+    fn fk_field(name: &str, target: &str) -> Field {
+        let mut f = Field::new(name, TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(
+            Attribute::new("foreign_key").with_arg(AttributeValue::String(target.into())),
+        );
+        f
+    }
+
+    fn schema_with(models: Vec<Model>) -> ModuleSchema {
+        let mut s = ModuleSchema::new("test");
+        s.models = models;
+        s
+    }
+
+    fn errors_of(s: &ModuleSchema) -> Vec<String> {
+        match SchemaValidator::new(s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn intra_module_fk_to_missing_model_is_rejected() {
+        // The phantom, in miniature: an FK naming a model that does not exist in this module.
+        let mut child = Model::new("OrgUser");
+        child.fields = vec![id_field(), fk_field("organization_id", "Organization.id")];
+        let errs = errors_of(&schema_with(vec![child]));
+        assert!(
+            errs.iter().any(|e| e.contains("no model 'Organization' exists")),
+            "a same-module FK to a nonexistent model must be rejected, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn intra_module_fk_to_present_model_is_accepted() {
+        let mut parent = Model::new("Organization");
+        parent.fields = vec![id_field()];
+        let mut child = Model::new("OrgUser");
+        child.fields = vec![id_field(), fk_field("organization_id", "Organization.id")];
+        let errs = errors_of(&schema_with(vec![parent, child]));
+        assert!(
+            !errs.iter().any(|e| e.contains("@foreign_key")),
+            "a valid same-module FK must pass, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn cross_module_fk_is_not_flagged_here() {
+        // `corpus.Organization.id` can't be checked single-module — this validator must NOT
+        // error on it (that would break every legitimate cross-module logical FK). It is the
+        // workspace-level pass's job, noted in the validator.
+        let mut child = Model::new("OrgUser");
+        child.fields = vec![id_field(), fk_field("organization_id", "corpus.Organization.id")];
+        let errs = errors_of(&schema_with(vec![child]));
+        assert!(
+            !errs.iter().any(|e| e.contains("@foreign_key")),
+            "a cross-module FK must not be flagged by the single-module validator, got: {errs:?}"
+        );
     }
 }
