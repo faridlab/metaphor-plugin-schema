@@ -13,6 +13,7 @@ mod module_loader;
 mod openapi_collect;
 mod parse;
 mod validate;
+mod validate_workspace;
 mod watch;
 
 pub(crate) use discovery::resolve_module_arg;
@@ -23,6 +24,7 @@ use generate::execute_generate;
 use migration_cmd::{execute_migration, execute_status};
 use parse::execute_parse;
 use validate::execute_validate;
+use validate_workspace::execute_validate_workspace;
 use watch::execute_watch;
 
 use anyhow::Result;
@@ -68,6 +70,13 @@ pub enum SchemaAction {
         #[arg(short, long)]
         warnings: bool,
     },
+
+    /// Validate cross-module foreign keys across the whole workspace
+    ///
+    /// Per-module `validate` cannot see other modules, so a `@foreign_key(other.Entity.id)`
+    /// pointing at a nonexistent entity passes. This loads every module in `metaphor.yaml` and
+    /// reports every cross-module foreign key whose target module or entity does not exist.
+    ValidateWorkspace,
 
     /// Generate code from schema files
     ///
@@ -267,6 +276,7 @@ pub fn execute(action: SchemaAction) -> Result<()> {
     match action {
         SchemaAction::Parse { path, format } => execute_parse(&path, format),
         SchemaAction::Validate { module, warnings } => execute_validate(&module, warnings),
+        SchemaAction::ValidateWorkspace => execute_validate_workspace(),
         SchemaAction::Generate {
             module,
             target,
