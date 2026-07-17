@@ -8,6 +8,7 @@ Complete reference for all `metaphor schema` commands, flags, and options.
 |---------|-------------|
 | `metaphor schema parse` | Parse schema files and display AST |
 | `metaphor schema validate` | Validate schema files for correctness |
+| `metaphor schema validate-workspace` | Validate cross-module foreign keys across every module |
 | `metaphor schema generate` | Generate server-side Rust code (31+ targets) |
 | `metaphor schema generate:rust` | Alias for `schema generate` |
 | `metaphor schema generate:kotlin` | Generate Kotlin Multiplatform Mobile code |
@@ -92,6 +93,53 @@ metaphor schema validate sapiens
 
 # Include warnings
 metaphor schema validate sapiens --warnings
+```
+
+---
+
+## `metaphor schema validate-workspace`
+
+Validate every **cross-module** foreign key in the workspace.
+
+`metaphor schema validate` loads one module at a time, so it cannot see the other side
+of a `@foreign_key(corpus.Organization.id)` — a reference to an entity that does not
+exist passes validation and reaches the generator. This command loads every module
+listed in `metaphor.yaml`, builds a registry of module → entities, and reports each
+reference that dangles.
+
+Both **direct model fields** and **shared-type fields** are checked. It takes no
+arguments and must be run from inside a workspace (anywhere at or below the directory
+holding `metaphor.yaml`).
+
+```bash
+metaphor schema validate-workspace
+```
+
+Modules are keyed by their schema `module:` name (`corpus`), not the project directory
+name (`backbone-corpus`). A project with no `schema/` directory is skipped; a module
+that fails to parse is reported as a note and skipped, so a single broken module does
+not hide dangling references in the rest.
+
+Exits non-zero when any reference dangles — safe to use as a CI gate.
+
+### Examples
+
+```bash
+# Check the whole workspace
+metaphor schema validate-workspace
+
+# Gate a CI job on cross-module integrity
+metaphor schema validate-workspace || exit 1
+```
+
+Sample failure output:
+
+```
+Validating cross-module foreign keys
+  scanned 24 module(s), 46 cross-module reference(s) (direct fields + shared types)
+  Error: sapiens.Employee field 'organization_id' has @foreign_key(corpus.Organization...) but module 'corpus' has no entity 'Organization' (phantom cross-module reference)
+
+cross-module validation failed with 1 dangling reference(s)
 ```
 
 ---

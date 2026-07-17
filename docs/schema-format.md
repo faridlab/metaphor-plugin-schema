@@ -341,6 +341,7 @@ Used in the legacy DSL format and in relation `attributes` arrays:
 | `@omit_if_none` | Omit this nullable field from the serialized response when its value is `None` (emits `#[serde(skip_serializing_if = "Option::is_none")]`). By default nullable fields serialize as explicit `null` for a stable response shape; use this attribute to opt out per field. | `deleted_at datetime? @omit_if_none` |
 | `@private` | Field-level security: the field is pruned from serialized responses for non-owner/non-root callers. Collected into the generated `EntityRepoMeta::private_fields()` override (as camelCase response keys); backbone-core's `apply_field_security` strips these keys at the handler. | `ssn string @private` |
 | `@owner` | Marks the tenant/ownership column used by field-level security to decide who counts as the owner. Emitted as the `EntityRepoMeta::owner_field()` override (camelCase response key). At most one per model. | `user_id uuid @owner` |
+| `@global` | Opts a `company_id` column **out** of the company fence — see [Company Scoping](#company-scoping) below. Use it only on genuinely cross-company reference data. | `company_id uuid @global` |
 
 ### Foreign Key Actions
 
@@ -442,6 +443,65 @@ attributes: ['@where(deleted_at IS NULL)']
 # Emitted (model has @audit_metadata field `metadata`):
 WHERE (metadata->>'deleted_at') IS NULL
 ```
+
+---
+
+## Company Scoping
+
+A model that declares a `company_id` column is **company-scoped**, and the `sql` target
+fences it with a Postgres Row-Level-Security policy (ADR-0008). Nothing needs to be
+opted in: the presence of the column is the signal, so a newly added entity is fenced by
+default and forgetting to think about tenancy fails safe.
+
+For each such table the generator emits, into a per-module
+`<ts>_enable_company_rls` migration that runs after every `CREATE TABLE`:
+
+```sql
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS invoices_company_isolation ON invoices;
+CREATE POLICY invoices_company_isolation ON invoices
+    FOR ALL
+    USING      (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid)
+    WITH CHECK (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
+```
+
+(The table reference is schema-qualified — `billing.invoices` — when the model declares
+a `schema:`, and the policy name is derived from the bare table name.)
+
+The generated Rust also carries the same fact as
+`EntityRepoMeta::company_field()`.
+
+**Scoping a request.** The application sets the session var per request:
+
+```sql
+SELECT set_config('app.company_id', '<uuid>', true);  -- true = transaction-local
+```
+
+An unset var — or one a prior `set_config` left as the empty string — collapses to
+`NULL` through the `NULLIF`, and `company_id = NULL` matches **zero rows**. The fence
+fails closed: a request that forgets to scope itself sees nothing, rather than seeing
+everything or erroring on a `''::uuid` cast.
+
+**The app must connect as a non-superuser role.** `FORCE` extends the policy to the
+table owner, but superusers always bypass RLS. Migrations and seeders run as the
+owner/superuser and are the deliberately unfenced system path.
+
+`WITH CHECK` gives write-side symmetry — a request scoped to company A cannot INSERT a
+row owned by company B.
+
+**Opting out with `@global`.** Genuinely cross-company reference data marks its column
+`@global`, and no policy is generated for that model:
+
+```yaml
+fields:
+  company_id: { type: uuid, attributes: ['@global'] }   # shared reference data
+```
+
+A model with no `company_id` column at all is likewise unfenced, and a module with no
+company-scoped models emits no RLS migration file. Because the fence lives in its own
+additive, idempotent migration (`ENABLE` + `DROP POLICY IF EXISTS`), it applies equally
+to a fresh database and as a retrofit onto tables that already exist.
 
 ---
 
