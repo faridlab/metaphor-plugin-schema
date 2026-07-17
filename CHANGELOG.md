@@ -7,6 +7,76 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-17
+
+The theme of this release is **fences that hold by default**: a company-scoped table
+is fenced by Postgres RLS unless it signs an explicit opt-out, and a foreign key that
+points at nothing now fails validation instead of surviving into generated code.
+
+### Added
+
+- **The `sql` target now generates the company Row-Level-Security fence from the
+  schema (ADR-0008).** Every model carrying a `company_id` column that is not marked
+  `@global` gets `ENABLE` + `FORCE ROW LEVEL SECURITY` and a `FOR ALL … USING … WITH
+  CHECK` policy named `<table>_company_isolation`. The fence reads the request's
+  company from `NULLIF(current_setting('app.company_id', true), '')::uuid`, which is
+  fail-closed: an unset session var — or one a prior `set_config(.., true)` left as
+  the empty string — collapses to `NULL`, so `company_id = NULL` yields **zero rows**
+  rather than a `''::uuid` error. `FORCE` matters because a merely-`ENABLE`d policy is
+  bypassed by the table owner; the app must therefore connect as a non-superuser role,
+  while migrations and seeders keep running as the owner and are the deliberately
+  unfenced system path. `WITH CHECK` gives write-side symmetry — a caller scoped to
+  company A cannot INSERT a B-owned row. Models with no `company_id`, or one marked
+  `@global` (reference data), emit no policy: silence means unfenced, and the opt-out
+  is a signed attribute. [`sql`](src/generators/sql.rs).
+
+- **`generate_split` emits a per-module `<ts>_enable_company_rls` migration as its
+  last file.** Keeping the fence in its own additive migration that runs after every
+  `CREATE TABLE` means it also works as a **retrofit** on a database whose tables
+  already exist, and `ENABLE` + `DROP POLICY IF EXISTS` make it idempotent on re-run.
+  A module with no company-scoped models emits no such file at all.
+  [`sql`](src/generators/sql.rs).
+
+- **`metaphor schema validate-workspace` — a cross-module foreign-key check.**
+  Per-module validation cannot see other modules, so a
+  `@foreign_key(corpus.Organization.id)` naming an entity that does not exist passed
+  silently and reached generated code. The new command loads every module in
+  `metaphor.yaml`, builds a module → entities registry keyed by the schema `module:`
+  name (not the project name), and fails with a non-zero exit on every dangling
+  reference. It covers both direct model fields and **shared-type fields** — the
+  latter alone account for 34 of the 46 cross-module references in the workspace
+  (the audit `Actors` FKs), so without them the check had a coverage hole wider than
+  its coverage. A module that fails to parse is reported and skipped rather than
+  hiding dangling FKs in the rest. [`validate_workspace`](src/commands/schema/validate_workspace.rs),
+  [`cross_module_fk`](src/resolver/cross_module_fk.rs).
+
+- **The `rust` target emits `EntityRepoMeta::company_field()` from the presence of the
+  tenant column**, so a newly added entity is fenced by default and `@global` is the
+  signed opt-out (ADR-0005). A regression test pins the polarity so a later refactor
+  cannot quietly make the fence opt-in again. [`rust`](src/generators/rust.rs).
+
+### Fixed
+
+- **A company-scoped table added through the incremental (diff) migration path now
+  ships with its RLS fence.** Only full regeneration emitted the policy, so a table
+  created by `schema migration` — the path every incremental change actually takes —
+  landed in production **unfenced**, readable across companies. The diff path now
+  fences a newly created company-scoped table, and also fences an existing table the
+  moment it *gains* a `company_id` column. Both paths draw their policy SQL from one
+  shared `company_rls_sql()` source, so the full-regen and diff wordings cannot drift
+  apart. The snapshot carries a `company_scoped` flag so `@global` is honoured here
+  too. [`schema_diff`](src/migration/schema_diff.rs), [`sql`](src/generators/sql.rs).
+
+- **`@foreign_key` targets parsed as `Ident` are now matched, not only `String`
+  targets.** An unquoted dotted reference (`@foreign_key(User.id)` — i.e. how every
+  real schema is written) parses as an `Ident`, and the FK-target check only looked at
+  `String`, so the validation added for phantom references was a **silent no-op on
+  every schema in the workspace**. [`validator`](src/resolver/validator.rs).
+
+- **An intra-module `@foreign_key` whose target model does not exist is now a
+  validation error**, so a phantom reference fails the build rather than reaching the
+  generator. [`validator`](src/resolver/validator.rs).
+
 ## [0.4.8] — 2026-07-15
 
 ### Fixed
