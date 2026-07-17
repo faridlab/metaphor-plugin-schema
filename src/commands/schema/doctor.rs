@@ -37,10 +37,12 @@ use crate::resolver::resolve_schema;
 use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
 
+/// The subset of `metaphor.codegen.yaml` both `doctor` and `undeclared` care
+/// about: the hand-written files the generator promises never to touch.
 #[derive(Debug, Default, Deserialize)]
-struct CodegenManifest {
+pub(super) struct CodegenManifest {
     #[serde(default)]
-    user_owned: Vec<String>,
+    pub(super) user_owned: Vec<String>,
 }
 
 pub(super) fn execute_doctor(module: &str) -> Result<()> {
@@ -241,7 +243,10 @@ struct Finding {
     owned_by_user: bool,
 }
 
-fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
+/// Compile the `user_owned:` glob list from a `metaphor.codegen.yaml` into a
+/// matchable set. Shared with `schema undeclared`, which tests hand-written
+/// files against the very same globs.
+pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         let glob =
@@ -259,7 +264,7 @@ enum DriftReason {
 /// Walk upward from the schema dir until we find a `metaphor.codegen.yaml`
 /// (the canonical signal that we've reached the consumer's root) or a
 /// `metaphor.yaml` (the workspace root — stop there, manifest is missing).
-fn locate_consumer_root(start: &Path) -> Option<PathBuf> {
+pub(super) fn locate_consumer_root(start: &Path) -> Option<PathBuf> {
     let mut cur = start.canonicalize().ok()?;
     if cur.is_file() {
         cur.pop();

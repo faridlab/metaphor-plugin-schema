@@ -28,6 +28,13 @@ fn main() -> Result<()> {
             schema::execute(schema::SchemaAction::Doctor { module })?;
         }
 
+        // Shortcut: undeclared → same as `schema undeclared`. Top level for the same
+        // dispatch reason as doctor above — `metaphor schema undeclared` arrives here
+        // as `metaphor-schema undeclared`.
+        Commands::Undeclared { module } => {
+            schema::execute(schema::SchemaAction::Undeclared { module })?;
+        }
+
         // Shortcut: generate:rust → same as `schema generate`. The MODULE
         // arg is optional here too; the inner SchemaAction::Generate dispatch
         // applies the same auto-detect-or-error logic.

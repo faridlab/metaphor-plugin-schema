@@ -12,6 +12,7 @@ mod migrations;
 mod module_loader;
 mod openapi_collect;
 mod parse;
+mod undeclared;
 mod validate;
 mod validate_workspace;
 mod watch;
@@ -23,6 +24,7 @@ use doctor::execute_doctor;
 use generate::execute_generate;
 use migration_cmd::{execute_migration, execute_status};
 use parse::execute_parse;
+use undeclared::execute_undeclared;
 use validate::execute_validate;
 use validate_workspace::execute_validate_workspace;
 use watch::execute_watch;
@@ -255,6 +257,21 @@ pub enum SchemaAction {
         /// Module name (auto-detected from CWD if omitted)
         module: Option<String>,
     },
+    /// Find hand-written files sitting undeclared in generator-owned trees
+    ///
+    /// `user_owned:` in `metaphor.codegen.yaml` is the ONLY thing that stops
+    /// `schema generate -f` from overwriting a file. A hand-written `.rs` in
+    /// `src/` that no `user_owned` glob matches is therefore live code-loss
+    /// risk. This walks `src/`, classifies each file as generated (banner or
+    /// generator-claimed path) vs hand-written, and reports every hand-written
+    /// file no glob protects — with the `user_owned:` line to paste in.
+    ///
+    /// Distinct from `doctor`: doctor finds handler drift, this finds
+    /// code-loss risk. Read-only; exits non-zero on findings so CI can gate.
+    Undeclared {
+        /// Module name (auto-detected from CWD if omitted)
+        module: Option<String>,
+    },
     /// Vendor composed modules' generated OpenAPI specs into a consumer app
     /// (for serving via Swagger UI). Reads the `openapi_vendor` section of the
     /// app's `metaphor.codegen.yaml`. Run from the app directory.
@@ -322,6 +339,10 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         SchemaAction::Doctor { module } => {
             let module = resolve_module_arg(module, "schema doctor")?;
             execute_doctor(&module)
+        }
+        SchemaAction::Undeclared { module } => {
+            let module = resolve_module_arg(module, "schema undeclared")?;
+            execute_undeclared(&module)
         }
         SchemaAction::OpenapiCollect { module } => {
             openapi_collect::execute_openapi_collect(module)
