@@ -125,6 +125,13 @@ pub(super) fn build_schema_snapshot(
             );
         }
 
+        // Company-fenced (ADR-0008) iff a `company_id` field is present and not `@global` — the same
+        // structural, opt-*out* rule the full-regen path and the Rust generator use.
+        let company_scoped = model
+            .fields
+            .iter()
+            .any(|f| f.name == "company_id" && !f.has_attribute("global"));
+
         snapshot.tables.insert(
             table_name.clone(),
             TableSnapshot {
@@ -132,6 +139,7 @@ pub(super) fn build_schema_snapshot(
                 columns,
                 indexes,
                 primary_key,
+                company_scoped,
             },
         );
     }

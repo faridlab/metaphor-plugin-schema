@@ -63,6 +63,9 @@ impl DatabaseIntrospector {
                     columns: IndexMap::new(),
                     indexes: IndexMap::new(),
                     primary_key: None,
+                    // The DB can't tell us `@global`; the fence decision is read only from the
+                    // schema-derived `new` snapshot, so the introspected side stays `false`.
+                    company_scoped: false,
                 },
             );
         }
