@@ -49,6 +49,23 @@ pub enum Commands {
         module: Option<String>,
     },
 
+    /// Audit a module for hand-written files that are not declared `user_owned`
+    ///
+    /// Example: metaphor schema doctor
+    ///
+    /// Cross-checks the module's source tree against the `user_owned` globs in its
+    /// `metaphor.codegen.yaml`. An undeclared hand-written file lives in a
+    /// generator-owned tree and can be destroyed by `schema generate` — this is the
+    /// check that catches it. MODULE is auto-detected from CWD when omitted.
+    ///
+    /// Like `openapi-collect`, this must exist at TOP level: the `metaphor`
+    /// orchestrator forwards `metaphor schema <X>` as `metaphor-schema <X>`, so a
+    /// variant reachable only under `schema` would never be dispatched.
+    Doctor {
+        /// Module name (auto-detected from CWD if omitted)
+        module: Option<String>,
+    },
+
     /// Generate server-side Rust code (alias for `schema generate`)
     ///
     /// Example: metaphor-schema generate:rust bersihir --target all

@@ -20,6 +20,14 @@ fn main() -> Result<()> {
             schema::execute(schema::SchemaAction::OpenapiCollect { module })?;
         }
 
+        // Shortcut: doctor → same as `schema doctor`. Needed at top level for the same
+        // reason as openapi-collect above: `metaphor schema doctor` arrives here as
+        // `metaphor-schema doctor`. Without this arm the command parsed as an unknown
+        // subcommand and `execute_doctor` was unreachable at every version.
+        Commands::Doctor { module } => {
+            schema::execute(schema::SchemaAction::Doctor { module })?;
+        }
+
         // Shortcut: generate:rust → same as `schema generate`. The MODULE
         // arg is optional here too; the inner SchemaAction::Generate dispatch
         // applies the same auto-detect-or-error logic.
