@@ -7,6 +7,46 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-07-23
+
+The theme of this release is **stable migration filenames**: a regeneration no
+longer renumbers existing migrations or races on colliding timestamps, and a
+legacy class of duplicate-timestamp corruption is repaired deterministically.
+
+### Added
+
+- **Migration timestamp stabilization.** A new `stabilize` pass runs after
+  generation and before the write/cleanup phase, normalizing every generated
+  `migrations/<ts>_<suffix>.{up,down}.sql` filename against on-disk state:
+
+  - A migration whose logical `_<suffix>` already exists on disk **keeps that
+    on-disk timestamp** — it is overwritten in place at a stable identity, so a
+    regen no longer shifts its position in the applied-migrations ordering.
+  - A genuinely new migration gets a fresh timestamp **strictly greater** than
+    every existing migration's, so it slots after them and never collides with
+    an existing file or another new migration in the same run. Multiple new
+    migrations are assigned successive timestamps in sorted order, making the
+    assignment deterministic across runs (independent of `HashMap` iteration
+    order).
+
+  It runs under both plain `generate` and `--force`. Feeding already-stabilized
+  names to the `--force` cleanup pass (which preserves any on-disk file whose
+  name is in the generated set) means cleanup preserves existing identities and
+  deletes only genuinely orphaned generated files. On first generation, when no
+  `migrations/` dir exists yet, the generators' positional timestamps are left
+  untouched. [`stabilize_migration_timestamps`](src/commands/schema/generate/stabilize.rs),
+  [`migrations::existing_timestamp_for_suffix`](src/commands/schema/migrations.rs),
+  [`migrations::max_migration_timestamp`](src/commands/schema/migrations.rs).
+
+### Fixed
+
+- **Duplicate-timestamp migration corruption is repaired deterministically.**
+  The old positional-timestamp bug could leave the same logical migration under
+  two different timestamps on disk. `existing_timestamp_for_suffix` now returns
+  the **minimum** matching timestamp — independent of `read_dir` iteration order
+  — so the stabilizer pins the migration to one stable identity, and the
+  `--force` cleanup pass then removes the non-minimum duplicates as stale.
+
 ## [0.5.0] — 2026-07-17
 
 The theme of this release is **fences that hold by default**: a company-scoped table
