@@ -480,7 +480,7 @@ content cap. Use them for impl-block extensions that can include nested
 | Any `.rs` file with `// <<< CUSTOM`       | Block-aware Rust merge (anchor + placement heuristic)   |
 | Migration files (`migrations/*.{up,down}.sql`) | Identity-based dedup (see below)                   |
 
-### Migration dedup by identity
+### Migration dedup and timestamp stabilization
 
 Migration filenames are timestamped on every regen
 (`20260426220110_create_provider_staff_table.up.sql`), so a naive
@@ -490,6 +490,24 @@ treats any sibling under `migrations/` with the same
 "already migrated" and skips it (unless `--force` is passed). This keeps
 re-running `metaphor schema generate` after a non-schema-shape change
 idempotent.
+
+On top of identity dedup, a **timestamp stabilization** pass runs before the
+write phase (and before the `--force` cleanup sweep), normalizing every
+generated migration filename against what is already on disk:
+
+- If a migration with the same logical suffix already exists, it is **rewritten
+  in place at its existing on-disk timestamp** — its position in the applied
+  ordering never shifts across regens.
+- If it is genuinely new, it gets a fresh timestamp **strictly greater** than
+  every existing migration, so it slots at the end and cannot collide with an
+  existing file or another new migration in the same run.
+- If the same suffix was left on disk under multiple timestamps (legacy
+  positional-timestamp corruption), the **minimum** timestamp wins —
+  deterministically, regardless of directory iteration order — and the
+  `--force` cleanup pass then removes the duplicates.
+
+On first generation, when no `migrations/` dir exists yet, the generators'
+positional timestamps are left untouched.
 
 ---
 
