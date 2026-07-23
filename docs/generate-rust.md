@@ -480,20 +480,23 @@ content cap. Use them for impl-block extensions that can include nested
 | Any `.rs` file with `// <<< CUSTOM`       | Block-aware Rust merge (anchor + placement heuristic)   |
 | Migration files (`migrations/*.{up,down}.sql`) | Identity-based dedup (see below)                   |
 
-### Migration dedup and timestamp stabilization
+### Migration identity and timestamp stabilization
 
 Migration filenames are timestamped on every regen
-(`20260426220110_create_provider_staff_table.up.sql`), so a naive
-`exists()` check would always miss and write a duplicate. The generator
-treats any sibling under `migrations/` with the same
-`_<identity>.{up,down}.sql` suffix — under **any** timestamp — as
-"already migrated" and skips it (unless `--force` is passed). This keeps
-re-running `metaphor schema generate` after a non-schema-shape change
-idempotent.
+(`20260426220110_create_provider_staff_table.up.sql`), so a naive `exists()`
+check against the just-generated filename would always miss and write a
+duplicate. The pipeline solves this with a single authoritative **timestamp
+stabilization** pass that runs *before* the write phase (and before the
+`--force` cleanup sweep), normalizing every generated migration filename
+against what is already on disk. The write phase itself is a dumb writer — it
+trusts the stabilized paths and falls back to the plain `exists()` gate, with
+no migration-specific dedup of its own.
 
-On top of identity dedup, a **timestamp stabilization** pass runs before the
-write phase (and before the `--force` cleanup sweep), normalizing every
-generated migration filename against what is already on disk.
+A generator can't see the disk; its `migration_timestamp_for(index)` value is a
+**seed**, not the final timestamp. The index is positional (topological
+generation order), so the seed is not stable across regenerations — adding or
+reordering an entity shifts every index. The disk-aware decision therefore
+lives in the stabilization pass, which runs on every `generate`:
 
 Timestamp decisions are keyed on a migration's **base name** — the identity
 shared by its up/down pair (e.g. `create_company_table`), *not* the
