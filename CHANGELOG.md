@@ -7,6 +7,43 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-07-23
+
+The theme of this release is **one authority for migration timestamps**: the
+write phase no longer carries its own migration-identity dedup, because the
+upstream stabilization pass (added in 0.5.1/0.5.2) already resolves every
+generated migration to its disk-aware filename.
+
+### Changed
+
+- **The write phase is now a dumb writer for migrations.** It dropped its
+  separate "migration identity dedup" step (the `migration_identity_already_exists`
+  sibling scan), which would skip a generated migration if a same-`_<suffix>`
+  file existed under a different timestamp. That check is now redundant: the
+  stabilization pass already remaps each generated migration to its on-disk
+  filename (reused timestamp for an existing identity, `max+1` for a new one),
+  so by the time the write phase runs, an existing identity's path already
+  points at its on-disk file and the plain `exists()` gate skips it under
+  `!force`. Removing the second dedup closes the loop where two passes owned
+  the same decision and could drift.
+  [`write_generated_files`](src/commands/schema/generate/write.rs).
+
+- **`migration_timestamp_for` is documented as a seed, not the final
+  timestamp.** The doc now states plainly that the value is positional (topo
+  generation order) and therefore **not stable across regenerations** —
+  adding or reordering an entity shifts every index — and that it only ever
+  lands on disk on the very first generation, when no `migrations/` dir exists
+  yet. The authoritative, disk-aware decision lives in
+  `stabilize_migration_timestamps`, because a generator cannot see the disk.
+  [`migration_timestamp_for`](src/generators/mod.rs).
+
+### Removed
+
+- `migration_identity_already_exists` and `migration_suffix` — the helpers that
+  backed the write-phase dedup. Their tests were removed with them; the
+  remaining `migration_base_name` / `migration_direction` / `build_migration_index`
+  cover filename parsing and stabilization.
+
 ## [0.5.2] — 2026-07-23
 
 The theme of this release is **the up/down pair stays unified**: a regeneration
