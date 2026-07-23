@@ -173,12 +173,23 @@ pub fn build_generated_path(
     }
 }
 
-/// Deterministic timestamp prefix for migration filenames.
+/// First-generation SEED timestamp for migration filenames.
 ///
 /// Fixed base epoch (2026-04-26 22:00:00 UTC) plus a 1-second offset per
-/// migration index, producing stable `YYYYMMDDHHMMSS` prefixes that sort
-/// lexically. Shared across generators (sql, audit_triggers, …) so every
-/// emitter agrees on the format and ordering.
+/// migration index, producing `YYYYMMDDHHMMSS` prefixes that sort lexically.
+/// Shared across generators (sql, audit_triggers, …) so every emitter agrees
+/// on the format and ordering.
+///
+/// **This is a seed, not the final timestamp.** The index is positional
+/// (topological generation order), so these values are NOT stable across
+/// regenerations — adding or reordering an entity shifts every index. The
+/// authoritative layer is `stabilize_migration_timestamps`: on every
+/// `generate` it remaps each generated migration to a disk-aware timestamp
+/// (reuse the existing on-disk timestamp for an existing identity; assign
+/// max-existing + 1s for a new one). The seed only ever lands on disk on the
+/// very first generation, when no `migrations/` dir exists yet — where
+/// positional ordering is exactly what's wanted. Generators can't see disk,
+/// so the disk-aware decision must live in the pipeline, not here.
 pub fn migration_timestamp_for(index: usize) -> String {
     use chrono::TimeZone;
     let base = chrono::Utc.with_ymd_and_hms(2026, 4, 26, 22, 0, 0).unwrap();
