@@ -18,6 +18,7 @@ mod change_detect;
 mod load;
 mod migration_cleanup;
 mod post_check;
+mod stabilize;
 mod write;
 
 use anyhow::Result;
@@ -35,6 +36,7 @@ use change_detect::should_generate;
 use load::{load_and_resolve, LoadedSchema};
 use migration_cleanup::cleanup_stale_migrations;
 use post_check::run_cargo_check;
+use stabilize::stabilize_migration_timestamps;
 use write::{write_generated_files, WriteStats};
 
 #[allow(clippy::too_many_arguments)]
@@ -75,7 +77,7 @@ pub(super) fn execute_generate(
         resolved,
     } = loaded;
 
-    let generated = run_generators(&resolved, &targets, split)?;
+    let mut generated = run_generators(&resolved, &targets, split)?;
 
     let output_dir = output.unwrap_or_else(|| {
         schema_path
@@ -85,6 +87,13 @@ pub(super) fn execute_generate(
     });
 
     let user_owned = load_user_owned_globs(&output_dir)?;
+
+    // Stabilize migration filenames against on-disk state so existing
+    // migrations keep their timestamp and new ones get a fresh, collision-free
+    // later timestamp — under both plain generate and --force. Must run before
+    // cleanup (which preserves any on-disk file whose name is in `generated`)
+    // and before write.
+    stabilize_migration_timestamps(&mut generated, &output_dir);
 
     if force {
         cleanup_stale_migrations(&output_dir, &generated, &user_owned);

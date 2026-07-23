@@ -78,32 +78,104 @@ pub(super) fn is_unstable_timestamped_migration(path: &Path) -> bool {
 /// returns true if any sibling file in the same directory has the same
 /// `_create_<table>_table.<up|down>.sql` suffix under a different timestamp.
 pub(super) fn migration_identity_already_exists(path: &Path) -> bool {
-    let parent = match path.parent() {
-        Some(d) => d,
-        None => return false,
+    let Some(parent) = path.parent() else {
+        return false;
     };
-    let name = match path.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n,
-        None => return false,
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
     };
-    // Strip the timestamp prefix: "20260426220110_create_provider_staff_table.up.sql"
-    // → "create_provider_staff_table.up.sql"
-    let suffix = match name.splitn(2, '_').nth(1) {
-        Some(s) => s,
-        None => return false,
+    let Some(suffix) = migration_suffix(name) else {
+        return false;
     };
-    let entries = match std::fs::read_dir(parent) {
-        Ok(e) => e,
-        Err(_) => return false,
+    let Ok(entries) = fs::read_dir(parent) else {
+        return false;
     };
     entries.flatten().any(|e| {
-        let other = e.file_name();
-        let other = match other.to_str() {
-            Some(s) => s,
-            None => return false,
+        let fname = e.file_name();
+        let Some(other) = fname.to_str() else {
+            return false;
         };
         other != name && other.ends_with(suffix)
     })
+}
+
+/// The 14-digit timestamp prefix of a timestamped migration filename, when the
+/// name starts with `<14-digits>_`. `20260426220110_create_company_table.up.sql`
+/// → `Some("20260426220110")`. `None` for anything not in this form.
+pub(super) fn migration_timestamp_prefix(name: &str) -> Option<&str> {
+    if name.len() < 16 {
+        return None;
+    }
+    let (prefix, rest) = name.split_at(14);
+    if prefix.chars().all(|c| c.is_ascii_digit()) && rest.starts_with('_') {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+/// The logical suffix of a timestamped migration filename — everything after
+/// the leading `<14-digit-ts>_`. `20260426220110_create_company_table.up.sql`
+/// → `create_company_table.up.sql`. `None` if the name isn't a valid
+/// timestamped migration filename.
+pub(super) fn migration_suffix(name: &str) -> Option<&str> {
+    migration_timestamp_prefix(name)?;
+    name.splitn(2, '_').nth(1)
+}
+
+/// Scan `migrations_dir` for an existing file whose logical suffix matches
+/// `suffix`, returning its 14-digit timestamp prefix (or `None` if no sibling
+/// has that suffix). Used to keep a logical migration at a stable timestamp
+/// across regenerations.
+///
+/// When multiple files share the suffix (e.g. legacy duplicate-timestamp
+/// corruption left by the old positional-timestamp bug), the **minimum**
+/// timestamp is returned, deterministically — independent of `read_dir`
+/// iteration order. Under `--force`, the cleanup pass then removes the
+/// non-minimum duplicates as stale, repairing the duplication.
+pub(super) fn existing_timestamp_for_suffix(migrations_dir: &Path, suffix: &str) -> Option<String> {
+    let entries = fs::read_dir(migrations_dir).ok()?;
+    let mut min: Option<String> = None;
+    for entry in entries.flatten() {
+        let fname = entry.file_name();
+        let Some(other) = fname.to_str() else {
+            continue;
+        };
+        if migration_suffix(other) != Some(suffix) {
+            continue;
+        }
+        let Some(ts) = migration_timestamp_prefix(other) else {
+            continue;
+        };
+        match &min {
+            None => min = Some(ts.to_string()),
+            Some(cur) if ts < cur.as_str() => min = Some(ts.to_string()),
+            _ => {}
+        }
+    }
+    min
+}
+
+/// The lexicographically-maximum (== chronologically-latest) 14-digit
+/// timestamp prefix among migration files in `migrations_dir`, or `None`.
+pub(super) fn max_migration_timestamp(migrations_dir: &Path) -> Option<String> {
+    let entries = fs::read_dir(migrations_dir).ok()?;
+    let mut max: Option<String> = None;
+    for entry in entries.flatten() {
+        let fname = entry.file_name();
+        let Some(name) = fname.to_str() else {
+            continue;
+        };
+        let Some(ts) = migration_timestamp_prefix(name) else {
+            continue;
+        };
+        match &max {
+            None => max = Some(ts.to_string()),
+            Some(cur) if ts > cur.as_str() => max = Some(ts.to_string()),
+            _ => {}
+        }
+    }
+    max
 }
 
 #[cfg(test)]
@@ -206,5 +278,89 @@ mod tests {
         .unwrap();
         let new_down = dir.join("20260426220110_create_provider_staff_table.down.sql");
         assert!(!migration_identity_already_exists(&new_down));
+    }
+
+    #[test]
+    fn migration_timestamp_prefix_parses_14_digit_prefix() {
+        assert_eq!(
+            migration_timestamp_prefix("20260426220110_create_company_table.up.sql"),
+            Some("20260426220110")
+        );
+        // Too short / non-numeric prefix
+        assert_eq!(migration_timestamp_prefix("2026_create_foo.up.sql"), None);
+        assert_eq!(
+            migration_timestamp_prefix("20260426220a10_create_foo.up.sql"),
+            None
+        );
+    }
+
+    #[test]
+    fn migration_suffix_strips_timestamp_prefix() {
+        assert_eq!(
+            migration_suffix("20260426220110_create_company_table.up.sql"),
+            Some("create_company_table.up.sql")
+        );
+        assert_eq!(
+            migration_suffix("20260426220007_add_audit_triggers.up.sql"),
+            Some("add_audit_triggers.up.sql")
+        );
+        assert_eq!(migration_suffix("not_a_migration.rs"), None);
+    }
+
+    #[test]
+    fn existing_timestamp_for_suffix_finds_matching_sibling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("20260426220135_create_company_table.up.sql"),
+            "-- existing\n",
+        )
+        .unwrap();
+        // Same suffix under a different (or any) timestamp → returns the on-disk ts.
+        assert_eq!(
+            existing_timestamp_for_suffix(dir, "create_company_table.up.sql"),
+            Some("20260426220135".to_string())
+        );
+        // No sibling with this suffix
+        assert_eq!(
+            existing_timestamp_for_suffix(dir, "create_industry_table.up.sql"),
+            None
+        );
+    }
+
+    #[test]
+    fn existing_timestamp_for_suffix_picks_min_among_duplicates() {
+        // Legacy duplicate-timestamp corruption: same suffix under two
+        // timestamps. The result must be deterministic (the minimum),
+        // independent of read_dir iteration order.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("20260426220135_create_company_table.up.sql"), "--\n").unwrap();
+        std::fs::write(dir.join("20260723180002_create_company_table.up.sql"), "--\n").unwrap();
+        assert_eq!(
+            existing_timestamp_for_suffix(dir, "create_company_table.up.sql"),
+            Some("20260426220135".to_string())
+        );
+    }
+
+    #[test]
+    fn max_migration_timestamp_returns_latest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("20260426220001_create_company_table.up.sql"), "--\n").unwrap();
+        std::fs::write(dir.join("20260723180002_create_industry_table.up.sql"), "--\n").unwrap();
+        std::fs::write(dir.join("20260426220006_add_audit_triggers.up.sql"), "--\n").unwrap();
+        // Lexicographic max == chronologically latest for this fixed-width format.
+        assert_eq!(
+            max_migration_timestamp(dir),
+            Some("20260723180002".to_string())
+        );
+    }
+
+    #[test]
+    fn max_migration_timestamp_none_for_empty_or_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(max_migration_timestamp(tmp.path()), None);
+        assert_eq!(max_migration_timestamp(std::path::Path::new("/no/such/dir")), None);
     }
 }
