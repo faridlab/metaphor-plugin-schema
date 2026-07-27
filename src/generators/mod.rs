@@ -31,10 +31,8 @@ pub mod usecase;
 pub mod validator;
 pub mod value_object;
 pub mod projection;
-pub mod event_store;
 pub mod export;
 pub mod integration;
-pub mod event_subscription;
 pub mod dto;
 pub mod seeder;
 pub mod integration_test;
@@ -73,10 +71,8 @@ pub use usecase::UseCaseGenerator;
 pub use validator::ValidatorGenerator;
 pub use value_object::ValueObjectGenerator;
 pub use projection::ProjectionGenerator;
-pub use event_store::EventStoreGenerator;
 pub use export::ExportGenerator;
 pub use integration::IntegrationGenerator;
-pub use event_subscription::EventSubscriptionGenerator;
 pub use dto::DtoGenerator;
 pub use seeder::SeederGenerator;
 pub use integration_test::IntegrationTestGenerator;
@@ -540,10 +536,8 @@ pub fn generate_all_with_options(
             GenerationTarget::Config,
             GenerationTarget::ValueObject,
             GenerationTarget::Projection,
-            GenerationTarget::EventStore,
             GenerationTarget::Export,
             GenerationTarget::Integration,
-            GenerationTarget::EventSubscription,
             GenerationTarget::Dto,
             GenerationTarget::Versioning,
             GenerationTarget::Seeder,
@@ -591,10 +585,8 @@ pub fn generate_all_with_options(
                     GenerationTarget::Cqrs => CqrsGenerator::new().generate(s)?,
                     GenerationTarget::Computed => ComputedGenerator::new().generate(s)?,
                     GenerationTarget::Projection => ProjectionGenerator::new().generate(s)?,
-                    GenerationTarget::EventStore => EventStoreGenerator::new().generate(s)?,
                     GenerationTarget::Export => ExportGenerator::new().generate(s)?,
                     GenerationTarget::Integration => IntegrationGenerator::new().generate(s)?,
-                    GenerationTarget::EventSubscription => EventSubscriptionGenerator::new().generate(s)?,
                     GenerationTarget::Dto => DtoGenerator::new().generate(s)?,
                     GenerationTarget::Versioning => VersioningGenerator::new().generate(s)?,
                     GenerationTarget::BulkOperations => BulkOperationsGenerator::new().generate(s)?,
@@ -646,10 +638,8 @@ pub enum GenerationTarget {
     Cqrs,
     Computed,
     Projection,
-    EventStore,
     Export,
     Integration,
-    EventSubscription,
     Dto,
     Versioning,
     BulkOperations,
@@ -691,10 +681,8 @@ impl GenerationTarget {
             "cqrs" | "command" | "commands" | "query" | "queries" => Some(Self::Cqrs),
             "computed" | "computed-fields" | "computed_fields" | "virtual" => Some(Self::Computed),
             "projection" | "projections" | "read-model" | "read_model" => Some(Self::Projection),
-            "event-store" | "event_store" | "eventstore" => Some(Self::EventStore),
             "export" | "exports" | "public-api" => Some(Self::Export),
             "integration" | "acl" | "anti-corruption" => Some(Self::Integration),
-            "event-subscription" | "event_subscription" | "subscription" | "subscriptions" => Some(Self::EventSubscription),
             "dto" | "dtos" | "data-transfer" | "transfer-objects" => Some(Self::Dto),
             "versioning" | "version" | "api-version" | "api-versioning" => Some(Self::Versioning),
             "bulk-operations" | "bulk_operations" | "bulk" | "batch" => Some(Self::BulkOperations),
@@ -737,10 +725,8 @@ impl GenerationTarget {
             Self::Cqrs,
             Self::Computed,
             Self::Projection,
-            Self::EventStore,
             Self::Export,
             Self::Integration,
-            Self::EventSubscription,
             Self::Dto,
             Self::Versioning,
             Self::BulkOperations,
