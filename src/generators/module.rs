@@ -218,6 +218,23 @@ impl ModuleGenerator {
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
+        // CrudServices: the read/seeding grouping (council #2 — demote raw CRUD behind an accessor).
+        writeln!(output, "/// All generated CRUD services grouped as the read / seeding surface, exposed via").unwrap();
+        writeln!(output, "/// [`{}Module::crud_services`]. Prefer a validated write path (e.g. a hand-authored", pascal_name).unwrap();
+        writeln!(output, "/// write service) for document mutations; these raw services bypass invariants.").unwrap();
+        writeln!(output, "pub struct {}CrudServices {{", pascal_name).unwrap();
+        for model in &schema.schema.models {
+            let service_name = format!("{}Service", model.name);
+            let service_type = if model_names.contains(service_name.as_str()) {
+                format!("{}AppService", model.name)
+            } else {
+                service_name
+            };
+            writeln!(output, "    pub {}_service: Arc<{}>,", to_snake_case(&model.name), service_type).unwrap();
+        }
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+
         // Module implementation
         writeln!(output, "impl {}Module {{", pascal_name).unwrap();
         writeln!(output, "    /// Create a new module builder").unwrap();
@@ -259,6 +276,18 @@ impl ModuleGenerator {
         writeln!(output, "    #[deprecated(note = \"mounts unvalidated generic CRUD on every entity; compose a guarded router for production, or call all_crud_routes() for the intentional full/unguarded surface\")]").unwrap();
         writeln!(output, "    pub fn routes(&self) -> Router {{").unwrap();
         writeln!(output, "        self.all_crud_routes()").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+        // crud_services(): the recommended read/seeding accessor (council #2).
+        writeln!(output, "    /// The generated CRUD services, grouped for read routes + seeding. For document").unwrap();
+        writeln!(output, "    /// mutations, use the module's validated write service.").unwrap();
+        writeln!(output, "    pub fn crud_services(&self) -> {}CrudServices {{", pascal_name).unwrap();
+        writeln!(output, "        {}CrudServices {{", pascal_name).unwrap();
+        for model in &schema.schema.models {
+            let snake_name = to_snake_case(&model.name);
+            writeln!(output, "            {}_service: self.{}_service.clone(),", snake_name, snake_name).unwrap();
+        }
+        writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -327,7 +356,12 @@ impl ModuleGenerator {
         for model in &schema.schema.models {
             writeln!(output, "            {}_service,", to_snake_case(&model.name)).unwrap();
         }
-        // Placeholder for custom struct fields
+        // Placeholder for custom struct fields. Council #2 convention: if this module has a
+        // hand-authored {Base}WriteService (src/application/service/{base}_write_service.rs),
+        // promote it here as the primary write handle, e.g.:
+        //     pub write_service: Arc<{Base}WriteService>,
+        // (and construct it in the build() CUSTOM block above). The raw CRUD services stay
+        // available via crud_services() for read/seeding.
         writeln!(output, "            // <<< CUSTOM").unwrap();
         writeln!(output, "            // END CUSTOM").unwrap();
         writeln!(output, "        }})").unwrap();
@@ -974,6 +1008,9 @@ mod tests {
         assert!(lib_content.contains("pub fn all_crud_routes(&self)"));
         assert!(lib_content.contains("#[deprecated"));
         assert!(lib_content.contains("self.all_crud_routes()"));
+        // Council #2: the read/seeding grouping + its accessor.
+        assert!(lib_content.contains("CrudServices"), "generated lib.rs must emit the CrudServices grouping");
+        assert!(lib_content.contains("pub fn crud_services(&self)"));
     }
 
     #[test]
