@@ -203,7 +203,12 @@ impl ModuleGenerator {
         writeln!(output, "/// ```").unwrap();
         writeln!(output, "pub struct {}Module {{", pascal_name).unwrap();
 
-        // Fields for each service
+        // Service fields. pub(crate): GenericCrudService carries full create/update/delete, so
+        // these handles MUST stay unreachable from sibling crates — they bypass the module's
+        // validated write service (e.g. a hand-authored {Base}WriteService) and its invariants.
+        // Same-crate generated http/grpc handlers and the write service reach them via `self.`;
+        // cross-module callers go through the write service or the all_crud_routes() HTTP surface.
+        // (council 2026-07-28, bounded-context-cleanliness.)
         for model in &schema.schema.models {
             let service_name = format!("{}Service", model.name);
             let service_type = if model_names.contains(service_name.as_str()) {
@@ -211,29 +216,19 @@ impl ModuleGenerator {
             } else {
                 service_name
             };
-            writeln!(output, "    pub {}_service: Arc<{}>,",
+            writeln!(output, "    pub(crate) {}_service: Arc<{}>,",
                 to_snake_case(&model.name), service_type).unwrap();
         }
 
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
-        // CrudServices: the read/seeding grouping (council #2 — demote raw CRUD behind an accessor).
-        writeln!(output, "/// All generated CRUD services grouped as the read / seeding surface, exposed via").unwrap();
-        writeln!(output, "/// [`{}Module::crud_services`]. Prefer a validated write path (e.g. a hand-authored", pascal_name).unwrap();
-        writeln!(output, "/// write service) for document mutations; these raw services bypass invariants.").unwrap();
-        writeln!(output, "pub struct {}CrudServices {{", pascal_name).unwrap();
-        for model in &schema.schema.models {
-            let service_name = format!("{}Service", model.name);
-            let service_type = if model_names.contains(service_name.as_str()) {
-                format!("{}AppService", model.name)
-            } else {
-                service_name
-            };
-            writeln!(output, "    pub {}_service: Arc<{}>,", to_snake_case(&model.name), service_type).unwrap();
-        }
-        writeln!(output, "}}").unwrap();
-        writeln!(output).unwrap();
+        // CrudServices grouping intentionally NOT emitted (council 2026-07-28). A read/seed
+        // accessor that hands out full-mutation GenericCrudService handles lets sibling crates
+        // bypass the module's validated write service and its invariants. The Module service
+        // fields are pub(crate) (see above); cross-module mutation goes through a hand-authored
+        // write service, and the only unguarded surface is all_crud_routes() (HTTP) — never a
+        // programmatic CUD handle.
 
         // Module implementation
         writeln!(output, "impl {}Module {{", pascal_name).unwrap();
@@ -276,18 +271,6 @@ impl ModuleGenerator {
         writeln!(output, "    #[deprecated(note = \"mounts unvalidated generic CRUD on every entity; compose a guarded router for production, or call all_crud_routes() for the intentional full/unguarded surface\")]").unwrap();
         writeln!(output, "    pub fn routes(&self) -> Router {{").unwrap();
         writeln!(output, "        self.all_crud_routes()").unwrap();
-        writeln!(output, "    }}").unwrap();
-        writeln!(output).unwrap();
-        // crud_services(): the recommended read/seeding accessor (council #2).
-        writeln!(output, "    /// The generated CRUD services, grouped for read routes + seeding. For document").unwrap();
-        writeln!(output, "    /// mutations, use the module's validated write service.").unwrap();
-        writeln!(output, "    pub fn crud_services(&self) -> {}CrudServices {{", pascal_name).unwrap();
-        writeln!(output, "        {}CrudServices {{", pascal_name).unwrap();
-        for model in &schema.schema.models {
-            let snake_name = to_snake_case(&model.name);
-            writeln!(output, "            {}_service: self.{}_service.clone(),", snake_name, snake_name).unwrap();
-        }
-        writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -360,8 +343,9 @@ impl ModuleGenerator {
         // hand-authored {Base}WriteService (src/application/service/{base}_write_service.rs),
         // promote it here as the primary write handle, e.g.:
         //     pub write_service: Arc<{Base}WriteService>,
-        // (and construct it in the build() CUSTOM block above). The raw CRUD services stay
-        // available via crud_services() for read/seeding.
+        // (and construct it in the build() CUSTOM block above). That write service is the
+        // sanctioned cross-module mutation surface; the raw CRUD services are pub(crate) and are
+        // NOT exposed to sibling crates (council 2026-07-28).
         writeln!(output, "            // <<< CUSTOM").unwrap();
         writeln!(output, "            // END CUSTOM").unwrap();
         writeln!(output, "        }})").unwrap();
@@ -1008,9 +992,13 @@ mod tests {
         assert!(lib_content.contains("pub fn all_crud_routes(&self)"));
         assert!(lib_content.contains("#[deprecated"));
         assert!(lib_content.contains("self.all_crud_routes()"));
-        // Council #2: the read/seeding grouping + its accessor.
-        assert!(lib_content.contains("CrudServices"), "generated lib.rs must emit the CrudServices grouping");
-        assert!(lib_content.contains("pub fn crud_services(&self)"));
+        // Council 2026-07-28: CrudServices grouping + crud_services() accessor were REMOVED —
+        // they handed out full-mutation GenericCrudService handles that let sibling crates bypass
+        // the validated write service. Service fields are now pub(crate) (encapsulated).
+        assert!(!lib_content.contains("CrudServices"), "CrudServices grouping must NOT be emitted");
+        assert!(!lib_content.contains("crud_services"), "crud_services() accessor must NOT be emitted");
+        assert!(lib_content.contains("pub(crate) user_service: Arc<UserService>"),
+            "service fields must be pub(crate) so sibling crates cannot reach them");
     }
 
     #[test]
