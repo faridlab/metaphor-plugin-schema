@@ -7,6 +7,40 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-07-28
+
+### Changed
+
+- **The generated `{Domain}Module` no longer exposes its CRUD services to sibling
+  crates, and the `{Domain}CrudServices` / `crud_services()` accessor is removed.**
+  The module struct's per-entity service fields are now `pub(crate)` (was `pub`), and
+  the `{Domain}CrudServices` grouping struct plus the `crud_services()` method are no
+  longer emitted. Rationale: `GenericCrudService` carries full create/update/delete, so
+  a `pub` field — or a "read/seed" accessor that hands those handles out — lets a
+  sibling crate mutate documents around the module's validated write service and its
+  invariants (3-way match, company scoping, event emission). The sanctioned surfaces
+  are now: cross-module mutation → a hand-authored `{Base}WriteService`; unguarded
+  CRUD → `all_crud_routes()` (HTTP only), never a programmatic CUD handle. Completes
+  the earlier "demote raw CRUD behind an accessor" intent (council #2), which the
+  `crud_services()` half-measure failed to deliver. Non-breaking for this workspace
+  (no consumer read the public fields or called `crud_services()`).
+  [council 2026-07-28, bounded-context-cleanliness]
+  [`ModuleGenerator`](src/generators/module.rs).
+
+## [0.5.4] — 2026-07-27
+
+### Added
+
+- **Emit a `{Domain}CrudServices` grouping + a `crud_services()` accessor on generated
+  modules** (council #2 intent: demote raw CRUD behind an accessor). NOTE: this surface was
+  removed in 0.5.5 — it handed out full-mutation `GenericCrudService` handles.
+  [`ModuleGenerator`](src/generators/module.rs).
+
+### Changed
+
+- **Dropped the unused `event_store` + `event_subscription` generators** (council #4) — dead
+  code that emitted modules nothing declared.
+
 ## [0.5.3] — 2026-07-23
 
 The theme of this release is **one authority for migration timestamps**: the
