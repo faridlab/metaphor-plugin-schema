@@ -19,6 +19,59 @@ use std::path::PathBuf;
 const AUDIT_METADATA_DEFAULT_JSON: &str =
     r#"'{"created_at":null,"updated_at":null,"deleted_at":null,"created_by":null,"updated_by":null,"deleted_by":null}'::jsonb"#;
 
+/// Reduce an arbitrary index-field expression to a valid lower-case Postgres
+/// identifier segment.
+///
+/// Index *fields* may be SQL expressions (a JSONB sub-key like
+/// `(metadata->>'deleted_at')`), which are legal in an `ON (...)` clause but
+/// illegal inside an unquoted identifier. This collapses every run of
+/// characters outside `[a-z0-9_]` to a single `_` and trims the ends, so
+/// `(metadata->>'deleted_at')` → `metadata_deleted_at` and a plain column
+/// `email` → `email`. Used only for *deriving index names*; the `ON` clause
+/// keeps the real SQL expression.
+fn sanitize_ident_segment(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_under = false;
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c.to_ascii_lowercase());
+            prev_under = c == '_';
+        } else if !prev_under {
+            out.push('_');
+            prev_under = true;
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+#[cfg(test)]
+mod ident_segment_tests {
+    use super::sanitize_ident_segment;
+
+    #[test]
+    fn plain_column_is_unchanged() {
+        assert_eq!(sanitize_ident_segment("email"), "email");
+        assert_eq!(sanitize_ident_segment("user_id"), "user_id");
+    }
+
+    #[test]
+    fn jsonb_expression_becomes_valid_identifier() {
+        assert_eq!(
+            sanitize_ident_segment("(metadata->>'deleted_at')"),
+            "metadata_deleted_at"
+        );
+        assert_eq!(
+            sanitize_ident_segment("(metadata->>'created_at')"),
+            "metadata_created_at"
+        );
+    }
+
+    #[test]
+    fn mixed_case_is_lowercased() {
+        assert_eq!(sanitize_ident_segment("CamelCase"), "camelcase");
+    }
+}
+
 /// The company Row-Level-Security policy statements for one table (ADR-0008), as `(up, down)`.
 ///
 /// Pure SQL, no provenance comments — the single source of truth for the fence policy, shared by the
@@ -387,8 +440,19 @@ impl SqlGenerator {
     fn generate_index(&self, table_name: &str, qualified_table: &str, index: &Index, model: &Model) -> Result<String, GenerateError> {
         // Index *name* derives from the bare table name (Postgres scopes the
         // index to the table's schema); the `ON` target is schema-qualified.
+        // Index FIELDS may be SQL expressions (e.g. a JSONB sub-key like
+        // `(metadata->>'deleted_at')`), which are valid in the `ON (...)` clause
+        // but NOT inside an unquoted identifier — so each field is reduced to a
+        // valid identifier segment before it goes into the name. Otherwise the
+        // generated `CREATE INDEX` is a syntax error at the first `(`.
         let index_name = index.name.clone().unwrap_or_else(|| {
-            format!("idx_{}_{}", table_name, index.fields.join("_"))
+            let slug = index
+                .fields
+                .iter()
+                .map(|f| sanitize_ident_segment(f))
+                .collect::<Vec<_>>()
+                .join("_");
+            format!("idx_{}_{}", table_name, slug)
         });
 
         let index_type = match index.index_type {
