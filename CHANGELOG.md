@@ -7,6 +7,27 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-07-28
+
+### Changed
+
+- **Migrations are now immutable under `schema generate` — even with `--force`.**
+  Previously a full `schema generate --force` would overwrite already-applied
+  migration files (folding schema changes like a new `company_id` column back into
+  the original `CREATE`) and delete "stale" ones (including hand-written `.down.sql`
+  whose `.up.sql` survived). That broke sqlx's immutable-checksum contract: any DB
+  that had already applied the original bytes would brick with `ChecksumMismatch` on
+  the next `migrate run`. Now the write phase **never overwrites or deletes an
+  existing migration**; `--force` only forces overwrite of generated **code**. A
+  schema change to an existing table lands as a NEW forward migration
+  (`migration generate`), exactly as the July `child_tables_company_rls` migration
+  does for `company_id`. To regenerate migrations from scratch (disposable-DB /
+  reset workflow), delete the `migrations/` directory first. The
+  `migration_cleanup` phase was removed (it was the source of the `.down.sql`
+  deletion and is obsolete once migrations are immutable).
+  [council 2026-07-28, bounded-context-cleanliness]
+  [`write_generated_files`](src/commands/schema/generate/write.rs).
+
 ## [0.5.5] — 2026-07-28
 
 ### Changed
