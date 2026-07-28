@@ -2,11 +2,11 @@
 //! logical migration at a stable timestamp — no renumbering and no collisions,
 //! under both plain `generate` and `--force`.
 //!
-//! Runs after generation and before [`super::migration_cleanup`] / the write
-//! phase. Because the cleanup pass preserves any on-disk migration whose
-//! filename appears in the generated set, feeding it already-stabilized names
-//! (existing identities reused at their existing on-disk timestamp) makes the
-//! cleanup preserve them and delete only genuinely-orphaned generated files.
+//! Runs after generation and before the write phase. Existing migrations are
+//! immutable history (the write phase never overwrites or deletes them, even
+//! under `--force`), so stabilizing a generated migration to its existing
+//! on-disk filename means the write phase skips it — preserving the applied
+//! bytes. New identities get a fresh, collision-free later timestamp.
 //!
 //! Timestamp decisions are keyed on a migration's **base name** — the identity
 //! shared by an up/down pair (e.g. `create_company_table`), NOT the

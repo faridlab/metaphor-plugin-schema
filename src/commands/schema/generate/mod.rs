@@ -7,16 +7,15 @@
 //! 2. [`announce`] — print the run banner.
 //! 3. [`load`] — discover, parse, filter, resolve the schema.
 //! 4. `generate_all_with_options` — produce in-memory file contents.
-//! 5. [`migration_cleanup`] — under `--force`, sweep stale migrations.
-//! 6. [`write`] — write each file to disk, gated by `user_owned` and the
-//!    merge strategies.
-//! 7. summary print.
-//! 8. [`post_check`] — optional `cargo check` on the result.
+//! 5. [`write`] — write each file to disk, gated by `user_owned`, the merge
+//!    strategies, and the immutable-migration rule (migrations are never
+//!    overwritten or deleted, even under `--force`).
+//! 6. summary print.
+//! 7. [`post_check`] — optional `cargo check` on the result.
 
 mod announce;
 mod change_detect;
 mod load;
-mod migration_cleanup;
 mod post_check;
 mod stabilize;
 mod write;
@@ -34,7 +33,6 @@ use super::manifest::load_user_owned_globs;
 use announce::announce_run;
 use change_detect::should_generate;
 use load::{load_and_resolve, LoadedSchema};
-use migration_cleanup::cleanup_stale_migrations;
 use post_check::run_cargo_check;
 use stabilize::stabilize_migration_timestamps;
 use write::{write_generated_files, WriteStats};
@@ -91,13 +89,9 @@ pub(super) fn execute_generate(
     // Stabilize migration filenames against on-disk state so existing
     // migrations keep their timestamp and new ones get a fresh, collision-free
     // later timestamp — under both plain generate and --force. Must run before
-    // cleanup (which preserves any on-disk file whose name is in `generated`)
-    // and before write.
+    // write. (Migrations are immutable: the write phase never overwrites or
+    // deletes an existing migration, even under --force. Council 2026-07-28.)
     stabilize_migration_timestamps(&mut generated, &output_dir);
-
-    if force {
-        cleanup_stale_migrations(&output_dir, &generated, &user_owned);
-    }
 
     let stats = write_generated_files(&generated, &output_dir, &user_owned, force, dry_run)?;
 
