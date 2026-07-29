@@ -277,8 +277,6 @@ impl ExportGenerator {
         writeln!(output, "//! They only expose read operations - writes go through events.").unwrap();
         writeln!(output).unwrap();
 
-        writeln!(output, "use std::sync::Arc;").unwrap();
-        writeln!(output).unwrap();
         writeln!(output, "use anyhow::Result;").unwrap();
         writeln!(output, "use async_trait::async_trait;").unwrap();
         writeln!(output, "use uuid::Uuid;").unwrap();
@@ -319,24 +317,10 @@ impl ExportGenerator {
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
-        // Query service implementation
-        writeln!(output, "// ============================================================================").unwrap();
-        writeln!(output, "// QUERY SERVICE IMPLEMENTATION").unwrap();
-        writeln!(output, "// ============================================================================").unwrap();
-        writeln!(output).unwrap();
-
-        writeln!(output, "/// Default implementation of {}QueryService", pascal_name).unwrap();
-        writeln!(output, "pub struct {}QueryServiceImpl<R> {{", pascal_name).unwrap();
-        writeln!(output, "    repository: Arc<R>,").unwrap();
-        writeln!(output, "}}").unwrap();
-        writeln!(output).unwrap();
-
-        writeln!(output, "impl<R> {}QueryServiceImpl<R> {{", pascal_name).unwrap();
-        writeln!(output, "    pub fn new(repository: Arc<R>) -> Self {{").unwrap();
-        writeln!(output, "        Self {{ repository }}").unwrap();
-        writeln!(output, "    }}").unwrap();
-        writeln!(output, "}}").unwrap();
-        writeln!(output).unwrap();
+        // No default impl struct is generated. The {trait}QueryService trait above is the public
+        // read contract; a half-impl struct (a field + `new()` with no `impl … for …`) was a lie —
+        // it compiled to an unused-field warning and masqueraded as implemented. Consumers implement
+        // the trait against the module's repositories, or a real impl is hand-added in CUSTOM SERVICES.
 
         // Custom services section
         writeln!(output, "// ============================================================================").unwrap();
