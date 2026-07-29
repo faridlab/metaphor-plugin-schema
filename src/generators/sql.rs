@@ -1159,7 +1159,15 @@ impl SqlGenerator {
             .iter()
             .filter_map(Self::generate_rls_migration)
             .collect();
-        if !rls.is_empty() {
+        // A module may hand-author its own RLS fence (e.g. with a fail-loud stray check); setting
+        // `config.generators.rls_migration: false` opts out of this generated duplicate.
+        let emit_rls = schema
+            .schema
+            .generators_config
+            .as_ref()
+            .and_then(|c| c.rls_migration)
+            .unwrap_or(true);
+        if !rls.is_empty() && emit_rls {
             let ts = Self::timestamp_for(counter);
             let mut up = String::new();
             writeln!(up, "-- Company RLS fence for {} module (ADR-0008)", module_name).unwrap();

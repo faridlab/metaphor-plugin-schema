@@ -728,6 +728,12 @@ pub struct GeneratorsConfig {
     /// Set to `true` to generate CQRS command/query objects and read-model projections.
     #[serde(default)]
     pub cqrs: Option<bool>,
+    /// Opt-OUT flag for the generated company-RLS-fence migration (`<ts>_enable_company_rls`).
+    /// Default (absent / `true`): emit the fence migration for every company-scoped model. Set to
+    /// `false` when a module hand-authors its own RLS fence (e.g. one with a fail-loud stray check)
+    /// so the generator does not emit a redundant duplicate on every regen.
+    #[serde(default)]
+    pub rls_migration: Option<bool>,
 }
 
 // ============================================================================
