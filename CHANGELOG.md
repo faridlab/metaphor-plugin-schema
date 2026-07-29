@@ -7,6 +7,38 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-30
+
+### Changed
+
+- **Disabled generators no longer leave dangling `pub mod <gen>;` declarations.**
+  Disabling a generator (`config.generators.disabled`) stopped its files being emitted but
+  still wrote `pub mod <gen>;` into `domain/mod.rs` → the regenerated tree didn't compile
+  (E0583). The `specifications`/`event` declarations (and the `specifications` re-export)
+  are now gated on `is_generator_disabled`, reusing the existing grpc/graphql pattern.
+  Backward-compatible for enabled generators.
+  [council 2026-07-29, backbone-catalog] · [`generate_domain_mod`](src/generators/module.rs).
+
+- **The broken `{Module}QueryServiceImpl` half-impl is no longer emitted.** The export
+  generator wrote a struct + `new()` next to the `QueryService` trait but never the
+  `impl … for …`, compiling to an unused-field warning and masquerading as a default
+  implementation. Only the trait (the public read contract) is emitted now; consumers
+  implement it against the module's repositories.
+  · [`generate_services`](src/generators/export.rs).
+
+### Added
+
+- **`config.generators.rls_migration` opt-out flag.** A module that hand-authors its own
+  company-RLS fence (e.g. with a fail-loud stray check) can set `rls_migration: false` to
+  suppress the redundant generated `<ts>_enable_company_rls` migration.
+  · [`SqlGenerator`](src/generators/sql.rs).
+
+## [0.5.7] — 2026-07-28
+
+### Fixed
+
+- Sanitize jsonb-expression index names so the generated `CREATE INDEX` is valid SQL.
+
 ## [0.5.6] — 2026-07-28
 
 ### Changed
