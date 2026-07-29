@@ -619,8 +619,10 @@ impl ModuleGenerator {
             writeln!(output, "pub mod services;").unwrap();
         }
 
-        // Add specifications module if any models exist
-        if !schema.schema.models.is_empty() {
+        // Add specifications module if any models exist AND the specification generator isn't
+        // disabled — disabling `specification` must also drop this declaration, else it
+        // references a module that's never emitted (E0583, dangling `pub mod`).
+        if !schema.schema.models.is_empty() && !is_generator_disabled(schema, "specification") {
             writeln!(output, "pub mod specifications;").unwrap();
         }
 
@@ -636,8 +638,9 @@ impl ModuleGenerator {
             writeln!(output, "pub mod state_machine;").unwrap();
         }
 
-        // Add events module if any models exist (events are generated for all models)
-        if !schema.schema.models.is_empty() {
+        // Add events module if any models exist (events are generated for all models) AND the
+        // events generator isn't disabled — same dangling-`pub mod` guard as specifications.
+        if !schema.schema.models.is_empty() && !is_generator_disabled(schema, "events") {
             writeln!(output, "pub mod event;").unwrap();
         }
 
@@ -659,6 +662,8 @@ impl ModuleGenerator {
         if !schema.schema.models.is_empty() {
             writeln!(output, "pub use repositories::*;").unwrap();
             writeln!(output, "pub use services::*;").unwrap();
+        }
+        if !schema.schema.models.is_empty() && !is_generator_disabled(schema, "specification") {
             writeln!(output, "pub use specifications::*;").unwrap();
         }
         // Only re-export value_objects when the module was actually declared (DDD value objects exist).
