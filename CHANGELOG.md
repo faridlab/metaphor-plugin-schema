@@ -7,6 +7,28 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-07-31
+
+### Fixed
+
+- **Comment-only CUSTOM placeholder blocks are no longer duplicated on regen.**
+  0.6.2's dedup stopped keying on comments, which let template placeholder blocks
+  (e.g. `// Add custom X here`, no real code) be collected *and* re-inserted on
+  every run — duplicating the `// <<< CUSTOM …` block in specifications, DTOs,
+  seeders, and events. `collect_custom_blocks` now requires real CODE (comments
+  don't count as content), so placeholder blocks are left untouched.
+  · [`single_marker.rs`](src/commands/schema/merge/custom_blocks/single_marker.rs).
+
+- **`lib.rs` now declares `pub mod exports;` and ships a `CUSTOM FIELDS` marker.**
+  The generator created the `exports/` directory but never declared the module,
+  so `crate::exports` was unresolved and the contract layer didn't compile after a
+  regen. Custom service fields on the `{Module}` struct (e.g. a hand-authored
+  `FxService`) were also wiped because the struct definition had no CUSTOM marker.
+  Both are fixed: `pub mod exports;` is emitted alongside `pub mod seeders;`, and a
+  `// <<< CUSTOM FIELDS` / `// END CUSTOM` block is emitted in the struct so custom
+  fields survive regen (pairing with the existing builder/literal CUSTOM blocks).
+  · [`module.rs`](src/generators/module.rs).
+
 ## [0.6.2] — 2026-07-31
 
 ### Fixed
