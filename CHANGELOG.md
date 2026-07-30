@@ -7,6 +7,20 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-31
+
+### Fixed
+
+- **Named `CUSTOM` blocks (`// <<< CUSTOM <SECTION> START >>>` … `// <<< CUSTOM <SECTION> END >>>`) are preserved on regen.**
+  The merge keyed a START on `line.contains("// <<< CUSTOM")` and an END on
+  `line.contains("END CUSTOM")`. The named END line contains `// <<< CUSTOM` (so it was
+  misread as a START) and lacks `END CUSTOM` (so it was never an END) — the block never
+  closed and its hand-written content was wiped on every regen. This silently destroyed
+  custom code in the exports/services, exports/types, handlers/custom, and seeder
+  generators. Detection now disambiguates by the ` START >>>` / ` END >>>` suffix; the bare
+  `// <<< CUSTOM` / `// END CUSTOM` form is unchanged.
+  [backbone-corporate maturity-council follow-up] · [`markers.rs`](src/commands/schema/merge/custom_blocks/markers.rs).
+
 ## [0.6.0] — 2026-07-30
 
 ### Changed
