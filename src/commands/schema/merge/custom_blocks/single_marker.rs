@@ -118,21 +118,6 @@ pub(super) fn insert_custom_blocks(
     custom_blocks: &[(Option<String>, Vec<String>)],
 ) {
     for (anchor, block_lines) in custom_blocks {
-        // Dedup: skip if the first real content line already exists in result
-        let first_content_line = block_lines
-            .iter()
-            .find(|l| !is_whole_line_custom_marker(l) && !l.trim().is_empty());
-        if let Some(content_line) = first_content_line {
-            let content_normalized = normalize_line(content_line);
-            let already_in_result = result_lines
-                .iter()
-                .any(|rl| normalize_line(rl) == content_normalized);
-            if already_in_result {
-                eprintln!("  Custom block already present (dedup), skipping");
-                continue;
-            }
-        }
-
         let insert_pos = if let Some(anchor_line) = anchor {
             let anchor_trimmed = anchor_line.trim();
             let anchor_normalized = normalize_line(anchor_line);
@@ -159,13 +144,69 @@ pub(super) fn insert_custom_blocks(
 
         if let Some(pos) = insert_pos {
             let pos = adjust_for_placement(result_lines, pos, block_lines);
-            insert_at(result_lines, pos, block_lines);
+            // If the generated content already has a CUSTOM block at this anchor,
+            // the user's existing block REPLACES it. A CUSTOM region is user-owned:
+            // the user's content always wins over whatever the generator emitted
+            // there (a placeholder comment OR a shipped example handler). This is
+            // NOT a duplicate, so dedup must not fire.
+            if pos < result_lines.len() && is_custom_start_marker(&result_lines[pos]) {
+                replace_custom_span(result_lines, pos, block_lines);
+                continue;
+            }
+            // New spot (no generated CUSTOM block here): dedup, then insert.
+            if !first_code_line_already_present(result_lines, block_lines) {
+                insert_at(result_lines, pos, block_lines);
+            }
         } else {
             eprintln!("  Warning: No anchor found for custom block, appending at end of file");
-            for custom_line in block_lines {
-                result_lines.push(custom_line.clone());
+            if !first_code_line_already_present(result_lines, block_lines) {
+                for custom_line in block_lines {
+                    result_lines.push(custom_line.clone());
+                }
             }
         }
+    }
+}
+
+/// Whether the first real CODE line of `block_lines` (skipping markers, blanks,
+/// and comments) already exists in `result_lines`. Used to avoid duplicating a
+/// block inserted at a NEW spot. Comments are excluded from the key so a template
+/// placeholder ("// Add custom … here") doesn't false-match the generated output.
+fn first_code_line_already_present(result_lines: &[String], block_lines: &[String]) -> bool {
+    let Some(content_line) = block_lines.iter().find(|l| {
+        !is_whole_line_custom_marker(l)
+            && !l.trim().is_empty()
+            && !l.trim_start().starts_with("//")
+    }) else {
+        return false;
+    };
+    let content_normalized = normalize_line(content_line);
+    if result_lines
+        .iter()
+        .any(|rl| normalize_line(rl) == content_normalized)
+    {
+        eprintln!("  Custom block already present (dedup), skipping");
+        true
+    } else {
+        false
+    }
+}
+
+/// Replace the generated CUSTOM block starting at `pos` (its START marker,
+/// anything between, and its END marker) with the user's `block_lines`. The
+/// user's content wins in a CUSTOM region. If no matching END is found, only the
+/// START line is removed before inserting.
+fn replace_custom_span(result_lines: &mut Vec<String>, pos: usize, block_lines: &[String]) {
+    let end_idx = (pos + 1..result_lines.len())
+        .position(|k| is_custom_end_marker(&result_lines[k]))
+        .map(|off| pos + 1 + off);
+    let remove_until = end_idx.map(|e| e + 1).unwrap_or(pos + 1);
+    let remove_until = remove_until.min(result_lines.len());
+    for _ in pos..remove_until {
+        result_lines.remove(pos);
+    }
+    for (j, custom_line) in block_lines.iter().enumerate() {
+        result_lines.insert(pos + j, custom_line.clone());
     }
 }
 
@@ -232,27 +273,10 @@ fn adjust_for_placement(
     pos
 }
 
-/// Insert `block_lines` at `pos`, replacing an empty placeholder
-/// (`// <<< CUSTOM` immediately followed by `// END CUSTOM`) when one is
-/// already present at that position. When a non-empty CUSTOM placeholder
-/// exists there, skip insertion (content already present).
+/// Insert `block_lines` verbatim at `pos`. Reached only for CUSTOM blocks placed
+/// at a NEW spot (no generated CUSTOM block there) — the replace-generated-block
+/// case is handled by [`replace_custom_span`] before this is called.
 fn insert_at(result_lines: &mut Vec<String>, pos: usize, block_lines: &[String]) {
-    let has_custom_at_pos =
-        pos < result_lines.len() && is_custom_start_marker(&result_lines[pos]);
-    if has_custom_at_pos {
-        let is_empty_placeholder =
-            pos + 1 < result_lines.len() && is_custom_end_marker(&result_lines[pos + 1]);
-        if is_empty_placeholder {
-            result_lines.remove(pos + 1);
-            result_lines.remove(pos);
-            for (j, custom_line) in block_lines.iter().enumerate() {
-                result_lines.insert(pos + j, custom_line.clone());
-            }
-        }
-        // Otherwise content already present → skip.
-        return;
-    }
-
     for (j, custom_line) in block_lines.iter().enumerate() {
         result_lines.insert(pos + j, custom_line.clone());
     }

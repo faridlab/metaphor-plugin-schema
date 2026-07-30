@@ -126,6 +126,69 @@ let w = 4;
         );
     }
 
+    /// Regression: a CUSTOM block whose first line is a template-placeholder
+    /// comment ("// Add custom services here") was dedup-skipped because that
+    /// comment also appears in the generated output — wiping the real code
+    /// beneath it. Dedup now keys on the first CODE line, not the first comment.
+    #[test]
+    fn test_custom_block_with_leading_placeholder_comment_preserved() {
+        let existing = "\
+let x = 1;
+// <<< CUSTOM SERVICES START >>>
+// Add custom public services here
+fn port() -> u64 { 42 }
+// <<< CUSTOM SERVICES END >>>
+let w = 4;
+";
+        let generated = "\
+let x = 1;
+// <<< CUSTOM SERVICES START >>>
+// Add custom public services here
+// <<< CUSTOM SERVICES END >>>
+let w = 4;
+";
+        let (_tmp, path) = write_temp(existing);
+
+        let result = merge_rust_mod_custom(generated, &path).unwrap();
+        assert!(
+            result.contains("fn port() -> u64 { 42 }"),
+            "block with a leading placeholder comment should preserve the real code, got:\n{result}"
+        );
+    }
+
+    /// Regression: when the generated CUSTOM block ships EXAMPLE content (e.g. a
+    /// `health_check` handler the template emits inside CUSTOM HANDLERS), the
+    /// user's filled block must REPLACE it — not be dedup-skipped because the
+    /// example's first code line also appears in the generated output. The user
+    /// owns a CUSTOM region; their content wins.
+    #[test]
+    fn test_generated_custom_block_with_example_is_replaced_by_user_block() {
+        let existing = "\
+use super::AppState;
+// <<< CUSTOM HANDLERS START >>>
+pub async fn my_handler() -> u64 { 42 }
+// <<< CUSTOM HANDLERS END >>>
+";
+        let generated = "\
+use super::AppState;
+// <<< CUSTOM HANDLERS START >>>
+#[allow(dead_code)]
+pub async fn health_check() {}
+// <<< CUSTOM HANDLERS END >>>
+";
+        let (_tmp, path) = write_temp(existing);
+
+        let result = merge_rust_mod_custom(generated, &path).unwrap();
+        assert!(
+            result.contains("pub async fn my_handler() -> u64 { 42 }"),
+            "user's CUSTOM block must replace the generated example, got:\n{result}"
+        );
+        assert!(
+            !result.contains("health_check"),
+            "generated example must be replaced (user content wins in CUSTOM), got:\n{result}"
+        );
+    }
+
     #[test]
     fn test_no_duplicate_custom_blocks() {
         let existing = "mod foo;\n// <<< CUSTOM - Extension\nmod bar;\n";
