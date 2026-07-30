@@ -7,6 +7,23 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-07-31
+
+### Fixed
+
+- **User CUSTOM content now survives `--force` regen even when the generated file
+  already ships a CUSTOM block.** 0.6.1 fixed *detection* of the named
+  `// <<< CUSTOM <SECTION> START >>>` / `END >>>` format, but the insert path still
+  lost content in two cases: (a) a generated block carrying a placeholder comment
+  (`// Add custom … here`) was treated as "content already present" and skipped, and
+  (b) when the generator emitted example code inside a CUSTOM block (e.g. the
+  `health_check` handler in `handlers/custom.rs`), the user's filled block was
+  dedup-skipped because the example's first line also appeared in the generated
+  output. A CUSTOM region is user-owned, so the user's block now **replaces** the
+  generated block at that anchor (placeholder or shipped example alike); dedup only
+  applies to blocks placed at a genuinely new spot.
+  [backbone-corporate] · [`single_marker.rs`](src/commands/schema/merge/custom_blocks/single_marker.rs).
+
 ## [0.6.1] — 2026-07-31
 
 ### Fixed
