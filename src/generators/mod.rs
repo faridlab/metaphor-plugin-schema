@@ -839,6 +839,7 @@ mod tests {
             enabled: enabled.map(|v| v.iter().map(|s| s.to_string()).collect()),
             disabled: disabled.map(|v| v.iter().map(|s| s.to_string()).collect()),
             cqrs,
+            rls_migration: None,
         })
     }
 

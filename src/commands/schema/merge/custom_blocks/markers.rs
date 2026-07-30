@@ -25,22 +25,49 @@ pub(super) fn normalize_line(line: &str) -> String {
 /// Doc comments (`///`) and module doc comments (`//!`) that mention the
 /// marker string inside prose or backticks are NOT markers — treating them
 /// as markers creates ghost blocks that leak stale content into regen output.
+///
+/// Two marker shapes are honoured:
+/// - bare:   `// <<< CUSTOM` ... `// END CUSTOM`
+/// - named:  `// <<< CUSTOM <SECTION> START >>>` ... `// <<< CUSTOM <SECTION> END >>>`
+///
+/// The named END line *also* contains `// <<< CUSTOM`, so a naive
+/// `contains("// <<< CUSTOM")` check misreads it as a START — leaving the
+/// block without a recognised close and causing its content to be wiped on
+/// regen. We disambiguate by the ` START >>>` / ` END >>>` suffix.
 pub(super) fn is_custom_start_marker(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("///") || trimmed.starts_with("//!") {
         return false;
     }
-    line.contains("// <<< CUSTOM")
+    // A named END line is never a start, even though it contains `// <<< CUSTOM`.
+    if is_named_custom_end(line) {
+        return false;
+    }
+    is_named_custom_start(line) || line.contains("// <<< CUSTOM")
 }
 
 /// Whether a line contains a real `// END CUSTOM` end marker. Doc comments
-/// are excluded for the same reason as [`is_custom_start_marker`].
+/// are excluded for the same reason as [`is_custom_start_marker`]. Recognises
+/// both the bare (`// END CUSTOM`) and named (`// <<< CUSTOM <SECTION> END >>>`) shapes.
 pub(super) fn is_custom_end_marker(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("///") || trimmed.starts_with("//!") {
         return false;
     }
-    line.contains("END CUSTOM")
+    is_named_custom_end(line) || line.contains("END CUSTOM")
+}
+
+/// Named paired format `// <<< CUSTOM <SECTION> START >>>`. The ` START >>>`
+/// suffix distinguishes it from the matching named END line.
+fn is_named_custom_start(line: &str) -> bool {
+    line.contains("<<< CUSTOM") && line.contains("START >>>")
+}
+
+/// Named paired format `// <<< CUSTOM <SECTION> END >>>`. This line contains
+/// `<<< CUSTOM`, so callers must check it BEFORE the bare `// <<< CUSTOM` start
+/// test (see [`is_custom_start_marker`]).
+fn is_named_custom_end(line: &str) -> bool {
+    line.contains("<<< CUSTOM") && line.contains("END >>>")
 }
 
 /// Whether the line is PURELY a CUSTOM marker with no other content (e.g.

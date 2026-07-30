@@ -98,6 +98,34 @@ mod tests {
         assert!(result.contains("// END CUSTOM"), "END CUSTOM marker should be present");
     }
 
+    /// Regression: the named paired format `// <<< CUSTOM <SECTION> START >>>` ...
+    /// `// <<< CUSTOM <SECTION> END >>>` (emitted by the exports/handlers/seeder
+    /// generators) was wiped on regen — the END line contains `// <<< CUSTOM`,
+    /// so it was misread as a START and the block never closed. The predicates
+    /// now disambiguate by the ` START >>>` / ` END >>>` suffix.
+    #[test]
+    fn test_named_custom_block_preserved() {
+        let existing = "\
+let x = 1;
+// <<< CUSTOM SERVICES START >>>
+fn port() -> u64 { 42 }
+// <<< CUSTOM SERVICES END >>>
+let w = 4;
+";
+        let generated = "let x = 1;\nlet w = 4;\n";
+        let (_tmp, path) = write_temp(existing);
+
+        let result = merge_rust_mod_custom(generated, &path).unwrap();
+        assert!(
+            result.contains("fn port() -> u64 { 42 }"),
+            "named CUSTOM block content should be preserved, got:\n{result}"
+        );
+        assert!(
+            result.contains("<<< CUSTOM SERVICES END >>>"),
+            "named END marker should be recognised as a close, got:\n{result}"
+        );
+    }
+
     #[test]
     fn test_no_duplicate_custom_blocks() {
         let existing = "mod foo;\n// <<< CUSTOM - Extension\nmod bar;\n";
