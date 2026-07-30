@@ -189,6 +189,34 @@ pub async fn health_check() {}
         );
     }
 
+    /// Regression: a comment-only CUSTOM block (a template placeholder like
+    /// "// Add custom X here", no real code) must NOT be collected and re-inserted
+    /// on regen — otherwise the placeholder is duplicated on every run. Only
+    /// blocks containing real code are preserved.
+    #[test]
+    fn test_comment_only_custom_block_not_duplicated() {
+        let existing = "\
+use super::AppState;
+// <<< CUSTOM HANDLERS START >>>
+// Add custom handlers here
+// <<< CUSTOM HANDLERS END >>>
+";
+        let generated = "\
+use super::AppState;
+// <<< CUSTOM HANDLERS START >>>
+// Add custom handlers here
+// <<< CUSTOM HANDLERS END >>>
+";
+        let (_tmp, path) = write_temp(existing);
+
+        let result = merge_rust_mod_custom(generated, &path).unwrap();
+        let count = result.matches("// <<< CUSTOM HANDLERS START >>>").count();
+        assert_eq!(
+            count, 1,
+            "comment-only placeholder block must not be duplicated, got:\n{result}"
+        );
+    }
+
     #[test]
     fn test_no_duplicate_custom_blocks() {
         let existing = "mod foo;\n// <<< CUSTOM - Extension\nmod bar;\n";

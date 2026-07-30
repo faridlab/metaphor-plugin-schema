@@ -77,13 +77,18 @@ pub(super) fn collect_custom_blocks(
                 }
             }
 
-            // Skip empty paired blocks (just markers, no content) to prevent
-            // accumulation. Inline markers (code with a trailing
-            // `// <<< CUSTOM` tag) are NOT whole-line markers, so the code
-            // part still counts as preservable content.
-            let has_content = block_lines
-                .iter()
-                .any(|l| !is_whole_line_custom_marker(l) && !l.trim().is_empty());
+            // Skip empty / placeholder blocks to prevent accumulation on regen.
+            // A block is "content" only if it has real CODE — a comment-only
+            // block (template placeholder like "// Add custom X here") is NOT
+            // collected, so regen leaves the generated placeholder in place
+            // rather than re-inserting a duplicate of it. Inline markers (code
+            // with a trailing `// <<< CUSTOM` tag) are NOT whole-line markers,
+            // so the code part still counts as preservable content.
+            let has_content = block_lines.iter().any(|l| {
+                !is_whole_line_custom_marker(l)
+                    && !l.trim().is_empty()
+                    && !l.trim_start().starts_with("//")
+            });
             if has_content {
                 custom_blocks.push((anchor, block_lines));
             }
