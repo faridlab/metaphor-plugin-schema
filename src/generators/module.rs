@@ -81,6 +81,10 @@ impl ModuleGenerator {
         writeln!(output, "pub mod presentation;").unwrap();
         if !schema.schema.models.is_empty() {
             writeln!(output, "pub mod seeders;").unwrap();
+            // exports/ is generated alongside the entities (query-service trait +
+            // DTOs + events), so declare it — otherwise the module's public
+            // contract layer is uncompiled (crate::exports unresolved).
+            writeln!(output, "pub mod exports;").unwrap();
         }
         writeln!(output).unwrap();
 
@@ -220,6 +224,12 @@ impl ModuleGenerator {
                 to_snake_case(&model.name), service_type).unwrap();
         }
 
+        // Custom struct fields (e.g. a hand-authored service like an FxService).
+        // Lives inside a CUSTOM marker so it survives regeneration — pair it with
+        // the builder-body and struct-literal CUSTOM blocks (construction + init),
+        // which are emitted below.
+        writeln!(output, "    // <<< CUSTOM FIELDS").unwrap();
+        writeln!(output, "    // END CUSTOM").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
