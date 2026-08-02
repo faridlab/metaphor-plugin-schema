@@ -822,6 +822,22 @@ fn filter_targets_by_config(
         filtered.retain(|t| !matches!(t, GenerationTarget::Cqrs | GenerationTarget::Projection));
     }
 
+    // Layers opt-in: skip Auth/BulkOperations/UseCase/RoutesComposer/HandlersModule
+    // unless `layers = true`. Most modules wire only service/validator/workflows +
+    // inline route composition (all_crud_routes), so emitting these by default
+    // produces uncompiled orphan dirs. Modules that wire them set `layers: true`.
+    let layers_enabled = config.as_ref().and_then(|c| c.layers) == Some(true);
+    if !layers_enabled {
+        filtered.retain(|t| !matches!(
+            t,
+            GenerationTarget::Auth
+                | GenerationTarget::BulkOperations
+                | GenerationTarget::UseCase
+                | GenerationTarget::RoutesComposer
+                | GenerationTarget::HandlersModule
+        ));
+    }
+
     filtered
 }
 
@@ -840,6 +856,7 @@ mod tests {
             disabled: disabled.map(|v| v.iter().map(|s| s.to_string()).collect()),
             cqrs,
             rls_migration: None,
+            layers: None,
         })
     }
 
@@ -892,6 +909,51 @@ mod tests {
         assert!(!result.contains(&GenerationTarget::Handler));
         assert!(result.contains(&GenerationTarget::Cqrs));
         assert!(result.contains(&GenerationTarget::Projection));
+    }
+
+    fn layers_config(layers: Option<bool>) -> Option<GeneratorsConfig> {
+        Some(GeneratorsConfig {
+            enabled: None,
+            disabled: None,
+            cqrs: None,
+            rls_migration: None,
+            layers,
+        })
+    }
+
+    #[test]
+    fn test_layers_skipped_by_default() {
+        // No layers flag → the 5 optional targets are dropped (most modules don't wire them).
+        let result = filter_targets_by_config(&all_targets(), &layers_config(None));
+        assert!(!result.contains(&GenerationTarget::Auth));
+        assert!(!result.contains(&GenerationTarget::BulkOperations));
+        assert!(!result.contains(&GenerationTarget::UseCase));
+        assert!(!result.contains(&GenerationTarget::RoutesComposer));
+        assert!(!result.contains(&GenerationTarget::HandlersModule));
+        // Core targets still present.
+        assert!(result.contains(&GenerationTarget::Service));
+        assert!(result.contains(&GenerationTarget::Handler));
+        assert!(result.contains(&GenerationTarget::Rust));
+    }
+
+    #[test]
+    fn test_layers_skipped_when_no_config() {
+        // No config at all → layers opt-in still applies universally.
+        let result = filter_targets_by_config(&all_targets(), &None);
+        assert!(!result.contains(&GenerationTarget::Auth));
+        assert!(!result.contains(&GenerationTarget::RoutesComposer));
+        assert!(result.contains(&GenerationTarget::Service));
+    }
+
+    #[test]
+    fn test_layers_included_when_true() {
+        // layers: true → the 5 targets are kept (catalog-style modules that wire them).
+        let result = filter_targets_by_config(&all_targets(), &layers_config(Some(true)));
+        assert!(result.contains(&GenerationTarget::Auth));
+        assert!(result.contains(&GenerationTarget::BulkOperations));
+        assert!(result.contains(&GenerationTarget::UseCase));
+        assert!(result.contains(&GenerationTarget::RoutesComposer));
+        assert!(result.contains(&GenerationTarget::HandlersModule));
     }
 
     #[test]
