@@ -121,8 +121,8 @@ impl RoutesComposerGenerator {
 
         for model in &routed_models {
             let snake_name = to_snake_case(&model.name);
-            // Add CRUD routes (includes all 16 endpoints including trash operations)
-            writeln!(output, "        .merge(create_{}_routes(module.{}_service.clone()))", snake_name, snake_name).unwrap();
+            // read-only entities mount only the GET routes; others mount full CRUD.
+            writeln!(output, "        .merge({}(module.{}_service.clone()))", model.default_route_fn(), snake_name).unwrap();
         }
 
         writeln!(output, "}}").unwrap();

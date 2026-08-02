@@ -259,15 +259,15 @@ impl ModuleGenerator {
         writeln!(output, "    pub fn all_crud_routes(&self) -> Router {{").unwrap();
         writeln!(output, "        use presentation::http::{{").unwrap();
         for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
-            writeln!(output, "            create_{}_routes,", to_snake_case(&model.name)).unwrap();
+            writeln!(output, "            {},", model.default_route_fn()).unwrap();
         }
         writeln!(output, "        }};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        Router::new()").unwrap();
         for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
-            writeln!(output, "            .merge(create_{}_routes(self.{}_service.clone()))",
-                snake_name, snake_name).unwrap();
+            writeln!(output, "            .merge({}(self.{}_service.clone()))",
+                model.default_route_fn(), snake_name).unwrap();
         }
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -394,8 +394,8 @@ impl ModuleGenerator {
         writeln!(output, "use super::{{").unwrap();
         for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
-            writeln!(output, "    {}_handler::create_{}_routes,",
-                snake_name, snake_name).unwrap();
+            writeln!(output, "    {}_handler::{},",
+                snake_name, model.default_route_fn()).unwrap();
         }
         writeln!(output, "}};").unwrap();
         writeln!(output).unwrap();
@@ -438,8 +438,12 @@ impl ModuleGenerator {
 
         for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
-            writeln!(output, "        // {} routes (12 Backbone endpoints)", model.name).unwrap();
-            writeln!(output, "        .merge(create_{}_routes(services.{}))", snake_name, snake_name).unwrap();
+            if model.has_read_only() {
+                writeln!(output, "        // {} routes (READ-ONLY — append-only/event-sourced entity; writes arrive via the event handlers)", model.name).unwrap();
+            } else {
+                writeln!(output, "        // {} routes (12 Backbone endpoints)", model.name).unwrap();
+            }
+            writeln!(output, "        .merge({}(services.{}))", model.default_route_fn(), snake_name).unwrap();
         }
 
         writeln!(output, "}}").unwrap();

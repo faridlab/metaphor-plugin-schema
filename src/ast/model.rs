@@ -36,6 +36,13 @@ pub struct Model {
     /// When non-empty: ONLY these targets are generated for this model (whitelist).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enabled_generators: Vec<String>,
+    /// Entity is read-only over HTTP: the default CRUD composers mount only the GET
+    /// (read) routes for it. Use for append-only / event-sourced entities (e.g. a
+    /// ledger written solely by event handlers) whose rows must never be created,
+    /// updated, or deleted through generic CRUD. Set via `read_only: true` in the
+    /// model YAML (or the `@read_only` model attribute). Defaults to false.
+    #[serde(default)]
+    pub read_only: bool,
     /// Source location
     #[serde(skip)]
     pub span: Span,
@@ -122,6 +129,27 @@ impl Model {
     /// Check if model has a specific attribute
     pub fn has_attribute(&self, name: &str) -> bool {
         self.attributes.iter().any(|a| a.name == name)
+    }
+
+    /// Whether this entity's HTTP surface defaults to read-only — append-only /
+    /// event-sourced entities (e.g. a ledger written only by event handlers) that
+    /// must not be mutated through generic CRUD. Set by `read_only: true` or
+    /// `@read_only`.
+    pub fn has_read_only(&self) -> bool {
+        self.read_only || self.has_attribute("read_only")
+    }
+
+    /// The default route-function name for this model in a CRUD composer:
+    /// `create_{snake}_read_routes` when read-only (GET endpoints only), otherwise
+    /// the full `create_{snake}_routes`. Both fns are always emitted by the handler
+    /// generator, so either resolves at the call site.
+    pub fn default_route_fn(&self) -> String {
+        let snake = to_snake_case(&self.name);
+        if self.has_read_only() {
+            format!("create_{}_read_routes", snake)
+        } else {
+            format!("create_{}_routes", snake)
+        }
     }
 
     /// Check if model has a strongly-typed ID (Uuid primary key)
@@ -1444,5 +1472,26 @@ mod tests {
         assert_eq!(to_snake_case_plural("UserRole"), "user_roles");
         assert_eq!(to_snake_case_plural("APIKey"), "api_keys");
         assert_eq!(to_snake_case_plural("MFADevice"), "mfa_devices");
+    }
+
+    #[test]
+    fn read_only_bool_picks_read_routes_fn() {
+        let mut m = Model::new("CompensationChange");
+        // Default: full CRUD route fn, not read-only.
+        assert!(!m.has_read_only());
+        assert_eq!(m.default_route_fn(), "create_compensation_change_routes");
+
+        m.read_only = true;
+        assert!(m.has_read_only());
+        assert_eq!(m.default_route_fn(), "create_compensation_change_read_routes");
+    }
+
+    #[test]
+    fn read_only_attribute_also_enables_read_routes() {
+        // The `@read_only` model attribute is honored too (parallel to @soft_delete).
+        let mut m = Model::new("AuditLog");
+        m.attributes.push(Attribute::new("read_only"));
+        assert!(m.has_read_only());
+        assert_eq!(m.default_route_fn(), "create_audit_log_read_routes");
     }
 }

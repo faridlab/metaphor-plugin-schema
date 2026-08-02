@@ -160,6 +160,13 @@ impl YamlModel {
             model.attributes.push(Attribute::new("soft_delete"));
         }
 
+        // Mount read-only over HTTP (append-only / event-sourced entities) when
+        // set in the YAML. The route composers then mount only the GET routes
+        // for this entity in the default CRUD surface.
+        if self.read_only == Some(true) {
+            model.attributes.push(Attribute::new("read_only"));
+        }
+
         // Combine local types with shared types for lookup (local takes precedence)
         let mut all_types = shared_types.clone();
         for (name, fields) in local_types {

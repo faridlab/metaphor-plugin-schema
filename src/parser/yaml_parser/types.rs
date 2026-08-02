@@ -121,6 +121,12 @@ pub struct YamlModel {
     /// Enable soft delete for this model
     #[serde(default)]
     pub soft_delete: Option<bool>,
+    /// Mount this entity READ-ONLY over HTTP (only the GET routes) in the
+    /// default CRUD composers. Use for append-only / event-sourced entities
+    /// (e.g. a ledger written solely by event handlers) whose rows must never
+    /// be created/updated/deleted through generic CRUD.
+    #[serde(default)]
+    pub read_only: Option<bool>,
     /// Extend shared types - fields from these types are injected into the model as table columns
     /// Example: extends: [Metadata] will inject created_at, updated_at, etc. as columns
     #[serde(default)]
