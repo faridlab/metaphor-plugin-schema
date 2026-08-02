@@ -353,6 +353,13 @@ impl HandlerGenerator {
         writeln!(output, "///").unwrap();
         writeln!(output, "/// These routes must NOT be publicly exposed. Wrap them with an auth").unwrap();
         writeln!(output, "/// middleware before nesting into the application router.").unwrap();
+        writeln!(output, "///").unwrap();
+        writeln!(output, "/// # This is unguarded generic CRUD, not a validated write path").unwrap();
+        writeln!(output, "///").unwrap();
+        writeln!(output, "/// These are plain create/update/patch/delete mutations over the entity row —").unwrap();
+        writeln!(output, "/// they bypass all business invariants. If the module exposes a validated write").unwrap();
+        writeln!(output, "/// service (e.g. a command router over its domain engine), serve THAT instead").unwrap();
+        writeln!(output, "/// for any mutation that must respect domain rules.").unwrap();
         writeln!(output, "pub fn create_{}_write_routes(service: Arc<{}Service>) -> Router {{", model_snake, model.name).unwrap();
         writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::write_routes(",
             model.name, model.name, model.name, model.name, model.name).unwrap();
