@@ -22,9 +22,11 @@
 //!   strictly greater than every existing migration timestamp, shared by the
 //!   up/down pair. Multiple new migrations get successive timestamps, assigned
 //!   in sorted base-name order for determinism.
-//! - A HAND-WRITTEN migration (no marker) sharing a base name is never reused:
-//!   the generated migration gets a fresh timestamp and the hand-written file
-//!   is left untouched for the cleanup pass to preserve.
+//! - A HAND-WRITTEN migration (no marker) sharing a base name means the table
+//!   is already covered: the generated migration is DROPPED (not emitted at a
+//!   fresh timestamp), so the generator never creates a duplicate of a table
+//!   the user already migrated by hand. The hand-written file is left untouched
+//!   for the cleanup pass to preserve; later schema changes get their own ALTER.
 //!
 //! If the `migrations/` dir does not exist yet (first generation), the
 //! positional timestamps produced by the generators are left untouched.
@@ -71,15 +73,27 @@ pub(super) fn stabilize_migration_timestamps(generated: &mut GeneratedOutput, ou
 
     // (old_path, new_path) remappings, applied after the iteration.
     let mut remaps: Vec<(PathBuf, PathBuf)> = Vec::new();
+    // Paths to drop entirely: a hand-written (no-marker) migration already covers
+    // this table on disk, so emitting a generated one would duplicate it.
+    let mut drop_paths: Vec<PathBuf> = Vec::new();
 
     for (base, paths) in &by_name {
+        // A hand-written migration already owns this table — don't emit a
+        // generated duplicate. (Generator-authored bases fall through to the
+        // reuse-or-fresh logic below; only no-marker coverage is a drop.) The
+        // hand-written file is immutable history; schema changes get an ALTER.
+        if !index.authored.contains_key(base.as_str())
+            && index.all_base_names.contains(base.as_str())
+        {
+            drop_paths.extend(paths.iter().cloned());
+            continue;
+        }
         // Decide ONE timestamp for the whole migration (its up and down together)
         // so the pair can never split across two timestamps.
         let ts = match index.authored.get(base.as_str()) {
             // Existing generator-authored identity: reuse its on-disk timestamp.
             Some(existing) => existing.clone(),
-            // Genuinely new (or collides only with a hand-written migration):
-            // assign the next fresh, strictly-later timestamp.
+            // Genuinely new: assign the next fresh, strictly-later timestamp.
             None => {
                 let t = next_new.clone();
                 next_new = bump_timestamp(&next_new);
@@ -107,6 +121,9 @@ pub(super) fn stabilize_migration_timestamps(generated: &mut GeneratedOutput, ou
         if let Some(content) = generated.files.remove(&old) {
             generated.files.insert(new, content);
         }
+    }
+    for path in drop_paths {
+        generated.files.remove(&path);
     }
 }
 
@@ -204,11 +221,12 @@ mod tests {
     }
 
     #[test]
-    fn hand_written_migration_is_not_reused() {
+    fn hand_written_migration_is_not_duplicated() {
         // A hand-written (no marker) migration shares a base name with a new
-        // generated entity. Its timestamp must NOT be reused — the generated
-        // migration gets a fresh max+1, leaving the hand-written file for the
-        // cleanup pass to preserve.
+        // generated entity. The generator must NOT emit a second migration for
+        // the same table (the duplicate-creation bug): the generated pair is
+        // dropped entirely, and the hand-written file is left for the cleanup
+        // pass to preserve. Schema changes to that table get their own ALTER.
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let md = dir.join("migrations");
@@ -224,10 +242,17 @@ mod tests {
 
         stabilize_migration_timestamps(&mut generated, dir);
 
-        // Not reused (would have been 20240101120000); gets max+1 = ...20007.
-        assert!(has(&generated, "20260426220007", "create_user_table", ".up.sql"));
-        assert!(has(&generated, "20260426220007", "create_user_table", ".down.sql"));
+        // The generated create_user_table migration is dropped — no duplicate at
+        // any timestamp (not the hand-written 20240101120000, not max+1 ...20007).
+        assert!(!has(&generated, "20260426220007", "create_user_table", ".up.sql"));
+        assert!(!has(&generated, "20260426220007", "create_user_table", ".down.sql"));
         assert!(!has(&generated, "20240101120000", "create_user_table", ".up.sql"));
+        assert!(generated.files.keys().all(|p| {
+            !p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains("create_user_table"))
+                .unwrap_or(false)
+        }));
     }
 
     #[test]
