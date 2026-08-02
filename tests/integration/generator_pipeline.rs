@@ -8,7 +8,6 @@ use metaphor_schema::ast::{ModuleSchema, Model, Field, Span};
 use metaphor_schema::ast::model::{
     Entity, EntityMethod, ValueObject, ValueObjectMethod,
     DomainService, ServiceDependency, ServiceMethod,
-    EventSourcedConfig, SnapshotConfig,
 };
 use metaphor_schema::ast::authorization::{
     AuthorizationConfig, RoleDefinition, PolicyDefinition, PolicyType, PolicyRule,
@@ -17,7 +16,7 @@ use metaphor_schema::ast::types::{TypeRef, PrimitiveType};
 use metaphor_schema::generators::{
     GeneratedOutput, Generator, GenerationTarget,
     RustGenerator, ValueObjectGenerator, DomainServiceGenerator,
-    AuthGenerator, EventsGenerator, EventStoreGenerator,
+    AuthGenerator, EventsGenerator,
     generate_all,
 };
 use metaphor_schema::resolver::ResolvedSchema;
@@ -416,44 +415,6 @@ fn test_events_generator_custom_events() {
 }
 
 // =============================================================================
-// Event Store Generator Tests
-// =============================================================================
-
-#[test]
-fn test_event_store_snapshot_config() {
-    let mut schema = create_test_schema();
-    schema.name = "account".to_string();
-
-    // Add a model
-    let mut model = Model::new("Account");
-    model.collection = Some("accounts".to_string());
-    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
-    model.fields.push(Field::new("balance", TypeRef::Primitive(PrimitiveType::Decimal)));
-    schema.models.push(model);
-
-    // Add event sourcing config with snapshot
-    let mut es_config = EventSourcedConfig::new("Account");
-    es_config.events.push("AccountCreated".to_string());
-    es_config.events.push("MoneyDeposited".to_string());
-    es_config.events.push("MoneyWithdrawn".to_string());
-    es_config.snapshot = Some(SnapshotConfig {
-        enabled: true,
-        every_n_events: 100,
-        max_age_seconds: Some(3600),
-        storage: Some("database".to_string()),
-    });
-    schema.event_sourced.push(es_config);
-
-    let resolved = create_resolved_schema(schema);
-    let generator = EventStoreGenerator::new();
-    let _output = generator.generate(&resolved)
-        .expect("EventStoreGenerator should succeed");
-
-    // Event store generator should produce output
-    // (may be empty if no event store is configured, which is acceptable)
-}
-
-// =============================================================================
 // All Generators with Complete DDD Schema
 // =============================================================================
 
@@ -500,7 +461,6 @@ fn test_all_generators_with_ddd_schema() {
         GenerationTarget::ValueObject,
         GenerationTarget::Auth,
         GenerationTarget::Events,
-        GenerationTarget::EventStore,
     ];
 
     let output = generate_all(&resolved, &targets)
