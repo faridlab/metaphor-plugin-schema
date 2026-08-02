@@ -342,6 +342,7 @@ Used in the legacy DSL format and in relation `attributes` arrays:
 | `@private` | Field-level security: the field is pruned from serialized responses for non-owner/non-root callers. Collected into the generated `EntityRepoMeta::private_fields()` override (as camelCase response keys); backbone-core's `apply_field_security` strips these keys at the handler. | `ssn string @private` |
 | `@owner` | Marks the tenant/ownership column used by field-level security to decide who counts as the owner. Emitted as the `EntityRepoMeta::owner_field()` override (camelCase response key). At most one per model. | `user_id uuid @owner` |
 | `@global` | Opts a `company_id` column **out** of the company fence — see [Company Scoping](#company-scoping) below. Use it only on genuinely cross-company reference data. | `company_id uuid @global` |
+| `@immutable` | Field cannot be changed via generic CRUD after creation: excluded from the generated `Update*Dto` and `Patch*Dto` (and the derived `has_changes` / `ApplyUpdateDto` impls), so engine-managed state (status, costs, journal ids, …) can't be mutated through the generic PATCH/PUT surface. Still present in `Create*Dto` and `*ResponseDto`; an engine that writes via the repository directly is unaffected. | `status VisitStatus @immutable` |
 
 ### Foreign Key Actions
 

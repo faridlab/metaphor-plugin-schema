@@ -218,7 +218,7 @@ impl DtoGenerator {
         writeln!(output, "pub struct Update{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            if self.is_auto_field(&field.name) {
+            if self.is_auto_field(&field.name) || field.has_attribute("immutable") {
                 continue;
             }
 
@@ -259,7 +259,7 @@ impl DtoGenerator {
         writeln!(output, "pub struct Patch{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            if self.is_auto_field(&field.name) {
+            if self.is_auto_field(&field.name) || field.has_attribute("immutable") {
                 continue;
             }
 
@@ -294,7 +294,7 @@ impl DtoGenerator {
         let field_checks: Vec<String> = model
             .fields
             .iter()
-            .filter(|f| !self.is_auto_field(&f.name))
+            .filter(|f| !self.is_auto_field(&f.name) && !f.has_attribute("immutable"))
             .map(|f| format!("self.{}.is_some()", escape_rust_keyword(&f.name)))
             .collect();
         if field_checks.is_empty() {
@@ -565,7 +565,7 @@ impl DtoGenerator {
             }
         }
         for field in &model.fields {
-            if self.is_auto_field(&field.name) || field.has_attribute("audit_metadata") {
+            if self.is_auto_field(&field.name) || field.has_attribute("audit_metadata") || field.has_attribute("immutable") {
                 continue;
             }
             let field_name = escape_rust_keyword(&field.name);
@@ -1120,6 +1120,78 @@ mod tests {
         assert!(!create_section.contains("pub created_at:"));
         assert!(!create_section.contains("pub updated_at:"));
         assert!(!create_section.contains("pub deleted_at:"));
+    }
+
+    #[test]
+    fn test_dto_excludes_immutable_fields_in_update_and_patch() {
+        // A custom model with one @immutable field, so the shared `create_test_schema()` fixture is
+        // undisturbed.
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(Model {
+            name: "Widget".to_string(),
+            fields: vec![
+                Field {
+                    name: "id".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                    ..Default::default()
+                },
+                Field {
+                    name: "label".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::String),
+                    ..Default::default()
+                },
+                Field {
+                    name: "status".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::String),
+                    attributes: vec![Attribute {
+                        name: "immutable".to_string(),
+                        args: vec![],
+                        span: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let resolved = ResolvedSchema { schema };
+        let output = DtoGenerator::new().generate(&resolved).unwrap();
+        let dto_file = output
+            .files
+            .get(&PathBuf::from("src/presentation/dto/widget_dto.rs"))
+            .unwrap();
+
+        let body = |kind: &str| {
+            dto_file
+                .split(&format!("pub struct {kind}WidgetDto"))
+                .nth(1)
+                .unwrap()
+                .split('}')
+                .next()
+                .unwrap()
+        };
+        let create = body("Create");
+        let update = body("Update");
+        let patch = body("Patch");
+
+        // @immutable field stays in Create (set at creation) but is gone from Update + Patch.
+        assert!(create.contains("pub status:"), "Create must include the @immutable field");
+        assert!(!update.contains("pub status:"), "Update must exclude the @immutable field");
+        assert!(!patch.contains("pub status:"), "Patch must exclude the @immutable field");
+        // A non-immutable field is unaffected.
+        assert!(update.contains("pub label:"));
+        assert!(patch.contains("pub label:"));
+        // has_changes must not reference the excluded field.
+        let has_changes = dto_file
+            .split("pub fn has_changes")
+            .nth(1)
+            .unwrap()
+            .split('}')
+            .next()
+            .unwrap();
+        assert!(
+            !has_changes.contains("self.status.is_some()"),
+            "has_changes must skip the @immutable field"
+        );
     }
 
     #[test]
