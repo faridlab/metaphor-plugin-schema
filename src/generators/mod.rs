@@ -857,6 +857,7 @@ mod tests {
             cqrs,
             rls_migration: None,
             layers: None,
+            reexport_entities: None,
         })
     }
 
@@ -918,6 +919,7 @@ mod tests {
             cqrs: None,
             rls_migration: None,
             layers,
+            reexport_entities: None,
         })
     }
 

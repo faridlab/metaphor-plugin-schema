@@ -748,6 +748,14 @@ pub struct GeneratorsConfig {
     /// so the generator does not emit a redundant duplicate on every regen.
     #[serde(default)]
     pub rls_migration: Option<bool>,
+    /// Opt-OUT flag for the `pub use domain::entity::*;` re-export in lib.rs.
+    /// Default (absent / `true`): re-export every domain entity + value object at the crate root
+    /// (backward compatible). Set to `false` when a module wants its outward contract limited to
+    /// the `exports::types` DTOs + ports, so sibling crates can't depend on internal entity
+    /// representations. The generator then omits the glob — and the omission is durable across
+    /// regen (a hand-deletion of the line is not; it is re-emitted every time).
+    #[serde(default)]
+    pub reexport_entities: Option<bool>,
 }
 
 // ============================================================================
