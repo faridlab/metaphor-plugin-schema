@@ -278,10 +278,40 @@ impl ModuleGenerator {
         writeln!(output, "    /// mount exposes unguarded writes. Compose a guarded router (read + validated").unwrap();
         writeln!(output, "    /// writes) for production, or call `all_crud_routes()` to opt into the full").unwrap();
         writeln!(output, "    /// unguarded surface explicitly.").unwrap();
-        writeln!(output, "    #[deprecated(note = \"mounts unvalidated generic CRUD on every entity; compose a guarded router for production, or call all_crud_routes() for the intentional full/unguarded surface\")]").unwrap();
+        writeln!(output, "    #[deprecated(note = \"mounts unvalidated generic CRUD; prefer readonly_routes() + validated writes, or all_crud_routes() for the full/unguarded surface\")]").unwrap();
         writeln!(output, "    pub fn routes(&self) -> Router {{").unwrap();
         writeln!(output, "        self.all_crud_routes()").unwrap();
         writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Read-only composer: every entity mounted GET-only — the safe base that cannot bypass a
+        // validated write service's invariants. Recommended production base; merge validated write
+        // routes onto it. (Council maturity review: give modules a discoverable safe default path.)
+        writeln!(output, "    /// Read-only routes for every entity (GET endpoints only) — the safe base.").unwrap();
+        writeln!(output, "    ///").unwrap();
+        writeln!(output, "    /// Generic mutation can't reach here, so this surface cannot bypass a").unwrap();
+        writeln!(output, "    /// validated write service's invariants. Use this as the production base and").unwrap();
+        writeln!(output, "    /// merge validated write routes (or a write service's HTTP layer) onto it.").unwrap();
+        writeln!(output, "    pub fn readonly_routes(&self) -> Router {{").unwrap();
+        writeln!(output, "        use presentation::http::{{").unwrap();
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
+            let snake_name = to_snake_case(&model.name);
+            writeln!(output, "            create_{}_read_routes,", snake_name).unwrap();
+        }
+        writeln!(output, "        }};").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "        Router::new()").unwrap();
+        for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
+            let snake_name = to_snake_case(&model.name);
+            writeln!(output, "            .merge(create_{}_read_routes(self.{}_service.clone()))",
+                snake_name, snake_name).unwrap();
+        }
+        writeln!(output, "    }}").unwrap();
+        writeln!(output).unwrap();
+
+        // Custom methods (e.g. a guarded_routes() composer) — survives regeneration.
+        writeln!(output, "    // <<< CUSTOM METHODS").unwrap();
+        writeln!(output, "    // END CUSTOM").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -1011,6 +1041,11 @@ mod tests {
         assert!(lib_content.contains("pub fn all_crud_routes(&self)"));
         assert!(lib_content.contains("#[deprecated"));
         assert!(lib_content.contains("self.all_crud_routes()"));
+        // Council 2026-08-04: a safe read-only composer + a CUSTOM zone for module methods.
+        assert!(lib_content.contains("pub fn readonly_routes(&self)"),
+            "a read-only composer must be generated as the safe production base");
+        assert!(lib_content.contains("// <<< CUSTOM METHODS"),
+            "impl Module must have a CUSTOM zone so methods like guarded_routes() survive regen");
         // Council 2026-07-28: CrudServices grouping + crud_services() accessor were REMOVED —
         // they handed out full-mutation GenericCrudService handles that let sibling crates bypass
         // the validated write service. Service fields are now pub(crate) (encapsulated).
