@@ -173,8 +173,8 @@ impl DtoGenerator {
         writeln!(output, "pub struct Create{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            // Skip auto-generated fields
-            if self.is_auto_field(&field.name) {
+            // Skip auto-generated fields and fields excluded from write DTOs
+            if self.is_auto_field(&field.name) || self.is_excluded_from_dto(field) {
                 continue;
             }
 
@@ -218,7 +218,7 @@ impl DtoGenerator {
         writeln!(output, "pub struct Update{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            if self.is_auto_field(&field.name) || field.has_attribute("immutable") {
+            if self.is_auto_field(&field.name) || field.has_attribute("immutable") || self.is_excluded_from_dto(field) {
                 continue;
             }
 
@@ -259,7 +259,7 @@ impl DtoGenerator {
         writeln!(output, "pub struct Patch{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            if self.is_auto_field(&field.name) || field.has_attribute("immutable") {
+            if self.is_auto_field(&field.name) || field.has_attribute("immutable") || self.is_excluded_from_dto(field) {
                 continue;
             }
 
@@ -294,7 +294,7 @@ impl DtoGenerator {
         let field_checks: Vec<String> = model
             .fields
             .iter()
-            .filter(|f| !self.is_auto_field(&f.name) && !f.has_attribute("immutable"))
+            .filter(|f| !self.is_auto_field(&f.name) && !f.has_attribute("immutable") && !self.is_excluded_from_dto(f))
             .map(|f| format!("self.{}.is_some()", escape_rust_keyword(&f.name)))
             .collect();
         if field_checks.is_empty() {
@@ -520,6 +520,11 @@ impl DtoGenerator {
                 // other auto fields (created_at, updated_at, etc.) are Option<T>, initialize to None
                 let field_name = escape_rust_keyword(&field.name);
                 writeln!(output, "            {}: None,", field_name).unwrap();
+            } else if self.is_excluded_from_dto(field) {
+                // @exclude_from_dto fields are absent from the Create DTO — default them
+                // (the field's type must implement Default, or carry @default at the DB layer).
+                let field_name = escape_rust_keyword(&field.name);
+                writeln!(output, "            {}: Default::default(),", field_name).unwrap();
             } else {
                 let field_name = escape_rust_keyword(&field.name);
                 writeln!(output, "            {}: dto.{},", field_name, field_name).unwrap();
@@ -565,7 +570,7 @@ impl DtoGenerator {
             }
         }
         for field in &model.fields {
-            if self.is_auto_field(&field.name) || field.has_attribute("audit_metadata") || field.has_attribute("immutable") {
+            if self.is_auto_field(&field.name) || field.has_attribute("audit_metadata") || field.has_attribute("immutable") || self.is_excluded_from_dto(field) {
                 continue;
             }
             let field_name = escape_rust_keyword(&field.name);
@@ -597,6 +602,16 @@ impl DtoGenerator {
 
     fn is_auto_field(&self, name: &str) -> bool {
         matches!(name, "id" | "created_at" | "updated_at" | "deleted_at" | "metadata")
+    }
+
+    /// Fields marked `@exclude_from_dto` (synonyms: `@readonly`, `@no_input`) are omitted from
+    /// ALL generated write DTOs (Create/Update/Patch) — they cannot be set via generic CRUD and
+    /// must be driven by a write service or DB default. Stronger than `@immutable` (which only
+    /// excludes from Update/Patch, keeping Create).
+    fn is_excluded_from_dto(&self, field: &Field) -> bool {
+        field.has_attribute("exclude_from_dto")
+            || field.has_attribute("readonly")
+            || field.has_attribute("no_input")
     }
 
     /// Check if a type reference needs a specific primitive type
@@ -1191,6 +1206,88 @@ mod tests {
         assert!(
             !has_changes.contains("self.status.is_some()"),
             "has_changes must skip the @immutable field"
+        );
+    }
+
+    #[test]
+    fn test_dto_excludes_exclude_from_dto_fields_in_all_dtos() {
+        // @exclude_from_dto is stronger than @immutable: it removes the field from Create too,
+        // so generic CRUD cannot set it at all (it must be driven by a write service / DB default).
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(Model {
+            name: "Widget".to_string(),
+            fields: vec![
+                Field {
+                    name: "id".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                    ..Default::default()
+                },
+                Field {
+                    name: "label".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::String),
+                    ..Default::default()
+                },
+                Field {
+                    name: "status".to_string(),
+                    type_ref: TypeRef::Primitive(PrimitiveType::String),
+                    attributes: vec![Attribute {
+                        name: "exclude_from_dto".to_string(),
+                        args: vec![],
+                        span: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let resolved = ResolvedSchema { schema };
+        let output = DtoGenerator::new().generate(&resolved).unwrap();
+        let dto_file = output
+            .files
+            .get(&PathBuf::from("src/presentation/dto/widget_dto.rs"))
+            .unwrap();
+
+        let body = |kind: &str| {
+            dto_file
+                .split(&format!("pub struct {kind}WidgetDto"))
+                .nth(1)
+                .unwrap()
+                .split('}')
+                .next()
+                .unwrap()
+        };
+        let create = body("Create");
+        let update = body("Update");
+        let patch = body("Patch");
+
+        // @exclude_from_dto field is gone from ALL three write DTOs (unlike @immutable, which keeps Create).
+        assert!(!create.contains("pub status:"), "Create must exclude the @exclude_from_dto field");
+        assert!(!update.contains("pub status:"), "Update must exclude the @exclude_from_dto field");
+        assert!(!patch.contains("pub status:"), "Patch must exclude the @exclude_from_dto field");
+        // A non-excluded field is unaffected.
+        assert!(create.contains("pub label:"));
+        assert!(update.contains("pub label:"));
+        assert!(patch.contains("pub label:"));
+        // has_changes must not reference the excluded field.
+        let has_changes = dto_file
+            .split("pub fn has_changes")
+            .nth(1)
+            .unwrap()
+            .split('}')
+            .next()
+            .unwrap();
+        assert!(
+            !has_changes.contains("self.status.is_some()"),
+            "has_changes must skip the @exclude_from_dto field"
+        );
+        // The Create DTO -> Entity conversion must default the excluded field, not read it from the DTO.
+        assert!(
+            dto_file.contains("status: Default::default()"),
+            "Create conversion must default the @exclude_from_dto field"
+        );
+        assert!(
+            !dto_file.contains("dto.status"),
+            "excluded field must not be read from any write DTO"
         );
     }
 
