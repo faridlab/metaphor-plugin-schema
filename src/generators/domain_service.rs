@@ -100,8 +100,12 @@ impl DomainServiceGenerator {
             writeln!(output).unwrap();
             writeln!(output, "/// Domain policy for {} — permits all operations (no business invariants).", name).unwrap();
             writeln!(output, "///").unwrap();
-            writeln!(output, "/// To add domain rules, replace this alias with a struct implementing").unwrap();
-            writeln!(output, "/// `backbone_core::DomainPolicy<{}>` in the `// <<< CUSTOM` zone.", name).unwrap();
+            writeln!(output, "/// NOTE: `DomainPolicy` is advisory only — it is NOT invoked by the generic").unwrap();
+            writeln!(output, "/// CRUD pipeline. `GenericCrudService` enforces invariants via a different").unwrap();
+            writeln!(output, "/// trait, `ServiceLifecycle` (`before_create` / `before_update`). So implementing").unwrap();
+            writeln!(output, "/// a real `DomainPolicy` here is not yet wired to runtime. For actual per-write").unwrap();
+            writeln!(output, "/// enforcement, implement `backbone_core::ServiceLifecycle<{}>` on a custom", name).unwrap();
+            writeln!(output, "/// service. `PermitAllPolicy` is the safe default until then.").unwrap();
             writeln!(output, "pub type {}DomainPolicy = PermitAllPolicy<{}>;", name, name).unwrap();
             writeln!(output).unwrap();
             writeln!(output, "// <<< CUSTOM").unwrap();
@@ -239,5 +243,9 @@ mod tests {
         assert!(content.contains("PermitAllPolicy"));
         assert!(content.contains("pub type OrderDomainPolicy"));
         assert!(!content.contains("pub struct OrderDomainPolicy"));
+        // Guidance is honest about DomainPolicy being advisory (not invoked by the CRUD pipeline).
+        assert!(content.contains("ServiceLifecycle"));
+        assert!(content.contains("advisory"));
+        assert!(!content.contains("replace this alias with a struct implementing"));
     }
 }
