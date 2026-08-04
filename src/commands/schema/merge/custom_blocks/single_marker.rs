@@ -163,6 +163,16 @@ pub(super) fn insert_custom_blocks(
                 insert_at(result_lines, pos, block_lines);
             }
         } else {
+            // No anchor found — the anchor line changed between regens (e.g. `pub` → `pub(crate)` on
+            // a service field when the template was upgraded, which normalize_line can't bridge).
+            // Appending a struct-field block at EOF strands it outside its struct and breaks the build
+            // (the backbone-integrations regen breakage, 2026-08-05). Relocate a field-like block into
+            // the generated `// <<< CUSTOM FIELDS` slot; fall back to EOF only for module-scope blocks
+            // (fn/struct/impl/use …), which legitimately live at file scope.
+            if let Some(fields_pos) = find_custom_fields_slot(result_lines, block_lines) {
+                replace_custom_span(result_lines, fields_pos, block_lines);
+                continue;
+            }
             eprintln!("  Warning: No anchor found for custom block, appending at end of file");
             if !first_code_line_already_present(result_lines, block_lines) {
                 for custom_line in block_lines {
@@ -215,20 +225,18 @@ fn replace_custom_span(result_lines: &mut Vec<String>, pos: usize, block_lines: 
     }
 }
 
-/// Apply the inside-vs-after-container heuristic: when the block looks
-/// module-scope, walk past trailing closing braces so it lands AFTER the
-/// enclosing container, not inside it.
-fn adjust_for_placement(
-    result_lines: &[String],
-    initial_pos: usize,
-    block_lines: &[String],
-) -> usize {
+/// Whether the block's first real code line looks module-scope (a complete statement ending in `;`,
+/// or an item opener like `pub fn`/`impl`/`struct`/`use`/`#[…]`) vs field-like (an identifier comma — a
+/// struct/enum field or use-list item). Field-like blocks belong INSIDE a container; module-scope
+/// blocks belong at file scope. Shared by [`adjust_for_placement`] (inside-vs-after placement) and
+/// [`find_custom_fields_slot`] (whether to relocate an unanchored block into the struct slot).
+fn block_is_module_scope(block_lines: &[String]) -> bool {
     let first_content = block_lines.iter().find(|l| {
         !is_whole_line_custom_marker(l)
             && !l.trim().is_empty()
             && !l.trim_start().starts_with("//")
     });
-    let block_is_module_scope = first_content
+    first_content
         .map(|l| {
             let t = l.trim();
             let trimmed_no_semi = t.trim_end_matches(';');
@@ -255,9 +263,33 @@ fn adjust_for_placement(
                 || trimmed_no_semi.starts_with("static ")
                 || trimmed_no_semi.starts_with("#[")
         })
-        .unwrap_or(false);
+        .unwrap_or(false)
+}
 
-    if !block_is_module_scope {
+/// When a CUSTOM block has lost its anchor between regens (the anchor line changed — e.g. `pub` →
+/// `pub(crate)` on a service field when the template was upgraded, which [`normalize_line`] can't
+/// bridge), a field-like block must NOT be stranded at EOF outside its struct — that breaks the build
+/// (the backbone-integrations regen breakage, 2026-08-05). If the generated content has a
+/// `// <<< CUSTOM FIELDS` slot, return its index so the block relocates inside its struct. Returns
+/// `None` for module-scope blocks (they legitimately live at file scope) or when no slot exists.
+fn find_custom_fields_slot(result_lines: &[String], block_lines: &[String]) -> Option<usize> {
+    if block_is_module_scope(block_lines) {
+        return None;
+    }
+    result_lines
+        .iter()
+        .position(|l| l.trim().starts_with("// <<< CUSTOM FIELDS"))
+}
+
+/// Apply the inside-vs-after-container heuristic: when the block looks
+/// module-scope, walk past trailing closing braces so it lands AFTER the
+/// enclosing container, not inside it.
+fn adjust_for_placement(
+    result_lines: &[String],
+    initial_pos: usize,
+    block_lines: &[String],
+) -> usize {
+    if !block_is_module_scope(block_lines) {
         return initial_pos;
     }
 

@@ -255,6 +255,46 @@ let service = Arc::new(Service::new(repo));
     /// (e.g. multi-line `matches!` macros). Commit 11723ed removed the cap
     /// once a paired `END CUSTOM` is confirmed. This test pins that
     /// behaviour: every line between the markers survives the merge.
+    /// Regression: when the codegen template is upgraded between regens, it can rename a CUSTOM marker
+    /// (`// <<< CUSTOM` → `// <<< CUSTOM FIELDS`) AND change the surrounding lines (e.g. `pub` →
+    /// `pub(crate)` on service fields). The merge then can't anchor the user's struct-field block — it
+    /// must relocate into the generated `// <<< CUSTOM FIELDS` slot inside the struct, not strand at
+    /// EOF (which broke backbone-integrations' build on 2026-08-05).
+    #[test]
+    fn test_unanchored_field_block_relocates_into_custom_fields_slot() {
+        let existing = "\
+pub struct FooModule {
+    pub connector_service: Arc<ConnectorService>,
+    // <<< CUSTOM
+    pub write_service: Arc<WriteService>,
+    // END CUSTOM
+}
+";
+        let generated = "\
+pub struct FooModule {
+    pub(crate) connector_service: Arc<ConnectorService>,
+    // <<< CUSTOM FIELDS
+    // END CUSTOM
+}
+";
+        let (_tmp, path) = write_temp(existing);
+        let result = merge_rust_mod_custom(generated, &path).unwrap();
+
+        let field_pos = result
+            .find("pub write_service")
+            .expect("the write-service field should be present");
+        let struct_close = result.rfind('}').expect("struct should close");
+        assert!(
+            field_pos < struct_close,
+            "field must land INSIDE the struct, got:\n{result}"
+        );
+        let after_close = &result[struct_close..];
+        assert!(
+            !after_close.contains("write_service"),
+            "field must not strand at EOF after the struct, got:\n{result}"
+        );
+    }
+
     #[test]
     fn test_large_paired_custom_block_preserved_in_full() {
         let mut existing = String::from("let x = 1;\n// <<< CUSTOM\n");
