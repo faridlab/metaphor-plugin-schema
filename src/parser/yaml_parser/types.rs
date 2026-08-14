@@ -2,7 +2,7 @@
 //!
 //! All `YamlXxx` structs that map directly to YAML schema file structure.
 
-use crate::ast::{CompanyFence, Enforcement, Lifecycle, LifecycleShape};
+use crate::ast::{CommitPolicy, CompanyFence, Enforcement, JobPosture, Lifecycle, LifecycleShape};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -1581,6 +1581,19 @@ pub struct YamlScheduledJob {
     pub schedule: String,
     /// Handler function
     pub handler: String,
+    /// Scheduling posture (ADR-0020); absent = undeclared (legacy, warns)
+    #[serde(default)]
+    pub posture: Option<JobPosture>,
+    /// Trigger sources; required when `posture` is `self_arming`
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    /// Mid-batch commit policy (ADR-0020)
+    #[serde(default)]
+    pub commit_policy: Option<CommitPolicy>,
+    /// Whether the handler claims intake with `FOR UPDATE SKIP LOCKED`
+    /// (required for queue-draining postures)
+    #[serde(default)]
+    pub pickup_lock: bool,
 }
 
 /// Root structure for hook YAML files (entity lifecycle behaviors)

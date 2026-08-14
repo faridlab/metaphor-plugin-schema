@@ -303,7 +303,10 @@ pub(super) fn build_module_schema(
                             name: name.clone(),
                             schedule: job.schedule.clone(),
                             handler: job.handler.clone(),
-                            ..Default::default()
+                            posture: job.posture,
+                            triggers: job.triggers.clone(),
+                            commit_policy: job.commit_policy,
+                            pickup_lock: job.pickup_lock,
                         });
                     }
                 }
@@ -350,6 +353,46 @@ mod tests {
         assert!(job.triggers.is_empty());
         assert_eq!(job.commit_policy, None);
         assert!(!job.pickup_lock);
+    }
+
+    /// ADR-0020 vocabulary on `index.hook.yaml` jobs reaches the module
+    /// schema verbatim — posture, triggers, commit policy, pickup lock.
+    #[test]
+    fn hook_index_scheduled_jobs_carry_posture_vocabulary() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.hook.yaml");
+        std::fs::write(
+            &index,
+            "module: demo\nscheduled_jobs:\n  mail_queue:\n    schedule: \"every 5m\"\n    handler: mail::drain\n    posture: self_arming\n    triggers:\n      - message.created\n      - message.retried\n    commit_policy: commit_per_batch\n    pickup_lock: true\n",
+        )
+        .unwrap();
+
+        let (schema, errors) = build_module_schema("demo", &[index]).unwrap();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let job = &schema.scheduled_jobs[0];
+        assert_eq!(job.name, "mail_queue");
+        assert_eq!(job.posture, Some(crate::ast::JobPosture::SelfArming));
+        assert_eq!(job.triggers, vec!["message.created", "message.retried"]);
+        assert_eq!(job.commit_policy, Some(crate::ast::CommitPolicy::CommitPerBatch));
+        assert!(job.pickup_lock);
+    }
+
+    /// A bad posture name must be a clean parse error, not a silent default.
+    #[test]
+    fn hook_index_rejects_unknown_posture() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.hook.yaml");
+        std::fs::write(
+            &index,
+            "module: demo\nscheduled_jobs:\n  weird:\n    schedule: \"0 3 * * *\"\n    handler: gc::run\n    posture: whenever\n",
+        )
+        .unwrap();
+
+        let (_schema, errors) = build_module_schema("demo", &[index]).unwrap();
+        assert!(
+            errors.iter().any(|e| e.contains("whenever")),
+            "unknown posture must surface as a named error, got: {errors:?}"
+        );
     }
 
     /// A module with no scheduled jobs (the state of all 49 backbone

@@ -9,6 +9,19 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ### Added
 
+- **Scheduled-job posture vocabulary + pickup-lock lint (ADR-0020).**
+  `index.hook.yaml` jobs accept `posture:` (pull / self_arming / host_riding /
+  read_time_lazy / inactive_then_icp / autovacuum_ride), `triggers:`,
+  `commit_policy:`, `pickup_lock:`. Hard errors: `self_arming` without triggers;
+  a queue-draining posture (pull/self_arming/host_riding/autovacuum_ride)
+  without `pickup_lock: true` (MMB-4 double-processing class). Missing posture
+  warns, never errors — the ~60 legacy modules parse identically. Hook-index
+  parse failures now quote the real serde error instead of the generic
+  "not a valid hook" message.
+  · [`types.rs`](src/parser/yaml_parser/types.rs),
+  [`validator.rs`](src/resolver/validator.rs),
+  [`module_loader.rs`](src/commands/schema/module_loader.rs).
+
 - **`lifecycle:` declaration on fields (ADR-0016).** The ten observed lifecycle
   shapes (`projection` default / `hand_set` / `hybrid` / `split` / `stage_ref` /
   `window` / `virtual` / `label` / `inert` / `none`) plus metadata (`sticky`,

@@ -767,6 +767,50 @@ Notes:
   rides the constraint attributes. Condition→SQL compilation and the
   raw-SQL-reachability lint are planned follow-ups (ADR-0015's hard lint).
 
+### Scheduled Jobs (ADR-0020)
+
+`index.hook.yaml` may declare module-level scheduled jobs. Jobs reach the module
+schema (they used to be dropped at load time) and carry the ADR-0020 posture
+vocabulary:
+
+```yaml
+module: mail
+
+scheduled_jobs:
+  mail_queue:
+    schedule: "*/5 * * * *"       # cron or interval — the FLOOR, not the contract
+    handler: mail::drain
+    posture: self_arming          # what re-arms the job (see table)
+    triggers:                     # required when posture: self_arming
+      - message.created
+      - message.retried
+    commit_policy: commit_per_batch
+    pickup_lock: true             # handler claims rows FOR UPDATE SKIP LOCKED
+```
+
+The six postures — the observed scheduler patterns (ADR-0020):
+
+| Posture | Meaning | Needs `pickup_lock: true`? |
+|---|---|---|
+| `pull` | Plain interval-driven scan | **Yes** |
+| `self_arming` | Domain events re-arm the schedule; interval is a floor — `triggers:` **required** | **Yes** |
+| `host_riding` | No cron of its own; rides a host module's scheduler | **Yes** |
+| `read_time_lazy` | No cron at all; work happens on read | exempt |
+| `inactive_then_icp` | Shipped inactive; activated by post-install/ICP hooks | exempt |
+| `autovacuum_ride` | GC work riding the shared autovacuum | **Yes** |
+
+Validation:
+
+- A job with **no posture** warns (the schedule alone doesn't say what re-arms
+  the job); it never errors, so the ~60 legacy modules are unaffected.
+- `self_arming` with empty `triggers:` is a **hard error**.
+- A queue-draining posture without `pickup_lock: true` is a **hard error**
+  (MMB-4 class: concurrent workers double-process the same rows). Claim intake
+  with `FOR UPDATE SKIP LOCKED` or pick an exempt posture.
+- `commit_policy` is declarative in v1: `commit_per_batch` (bounds the replay
+  window, loses atomicity) vs `single_transaction` (atomic, unbounded replay on
+  crash). The queue-drain-pattern refinement is a planned follow-up.
+
 ---
 
 ## Workflow YAML Format

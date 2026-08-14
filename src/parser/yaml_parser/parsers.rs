@@ -117,10 +117,16 @@ pub fn is_hook_index_file(content: &str) -> bool {
 
 /// Parse a hook YAML file that could be either standard hook or index
 pub fn parse_hook_yaml_flexible(content: &str) -> Result<YamlHookParseResult> {
+    // Keep the index-parse error around: when the file *looks* like an index
+    // (has `module:`/`scheduled_jobs:` etc.), a bad enum value inside it is the
+    // real diagnosis, and the generic "not a valid hook" message would hide it.
+    let mut index_err: Option<anyhow::Error> = None;
+
     // First, check if it looks like an index file
     if is_hook_index_file(content) {
-        if let Ok(index) = parse_hook_index_yaml_str(content) {
-            return Ok(YamlHookParseResult::Index(index));
+        match parse_hook_index_yaml_str(content) {
+            Ok(index) => return Ok(YamlHookParseResult::Index(index)),
+            Err(e) => index_err = Some(e),
         }
     }
 
@@ -136,6 +142,9 @@ pub fn parse_hook_yaml_flexible(content: &str) -> Result<YamlHookParseResult> {
             // If list-format also failed, try index as fallback
             if let Ok(index) = parse_hook_index_yaml_str(content) {
                 Ok(YamlHookParseResult::Index(index))
+            } else if let Some(e) = index_err {
+                // The file declared itself an index — quote the real parse error.
+                anyhow::bail!("Failed to parse hook index YAML: {e:#}")
             } else {
                 // Return a descriptive error
                 anyhow::bail!("Failed to parse hook YAML: not a valid hook (map or list format) or index file")

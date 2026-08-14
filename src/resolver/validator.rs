@@ -57,6 +57,9 @@ impl<'a> SchemaValidator<'a> {
         // Validate field-level lifecycle declarations (ADR-0016)
         errors.extend(self.validate_lifecycles());
 
+        // Validate scheduled-job postures (ADR-0020)
+        errors.extend(self.validate_scheduled_jobs());
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -194,6 +197,61 @@ impl<'a> SchemaValidator<'a> {
         }
 
         errors
+    }
+
+    /// Validate scheduled-job declarations (ADR-0020).
+    ///
+    /// Two hard rules:
+    /// - `self_arming` with no `triggers:` — the interval is a floor, the
+    ///   triggers are the contract; without them the job is just a pull loop
+    ///   wearing a misleading name;
+    /// - a queue-draining posture (`pull` / `self_arming` / `host_riding` /
+    ///   `autovacuum_ride`) without `pickup_lock: true` — two concurrent
+    ///   workers will double-process the same rows (MMB-4 class). The exempt
+    ///   postures either don't run on a schedule at all (`read_time_lazy`) or
+    ///   aren't the ones doing the claiming (`inactive_then_icp`).
+    fn validate_scheduled_jobs(&self) -> Vec<ResolveError> {
+        use crate::ast::JobPosture;
+
+        self.schema
+            .scheduled_jobs
+            .iter()
+            .flat_map(|job| {
+                let mut errors = Vec::new();
+                let Some(posture) = job.posture else {
+                    return errors;
+                };
+
+                if posture == JobPosture::SelfArming && job.triggers.is_empty() {
+                    errors.push(ResolveError::validation(format!(
+                        "scheduled job '{}' declares posture: self_arming with no triggers: \
+                         — the schedule interval is only a floor; name the events that \
+                         re-arm the job (ADR-0020)",
+                        job.name
+                    )));
+                }
+
+                let queue_draining = matches!(
+                    posture,
+                    JobPosture::Pull
+                        | JobPosture::SelfArming
+                        | JobPosture::HostRiding
+                        | JobPosture::AutovacuumRide
+                );
+                if queue_draining && !job.pickup_lock {
+                    errors.push(ResolveError::validation(format!(
+                        "scheduled job '{}' declares posture: {} without pickup_lock: true \
+                         — concurrent workers will claim the same rows and double-process \
+                         them (MMB-4 class); claim intake with FOR UPDATE SKIP LOCKED or \
+                         declare why this job cannot race (ADR-0020)",
+                        job.name,
+                        job_posture_name(posture)
+                    )));
+                }
+
+                errors
+            })
+            .collect()
     }
 
     fn validate_model(&self, model: &crate::ast::Model) -> Vec<ResolveError> {
@@ -602,8 +660,15 @@ impl<'a> SchemaValidator<'a> {
 ///   NULL arm is dead, and `strict` is probably what was meant.
 pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
     let mut warnings = Vec::new();
+    warnings.extend(fence_warnings(schema));
+    warnings.extend(scheduled_job_warnings(schema));
+    warnings
+}
+
+/// Fence warnings for [`declaration_warnings`] — see ADR-0014.
+fn fence_warnings(schema: &ModuleSchema) -> Vec<String> {
     let Some(fence) = schema.company_fence else {
-        return warnings;
+        return Vec::new();
     };
 
     let fenced: Vec<&crate::ast::Model> = schema
@@ -615,6 +680,8 @@ pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
                 .any(|f| f.name == "company_id" && !f.has_attribute("global"))
         })
         .collect();
+
+    let mut warnings = Vec::new();
 
     if fenced.is_empty() && fence != CompanyFence::None {
         warnings.push(format!(
@@ -641,6 +708,37 @@ pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
     }
 
     warnings
+}
+
+/// The declared name of a job posture (`SelfArming` → `"self_arming"`) —
+/// validator messages quote the declaration back at its author.
+fn job_posture_name(posture: crate::ast::JobPosture) -> &'static str {
+    use crate::ast::JobPosture;
+    match posture {
+        JobPosture::Pull => "pull",
+        JobPosture::SelfArming => "self_arming",
+        JobPosture::HostRiding => "host_riding",
+        JobPosture::ReadTimeLazy => "read_time_lazy",
+        JobPosture::InactiveThenIcp => "inactive_then_icp",
+        JobPosture::AutovacuumRide => "autovacuum_ride",
+    }
+}
+
+/// Scheduled-job warnings for [`declaration_warnings`] — see ADR-0020.
+fn scheduled_job_warnings(schema: &ModuleSchema) -> Vec<String> {
+    schema
+        .scheduled_jobs
+        .iter()
+        .filter(|job| job.posture.is_none())
+        .map(|job| {
+            format!(
+                "scheduled job '{}' declares no posture — pick one of pull, self_arming, \
+                 host_riding, read_time_lazy, inactive_then_icp, autovacuum_ride \
+                 (ADR-0020); the schedule alone does not say what re-arms the job",
+                job.name
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1126,5 +1224,103 @@ mod lifecycle_tests {
                 .unwrap_or_else(|| panic!("'{name}' must parse"));
             assert_eq!(shape.shape_name(), name, "shape_name must round-trip");
         }
+    }
+}
+
+#[cfg(test)]
+mod scheduled_job_tests {
+    use super::*;
+    use crate::ast::{CommitPolicy, JobPosture, ModuleSchema, ScheduledJob};
+
+    fn job_with(posture: Option<JobPosture>, triggers: Vec<String>, pickup_lock: bool) -> ScheduledJob {
+        ScheduledJob {
+            name: "nightly_gc".to_string(),
+            schedule: "0 3 * * *".to_string(),
+            handler: "gc::run".to_string(),
+            posture,
+            triggers,
+            commit_policy: Some(CommitPolicy::CommitPerBatch),
+            pickup_lock,
+        }
+    }
+
+    fn errors_of(jobs: Vec<ScheduledJob>) -> Vec<String> {
+        let mut s = ModuleSchema::new("test");
+        s.scheduled_jobs = jobs;
+        match SchemaValidator::new(&s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    fn warnings_of(jobs: Vec<ScheduledJob>) -> Vec<String> {
+        let mut s = ModuleSchema::new("test");
+        s.scheduled_jobs = jobs;
+        declaration_warnings(&s)
+    }
+
+    #[test]
+    fn undeclared_posture_warns_but_never_errors() {
+        let job = job_with(None, vec![], false);
+        let warns = warnings_of(vec![job.clone()]);
+        assert!(
+            warns.iter().any(|w| w.contains("'nightly_gc' declares no posture")),
+            "absent posture must warn, got: {warns:?}"
+        );
+        // Legacy jobs (all 49 backbone indexes today) never fail validation.
+        assert!(errors_of(vec![job]).is_empty(), "absent posture must not error");
+    }
+
+    #[test]
+    fn queue_draining_postures_demand_pickup_lock() {
+        for posture in [
+            JobPosture::Pull,
+            JobPosture::SelfArming,
+            JobPosture::HostRiding,
+            JobPosture::AutovacuumRide,
+        ] {
+            let errs = errors_of(vec![job_with(Some(posture), vec!["mail.created".to_string()], false)]);
+            assert!(
+                errs.iter()
+                    .any(|e| e.contains("without pickup_lock: true") && e.contains("MMB-4")),
+                "{posture:?} without pickup_lock must be a hard error, got: {errs:?}"
+            );
+
+            let ok = errors_of(vec![job_with(Some(posture), vec!["mail.created".to_string()], true)]);
+            assert!(ok.is_empty(), "{posture:?} with pickup_lock must validate, got: {ok:?}");
+        }
+    }
+
+    #[test]
+    fn read_time_lazy_and_inactive_then_icp_are_exempt_from_the_lock() {
+        for posture in [JobPosture::ReadTimeLazy, JobPosture::InactiveThenIcp] {
+            let errs = errors_of(vec![job_with(Some(posture), vec![], false)]);
+            assert!(
+                errs.is_empty(),
+                "{posture:?} does not claim rows on a schedule and must be exempt, got: {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn self_arming_without_triggers_is_fatal() {
+        let errs = errors_of(vec![job_with(Some(JobPosture::SelfArming), vec![], true)]);
+        assert!(
+            errs.iter().any(|e| e.contains("self_arming with no triggers")),
+            "self_arming must name its re-arming events, got: {errs:?}"
+        );
+
+        let ok = errors_of(vec![job_with(
+            Some(JobPosture::SelfArming),
+            vec!["registration.confirmed".to_string()],
+            true,
+        )]);
+        assert!(ok.is_empty(), "self_arming with triggers and a lock must validate, got: {ok:?}");
+    }
+
+    #[test]
+    fn posture_names_match_the_declared_vocabulary() {
+        assert_eq!(job_posture_name(JobPosture::SelfArming), "self_arming");
+        assert_eq!(job_posture_name(JobPosture::InactiveThenIcp), "inactive_then_icp");
     }
 }

@@ -245,7 +245,18 @@ fn print_hook_index(index: &YamlHookIndexSchema, format: &OutputFormat) {
             if !index.scheduled_jobs.is_empty() {
                 println!("    Scheduled Jobs: {}", index.scheduled_jobs.len());
                 for (name, job) in &index.scheduled_jobs {
-                    println!("      {} {} - {}", "•".blue(), name, job.schedule);
+                    // ADR-0020: the posture is the interesting part of a job —
+                    // show it next to the schedule when declared.
+                    match job.posture {
+                        Some(posture) => println!(
+                            "      {} {} - {} [posture: {:?}]",
+                            "•".blue(),
+                            name,
+                            job.schedule,
+                            posture
+                        ),
+                        None => println!("      {} {} - {}", "•".blue(), name, job.schedule),
+                    }
                 }
             }
         }
