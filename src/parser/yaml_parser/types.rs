@@ -2,7 +2,7 @@
 //!
 //! All `YamlXxx` structs that map directly to YAML schema file structure.
 
-use crate::ast::{CompanyFence, Enforcement};
+use crate::ast::{CompanyFence, Enforcement, Lifecycle, LifecycleShape};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -182,7 +182,60 @@ pub enum YamlField {
         attributes: Vec<String>,
         #[serde(default)]
         description: Option<String>,
+        /// Lifecycle declaration (ADR-0016) — string or full map form
+        #[serde(default)]
+        lifecycle: Option<YamlLifecycle>,
     },
+}
+
+/// A lifecycle declaration in YAML (ADR-0016): either a bare shape string
+/// (`lifecycle: hand_set`) or the full map form with metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum YamlLifecycle {
+    /// Bare shape name: `lifecycle: projection`
+    Shape(String),
+    /// Full form: `lifecycle: { shape: split, driver: stage_id }`
+    Full {
+        shape: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sticky: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latched: Option<bool>,
+        #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+        display_labels: std::collections::HashMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        driver: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_machine: Option<String>,
+    },
+}
+
+impl YamlLifecycle {
+    /// Convert to the AST [`Lifecycle`], parsing the shape name so an unknown
+    /// value surfaces as a named error instead of a silent default.
+    pub fn into_lifecycle(self) -> Result<Lifecycle, String> {
+        let (shape_str, sticky, latched, display_labels, driver, state_machine) = match self {
+            Self::Shape(s) => (s, None, None, Default::default(), None, None),
+            Self::Full { shape, sticky, latched, display_labels, driver, state_machine } => {
+                (shape, sticky, latched, display_labels, driver, state_machine)
+            }
+        };
+        let shape = LifecycleShape::from_name(&shape_str).ok_or_else(|| {
+            format!(
+                "unknown lifecycle shape '{shape_str}' (expected one of projection, hand_set, \
+                 hybrid, split, stage_ref, window, virtual, label, inert, none)"
+            )
+        })?;
+        Ok(Lifecycle {
+            shape,
+            sticky,
+            latched,
+            display_labels,
+            driver,
+            state_machine,
+        })
+    }
 }
 
 /// A relation definition in YAML

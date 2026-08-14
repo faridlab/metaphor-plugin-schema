@@ -1539,16 +1539,19 @@ mod tests {
             field_type: "string".to_string(),
             attributes: vec!["@email".to_string(), "@max_length(255)".to_string()],
             description: None,
+            lifecycle: None,
         });
         contact.insert("phone".to_string(), YamlField::Full {
             field_type: "string".to_string(),
             attributes: vec!["@min_length(10)".to_string(), "@max_length(20)".to_string()],
             description: None,
+            lifecycle: None,
         });
         contact.insert("website".to_string(), YamlField::Full {
             field_type: "string?".to_string(),
             attributes: vec!["@url".to_string()],
             description: None,
+            lifecycle: None,
         });
 
         schema.shared_types.insert("Contact".to_string(), contact);
@@ -1593,6 +1596,7 @@ mod tests {
             field_type: "string".to_string(),
             attributes: vec!["@email".to_string()],
             description: None,
+            lifecycle: None,
         };
         let rule = generator.parse_validation_rules(&email_field);
         assert!(rule.is_email);
@@ -1602,6 +1606,7 @@ mod tests {
             field_type: "string".to_string(),
             attributes: vec!["@min_length(5)".to_string(), "@max_length(100)".to_string()],
             description: None,
+            lifecycle: None,
         };
         let rule = generator.parse_validation_rules(&length_field);
         assert_eq!(rule.min_length, Some(5));
@@ -1612,6 +1617,7 @@ mod tests {
             field_type: "int".to_string(),
             attributes: vec!["@min(0)".to_string(), "@max(100)".to_string()],
             description: None,
+            lifecycle: None,
         };
         let rule = generator.parse_validation_rules(&numeric_field);
         assert_eq!(rule.min_value, Some("0".to_string()));

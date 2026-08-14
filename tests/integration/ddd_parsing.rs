@@ -164,7 +164,7 @@ fn test_value_object_converts_to_ast() {
         .expect("Failed to parse value object example YAML");
 
     let yaml_vo = schema.value_objects.get("Money").expect("Money not found");
-    let vo = yaml_vo.clone().into_value_object("Money".to_string());
+    let vo = yaml_vo.clone().into_value_object("Money".to_string()).unwrap();
 
     assert_eq!(vo.name, "Money");
     assert!(vo.fields.len() >= 2);

@@ -127,11 +127,18 @@ pub(super) fn build_module_schema(
                         .map(|(name, entity)| entity.clone().into_entity(name.clone()))
                         .collect();
 
-                    let value_objects: Vec<_> = yaml_schema
+                    let value_objects: Vec<_> = match yaml_schema
                         .value_objects
                         .iter()
                         .map(|(name, vo)| vo.clone().into_value_object(name.clone()))
-                        .collect();
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(vos) => vos,
+                        Err(e) => {
+                            errors.push(format!("{}: {e}", filename));
+                            continue;
+                        }
+                    };
 
                     let domain_services: Vec<_> = yaml_schema
                         .domain_services
@@ -246,7 +253,15 @@ pub(super) fn build_module_schema(
                     );
 
                     // Convert models with shared-types context (for `extends` and JSONB support)
-                    let mut models = yaml_schema.into_models_with_context(&resolved_shared_types);
+                    let mut models = match yaml_schema
+                        .into_models_with_context(&resolved_shared_types)
+                    {
+                        Ok(models) => models,
+                        Err(e) => {
+                            errors.push(format!("{}: {e}", filename));
+                            continue;
+                        }
+                    };
                     // Apply the module-level schema default last: per-model and
                     // file-level `schema:` have already been resolved, so only
                     // models still without a schema inherit the module default.

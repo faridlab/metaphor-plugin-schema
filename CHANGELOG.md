@@ -9,6 +9,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ### Added
 
+- **`lifecycle:` declaration on fields (ADR-0016).** The ten observed lifecycle
+  shapes (`projection` default / `hand_set` / `hybrid` / `split` / `stage_ref` /
+  `window` / `virtual` / `label` / `inert` / `none`) plus metadata (`sticky`,
+  `latched`, `display_labels`, `driver`, `state_machine`). Bare-string or map
+  form; references are validated (`split` needs a same-model `driver`,
+  `stage_ref` needs a relation, `hand_set`'s `state_machine` must guard exactly
+  that field); unknown shapes are named conversion errors. No codegen from it
+  in v1.
+  · [`model.rs`](src/ast/model.rs), [`types.rs`](src/parser/yaml_parser/types.rs),
+  [`validator.rs`](src/resolver/validator.rs).
+
 - **`enforcement:` / `justification:` on hook rules (ADR-0015).** `db` (default,
   unchanged for existing schemas) / `service` / `both`; `service` without a
   non-empty justification is a hard validation error — the declaration is the

@@ -213,6 +213,7 @@ mod tests {
                 field_type: "uuid?".to_string(),
                 attributes: vec!["@foreign_key(sapiens.User.id)".to_string()],
                 description: None,
+                lifecycle: None,
             },
         );
         // A phantom on a shared type — the case that would otherwise slip through.
@@ -222,6 +223,7 @@ mod tests {
                 field_type: "uuid?".to_string(),
                 attributes: vec!["@foreign_key(ghost.Reviewer.id)".to_string()],
                 description: None,
+                lifecycle: None,
             },
         );
         let mut schema = ModuleSchema::new("selling");

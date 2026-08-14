@@ -54,6 +54,9 @@ impl<'a> SchemaValidator<'a> {
         // Validate the module-level company fence (ADR-0014)
         errors.extend(self.validate_company_fence());
 
+        // Validate field-level lifecycle declarations (ADR-0016)
+        errors.extend(self.validate_lifecycles());
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -90,6 +93,107 @@ impl<'a> SchemaValidator<'a> {
                 ))
             })
             .collect()
+    }
+
+    /// Validate field-level `lifecycle:` declarations (ADR-0016).
+    ///
+    /// The declaration is advisory for generators but its *references* must be
+    /// real, or it degrades into a comment no one can trust:
+    /// - `split` needs a `driver:` naming another field on the same model
+    ///   (the stage/sub-state pair is the whole point of the shape);
+    /// - `stage_ref` needs a relation on this field (it hangs another field's
+    ///   lifecycle off this reference — a plain column can't do that);
+    /// - `hand_set` + `state_machine:` needs that machine to exist in a hook
+    ///   AND to guard *this* field (`machine.field == field.name`), otherwise
+    ///   the "guarded transition graph" claim is false.
+    fn validate_lifecycles(&self) -> Vec<ResolveError> {
+        use crate::ast::LifecycleShape;
+
+        let mut errors = Vec::new();
+
+        // Every declared state machine in the module, by hook name.
+        let machines: Vec<(String, String)> = self
+            .schema
+            .hooks
+            .iter()
+            .filter_map(|h| {
+                h.state_machine
+                    .as_ref()
+                    .map(|m| (h.name.clone(), m.field.clone()))
+            })
+            .collect();
+
+        for model in &self.schema.models {
+            for field in &model.fields {
+                let Some(lifecycle) = &field.lifecycle else { continue };
+                let declared = format!(
+                    "model '{}' field '{}' (lifecycle shape '{}')",
+                    model.name,
+                    field.name,
+                    lifecycle.shape.shape_name()
+                );
+
+                // `driver:` — whenever present, must name a *different*
+                // same-model field; `split` additionally requires it.
+                if let Some(driver) = &lifecycle.driver {
+                    if driver == &field.name {
+                        errors.push(ResolveError::validation(format!(
+                            "{declared}: driver '{driver}' is the field itself — \
+                             a field cannot drive its own lifecycle"
+                        )));
+                    } else if !model.fields.iter().any(|f| &f.name == driver) {
+                        errors.push(ResolveError::validation(format!(
+                            "{declared}: driver '{driver}' is not a field on model '{}' \
+                             — split/projection drivers must be same-model fields",
+                            model.name
+                        )));
+                    }
+                }
+                if lifecycle.shape == LifecycleShape::Split && lifecycle.driver.is_none() {
+                    errors.push(ResolveError::validation(format!(
+                        "{declared}: split requires a 'driver:' naming the stage field \
+                         this sub-state splits against (ADR-0016)"
+                    )));
+                }
+
+                // `stage_ref` — the field must carry a relation.
+                if lifecycle.shape == LifecycleShape::StageRef
+                    && !model.relations.iter().any(|r| {
+                        r.name == field.name
+                            || field.name.strip_suffix("_id") == Some(r.name.as_str())
+                    })
+                {
+                    errors.push(ResolveError::validation(format!(
+                        "{declared}: stage_ref requires a relation on this field \
+                         (a stage another field's lifecycle hangs off must be a real reference)"
+                    )));
+                }
+
+                // `hand_set` + `state_machine:` — the machine must exist and
+                // guard exactly this field.
+                if lifecycle.shape == LifecycleShape::HandSet {
+                    if let Some(machine) = &lifecycle.state_machine {
+                        match machines.iter().find(|(hook, _)| hook == machine) {
+                            None => errors.push(ResolveError::validation(format!(
+                                "{declared}: state_machine '{machine}' does not exist — \
+                                 no hook in this module declares it"
+                            ))),
+                            Some((_, guarded_field)) if guarded_field != &field.name => {
+                                errors.push(ResolveError::validation(format!(
+                                    "{declared}: state_machine '{machine}' guards field \
+                                     '{guarded_field}', not '{}' — a hand_set field must name \
+                                     the machine that guards it",
+                                    field.name
+                                )));
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        errors
     }
 
     fn validate_model(&self, model: &crate::ast::Model) -> Vec<ResolveError> {
@@ -801,5 +905,226 @@ mod enforcement_tests {
         };
         assert_eq!(legacy.enforcement, Enforcement::Db);
         assert_eq!(rule.enforcement, Enforcement::Db);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::ast::{
+        Attribute, Field, Hook, Lifecycle, LifecycleShape, Model, PrimitiveType, Relation,
+        StateMachine, TypeRef,
+    };
+
+    fn id_field() -> Field {
+        let mut f = Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(Attribute::new("id"));
+        f
+    }
+
+    fn lifecycle_field(name: &str, lifecycle: Lifecycle) -> Field {
+        let mut f = Field::new(name, TypeRef::Primitive(PrimitiveType::String));
+        f.lifecycle = Some(lifecycle);
+        f
+    }
+
+    fn schema_with(model: Model) -> ModuleSchema {
+        let mut s = ModuleSchema::new("test");
+        s.models.push(model);
+        s
+    }
+
+    fn errors_of(s: &ModuleSchema) -> Vec<String> {
+        match SchemaValidator::new(s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    fn stage_model() -> Model {
+        let mut m = Model::new("Festival");
+        m.fields = vec![id_field()];
+        m
+    }
+
+    #[test]
+    fn split_without_driver_is_fatal() {
+        let mut m = stage_model();
+        m.fields.push(lifecycle_field(
+            "sub_state",
+            Lifecycle { shape: LifecycleShape::Split, ..Default::default() },
+        ));
+        let errs = errors_of(&schema_with(m));
+        assert!(
+            errs.iter().any(|e| e.contains("split requires a 'driver:'")),
+            "split must demand a driver, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn split_with_unknown_driver_is_fatal_but_known_driver_passes() {
+        let mut m = stage_model();
+        m.fields.push(Field::new("stage", TypeRef::Primitive(PrimitiveType::String)));
+        m.fields.push(lifecycle_field(
+            "sub_state",
+            Lifecycle {
+                shape: LifecycleShape::Split,
+                driver: Some("ghost".to_string()),
+                ..Default::default()
+            },
+        ));
+        let errs = errors_of(&schema_with(m));
+        assert!(
+            errs.iter().any(|e| e.contains("driver 'ghost' is not a field")),
+            "driver must resolve to a same-model field, got: {errs:?}"
+        );
+
+        let mut m = stage_model();
+        m.fields.push(Field::new("stage", TypeRef::Primitive(PrimitiveType::String)));
+        m.fields.push(lifecycle_field(
+            "sub_state",
+            Lifecycle {
+                shape: LifecycleShape::Split,
+                driver: Some("stage".to_string()),
+                ..Default::default()
+            },
+        ));
+        assert!(errors_of(&schema_with(m)).is_empty(), "split with a real driver must validate");
+    }
+
+    #[test]
+    fn driver_cannot_be_the_field_itself() {
+        let mut m = stage_model();
+        m.fields.push(lifecycle_field(
+            "stage",
+            Lifecycle {
+                shape: LifecycleShape::Split,
+                driver: Some("stage".to_string()),
+                ..Default::default()
+            },
+        ));
+        let errs = errors_of(&schema_with(m));
+        assert!(
+            errs.iter().any(|e| e.contains("cannot drive its own lifecycle")),
+            "self-driving driver must be rejected, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn stage_ref_needs_a_relation() {
+        let mut m = stage_model();
+        m.fields.push(lifecycle_field(
+            "stage_id",
+            Lifecycle { shape: LifecycleShape::StageRef, ..Default::default() },
+        ));
+        let errs = errors_of(&schema_with(m));
+        assert!(
+            errs.iter().any(|e| e.contains("stage_ref requires a relation")),
+            "stage_ref on a plain column must be rejected, got: {errs:?}"
+        );
+
+        // With a relation named after the (suffix-stripped) field it passes
+        // (the relation target must be a real model in the schema; the column
+        // carries the relation, so the _id FK check is satisfied by exemption).
+        let mut stage = Model::new("Stage");
+        stage.fields = vec![id_field()];
+        let mut m = stage_model();
+        let mut f = lifecycle_field(
+            "stage_id",
+            Lifecycle { shape: LifecycleShape::StageRef, ..Default::default() },
+        );
+        f.attributes.push(Attribute::new("exclude_from_foreign_key_check"));
+        m.fields.push(f);
+        m.relations.push(Relation {
+            name: "stage".to_string(),
+            target: TypeRef::Custom("Stage".to_string()),
+            ..Default::default()
+        });
+        let mut s = schema_with(m);
+        s.models.push(stage);
+        assert!(
+            errors_of(&s).is_empty(),
+            "stage_ref with a matching relation must validate, got: {:?}",
+            errors_of(&s)
+        );
+    }
+
+    fn hand_set_model(machine: Option<&str>) -> Model {
+        let mut m = stage_model();
+        m.fields.push(lifecycle_field(
+            "state",
+            Lifecycle {
+                shape: LifecycleShape::HandSet,
+                state_machine: machine.map(|s| s.to_string()),
+                ..Default::default()
+            },
+        ));
+        m
+    }
+
+    fn hook_guarding(field: &str) -> Hook {
+        let mut h = Hook::new("FestivalHook", "Festival");
+        let mut sm = StateMachine { field: field.to_string(), ..Default::default() };
+        sm.states = vec![
+            crate::ast::hook::State::new("draft").initial(),
+            crate::ast::hook::State::new("done").final_state(),
+        ];
+        h.state_machine = Some(sm);
+        h
+    }
+
+    #[test]
+    fn hand_set_with_missing_machine_is_fatal() {
+        let mut s = schema_with(hand_set_model(Some("ghost_machine")));
+        assert!(
+            errors_of(&s).iter().any(|e| e.contains("'ghost_machine' does not exist")),
+            "hand_set must name a real machine, got: {:?}",
+            errors_of(&s)
+        );
+    }
+
+    #[test]
+    fn hand_set_with_machine_guarding_another_field_is_fatal() {
+        let mut s = schema_with(hand_set_model(Some("FestivalHook")));
+        s.hooks.push(hook_guarding("other_field"));
+        assert!(
+            errors_of(&s)
+                .iter()
+                .any(|e| e.contains("guards field 'other_field', not 'state'")),
+            "the machine must guard exactly the declared field, got: {:?}",
+            errors_of(&s)
+        );
+    }
+
+    #[test]
+    fn hand_set_with_matching_machine_or_no_machine_is_fine() {
+        let mut s = schema_with(hand_set_model(Some("FestivalHook")));
+        s.hooks.push(hook_guarding("state"));
+        assert!(
+            errors_of(&s).is_empty(),
+            "matching machine must validate, got: {:?}",
+            errors_of(&s)
+        );
+
+        let s = schema_with(hand_set_model(None));
+        assert!(
+            errors_of(&s).is_empty(),
+            "hand_set without state_machine is advisory-only and must validate"
+        );
+    }
+
+    #[test]
+    fn shape_names_round_trip_the_declared_vocabulary() {
+        assert_eq!(LifecycleShape::from_name("hand_set"), Some(LifecycleShape::HandSet));
+        assert_eq!(LifecycleShape::from_name("stage_ref"), Some(LifecycleShape::StageRef));
+        assert_eq!(LifecycleShape::from_name("nope"), None);
+        for name in [
+            "projection", "hand_set", "hybrid", "split", "stage_ref", "window", "virtual",
+            "label", "inert", "none",
+        ] {
+            let shape = LifecycleShape::from_name(name)
+                .unwrap_or_else(|| panic!("'{name}' must parse"));
+            assert_eq!(shape.shape_name(), name, "shape_name must round-trip");
+        }
     }
 }

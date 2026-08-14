@@ -49,34 +49,39 @@ use super::helpers::*;
 
 impl YamlModelSchema {
     /// Convert to AST models
-    pub fn into_models(self) -> Vec<Model> {
+    ///
+    /// Fails on an invalid field `lifecycle:` declaration (ADR-0016) — the
+    /// error names the offending shape.
+    pub fn into_models(self) -> Result<Vec<Model>, String> {
         // Convert file-level types to IndexMap format
         let file_types = self.types_as_indexmap();
         let file_schema = self.schema.clone();
         self.models
             .into_iter()
             .map(|m| {
-                let mut model = m.into_model_with_context(&IndexMap::new(), &file_types);
+                let mut model = m.into_model_with_context(&IndexMap::new(), &file_types)?;
                 model.apply_schema_default(&file_schema);
-                model
+                Ok(model)
             })
             .collect()
     }
 
     /// Convert to AST models with shared types context
+    ///
+    /// Fails on an invalid field `lifecycle:` declaration (ADR-0016).
     pub fn into_models_with_context(
         self,
         shared_types: &IndexMap<String, IndexMap<String, YamlField>>,
-    ) -> Vec<Model> {
+    ) -> Result<Vec<Model>, String> {
         // Convert file-level types to IndexMap format
         let file_types = self.types_as_indexmap();
         let file_schema = self.schema.clone();
         self.models
             .into_iter()
             .map(|m| {
-                let mut model = m.into_model_with_context(shared_types, &file_types);
+                let mut model = m.into_model_with_context(shared_types, &file_types)?;
                 model.apply_schema_default(&file_schema);
-                model
+                Ok(model)
             })
             .collect()
     }
@@ -108,7 +113,7 @@ impl YamlModelSchema {
     }
 
     /// Convert to AST value objects
-    pub fn into_value_objects(self) -> Vec<ValueObject> {
+    pub fn into_value_objects(self) -> Result<Vec<ValueObject>, String> {
         self.value_objects
             .into_iter()
             .map(|(name, vo)| vo.into_value_object(name))
@@ -139,18 +144,20 @@ impl YamlModelSchema {
 
 impl YamlModel {
     /// Convert to AST Model
-    pub fn into_model(self) -> Model {
+    pub fn into_model(self) -> Result<Model, String> {
         self.into_model_with_context(&IndexMap::new(), &IndexMap::new())
     }
 
     /// Convert to AST Model with shared types context
     /// - shared_types: Module-level shared types from index.model.yaml
     /// - local_types: Model-local types defined in the model's types section
+    ///
+    /// Fails on an invalid field `lifecycle:` declaration (ADR-0016).
     pub fn into_model_with_context(
         self,
         shared_types: &IndexMap<String, IndexMap<String, YamlField>>,
         local_types: &IndexMap<String, IndexMap<String, YamlField>>,
-    ) -> Model {
+    ) -> Result<Model, String> {
         let mut model = Model::new(&self.name);
         model.collection = self.collection.clone();
         model.schema = self.schema.clone();
@@ -183,7 +190,7 @@ impl YamlModel {
                 for (field_name, yaml_field) in type_fields {
                     // Check if field already exists (explicit field takes precedence)
                     if !self.fields.contains_key(field_name) {
-                        let mut field = yaml_field.clone().into_field(field_name.clone());
+                        let mut field = yaml_field.clone().into_field(field_name.clone())?;
                         // Mark field as inherited from shared type
                         field.attributes.push(Attribute::new("inherited").with_arg(
                             AttributeValue::String(type_name.clone())
@@ -207,7 +214,7 @@ impl YamlModel {
                 }
             }
             // Regular field conversion
-            model.fields.push(yaml_field.into_field(name));
+            model.fields.push(yaml_field.into_field(name)?);
         }
 
         // Convert relations
@@ -325,7 +332,7 @@ impl YamlModel {
             model.fields.push(metadata_field);
         }
 
-        model
+        Ok(model)
     }
 }
 
@@ -454,18 +461,22 @@ impl YamlField {
     }
 
     /// Convert to AST Field
-    pub fn into_field(self, name: String) -> Field {
+    ///
+    /// Fails on an invalid `lifecycle:` declaration (ADR-0016) with a named
+    /// error identifying the unknown shape.
+    pub fn into_field(self, name: String) -> Result<Field, String> {
         match self {
             YamlField::Simple(type_str) => {
                 let (type_ref, attrs) = parse_type_string(&type_str);
                 let mut field = Field::new(name, type_ref);
                 field.attributes = attrs;
-                field
+                Ok(field)
             }
             YamlField::Full {
                 field_type,
                 attributes,
                 description,
+                lifecycle,
             } => {
                 let (type_ref, mut attrs) = parse_type_string(&field_type);
                 // Parse additional attributes
@@ -480,7 +491,15 @@ impl YamlField {
                 }
                 let mut field = Field::new(name, type_ref);
                 field.attributes = attrs;
-                field
+                // ADR-0016: carry the lifecycle declaration; an unknown shape
+                // name is a named error, not a silent default.
+                if let Some(decl) = lifecycle {
+                    field.lifecycle = Some(
+                        decl.into_lifecycle()
+                            .map_err(|e| format!("field '{}': {e}", field.name))?,
+                    );
+                }
+                Ok(field)
             }
         }
     }
@@ -1369,18 +1388,24 @@ impl YamlEntityMethod {
 
 impl YamlValueObject {
     /// Convert to AST ValueObject
-    pub fn into_value_object(self, name: String) -> ValueObject {
-        ValueObject {
+    ///
+    /// Fails on an invalid field `lifecycle:` declaration (ADR-0016).
+    pub fn into_value_object(self, name: String) -> Result<ValueObject, String> {
+        Ok(ValueObject {
             name,
             description: self.description,
             inner_type: self.inner_type.map(|t| parse_type_ref(&t)),
             validation: self.validation,
             methods: self.methods.into_iter().map(|m| m.into_method()).collect(),
-            fields: self.fields.into_iter().map(|(name, f)| f.into_field(name)).collect(),
+            fields: self
+                .fields
+                .into_iter()
+                .map(|(name, f)| f.into_field(name))
+                .collect::<Result<Vec<_>, _>>()?,
             derives: self.derives,
             messages: self.messages,
             ..Default::default()
-        }
+        })
     }
 }
 

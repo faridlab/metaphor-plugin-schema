@@ -170,9 +170,101 @@ pub struct Field {
     pub type_ref: TypeRef,
     /// Field attributes
     pub attributes: Vec<Attribute>,
+    /// Lifecycle shape declaration (ADR-0016): how this field's value comes
+    /// to be and moves. `None` = undeclared (legacy field — no behavior
+    /// change). Metadata-only in v1: preserved for ports and review, with
+    /// structural validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<Lifecycle>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
+}
+
+/// The field-level lifecycle declaration (ADR-0016) — the observed 10-pattern
+/// state taxonomy as vocabulary, plus the marks that ride with it.
+///
+/// The shape is a *classification*, not a state machine: patterns like the
+/// two-field split or the stage-driven projection aren't machines, which is
+/// why this lives on fields rather than enlarging `state_machines`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Lifecycle {
+    /// Which of the ten observed patterns this field follows
+    pub shape: LifecycleShape,
+    /// A sticky mark (Odoo `kanban_state` class): once set, it survives
+    /// transitions it would otherwise be reset by — preserved, not "corrected"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticky: Option<bool>,
+    /// A latched mark: once set it can only be cleared by an explicit,
+    /// declared action (not by any write)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latched: Option<bool>,
+    /// Label inversions preserved verbatim (Odoo `sent='Delivered'` class) —
+    /// the stored value is the contract; the display label is metadata
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub display_labels: std::collections::HashMap<String, String>,
+    /// The field (same model) that drives a `split` or `projection` shape
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<String>,
+    /// For `hand_set` fields: the hook `state_machines` entry guarding the
+    /// field (its `states.field` must name this field)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_machine: Option<String>,
+}
+
+/// The ten observed lifecycle shapes (ADR-0016 / recurring-themes A1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleShape {
+    /// Stored compute re-derived from the row on every write (e.g. MO state)
+    #[default]
+    Projection,
+    /// Hand-set value with a guarded transition graph (the classic state field)
+    HandSet,
+    /// Compute with a hand-set override that wins until re-derived (hybrid)
+    Hybrid,
+    /// Two fields split the lifecycle: a stage field + a sub-state field
+    /// (requires `driver:`)
+    Split,
+    /// This field is the stage another field's lifecycle hangs off
+    /// (requires an M2O relation on this field)
+    StageRef,
+    /// A time window (from/until pair) rather than a discrete state
+    Window,
+    /// Read-time computation, never stored (no column)
+    Virtual,
+    /// A label/flag that mirrors or summarizes another field, no lifecycle of
+    /// its own
+    Label,
+    /// Present in the source system, inert here — carried for fidelity only
+    Inert,
+    /// Explicitly declared as having no lifecycle semantics at all
+    None,
+}
+
+impl LifecycleShape {
+    /// Parse a shape name (`"hand_set"` → [`LifecycleShape::HandSet`]);
+    /// `None` for an unknown name (callers turn that into a named error).
+    pub fn from_name(name: &str) -> Option<Self> {
+        serde_yaml::from_str(name).ok()
+    }
+
+    /// The declared name of this shape (`HandSet` → `"hand_set"`) — for
+    /// validator messages that quote the declaration back at its author.
+    pub fn shape_name(&self) -> &'static str {
+        match self {
+            LifecycleShape::Projection => "projection",
+            LifecycleShape::HandSet => "hand_set",
+            LifecycleShape::Hybrid => "hybrid",
+            LifecycleShape::Split => "split",
+            LifecycleShape::StageRef => "stage_ref",
+            LifecycleShape::Window => "window",
+            LifecycleShape::Virtual => "virtual",
+            LifecycleShape::Label => "label",
+            LifecycleShape::Inert => "inert",
+            LifecycleShape::None => "none",
+        }
+    }
 }
 
 impl Field {
@@ -181,6 +273,7 @@ impl Field {
             name: name.into(),
             type_ref,
             attributes: Vec::new(),
+            lifecycle: None,
             span: Span::default(),
         }
     }

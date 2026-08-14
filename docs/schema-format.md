@@ -122,6 +122,60 @@ models:
 | `unique` | bool | Add unique constraint (default: `false`) |
 | `auto` | bool | Auto-generated value (default: `false`) |
 | `default` | any | Default value for the field |
+| `lifecycle` | string or map | Lifecycle shape declaration (ADR-0016) — see below |
+
+### Lifecycle (ADR-0016)
+
+A field's `lifecycle:` declares *how its value comes to exist and change* — the
+ten patterns observed across the Odoo corpus (recurring-themes A1). It is
+advisory metadata for generators and reviewers in v1 (no codegen from it yet),
+but its **references are validated**: a declaration naming things that don't
+exist is a hard error, not a comment.
+
+Two forms — a bare shape string:
+
+```yaml
+models:
+  - name: Festival
+    fields:
+      state:
+        type: string
+        lifecycle: hand_set
+```
+
+…or the full map form with metadata:
+
+```yaml
+      sub_state:
+        type: string
+        lifecycle:
+          shape: split          # required
+          driver: stage         # split demands the stage field it splits against
+          sticky: true          # once set, survives transitions that would reset it
+```
+
+The ten shapes:
+
+| Shape | Meaning | Requirements |
+|---|---|---|
+| `projection` *(default)* | Stored compute re-derived from the row on every write | `driver:` optional (must name a same-model field) |
+| `hand_set` | Hand-set value with a guarded transition graph | `state_machine:` must name a hook machine guarding **this** field |
+| `hybrid` | Compute with a hand-set override that wins until re-derived | — |
+| `split` | Sub-state field splitting against a stage field | `driver:` **required**, must name a different same-model field |
+| `stage_ref` | The stage another field's lifecycle hangs off | field must carry a relation (`stage_id` ↔ relation `stage`) |
+| `window` | Date-window pair field (from/until) | — |
+| `virtual` | Never stored — computed at read | — |
+| `label` | Mirrors or summarizes another field; no lifecycle of its own | — |
+| `inert` | Set once at creation, never meaningfully transitions | — |
+| `none` | Explicitly no lifecycle | — |
+
+Optional metadata keys: `sticky`, `latched` (clearable only by a declared
+action), `display_labels` (map of stored value → label; the stored value is the
+contract), `driver`, `state_machine`.
+
+Unknown shape names are a **named conversion error** (`unknown lifecycle shape
+'…' (expected one of …)`) that names the offending field. Fields without a
+`lifecycle:` key are untouched — existing schemas are unaffected.
 
 ### Enums
 

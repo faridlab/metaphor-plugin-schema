@@ -95,7 +95,9 @@ pub fn parse_module_schema(
             for yaml_enum in &yaml_schema.enums {
                 schema.enums.push(yaml_enum.clone().into_enum());
             }
-            let mut models = yaml_schema.into_models();
+            let mut models = yaml_schema
+                .into_models()
+                .map_err(|e| error::MobileGenError::SchemaParse(format!("convert {}: {e}", path.display())))?;
 
             for model in &mut models {
                 if model.disabled_generators.is_empty() && !file_disabled.is_empty() {

@@ -59,7 +59,7 @@ fn test_rust_generator_with_entities() {
 
     // Add models from YAML
     for yaml_model in yaml_schema.models {
-        schema.models.push(yaml_model.into_model());
+        schema.models.push(yaml_model.into_model().unwrap());
     }
 
     // Add entities from YAML
@@ -148,7 +148,7 @@ fn test_value_object_generator_from_ast() {
 
     // Add value objects from YAML
     for (name, yaml_vo) in yaml_schema.value_objects {
-        schema.value_objects.push(yaml_vo.into_value_object(name));
+        schema.value_objects.push(yaml_vo.into_value_object(name).unwrap());
     }
 
     let resolved = create_resolved_schema(schema);
@@ -295,7 +295,7 @@ fn test_auth_generator_from_config() {
 
     // Add models for context
     for yaml_model in yaml_schema.models {
-        schema.models.push(yaml_model.into_model());
+        schema.models.push(yaml_model.into_model().unwrap());
     }
 
     let resolved = create_resolved_schema(schema);
@@ -401,7 +401,7 @@ fn test_events_generator_custom_events() {
 
     // Add models
     for yaml_model in yaml_schema.models {
-        schema.models.push(yaml_model.into_model());
+        schema.models.push(yaml_model.into_model().unwrap());
     }
 
     let resolved = create_resolved_schema(schema);
@@ -429,7 +429,7 @@ fn test_all_generators_with_ddd_schema() {
 
     // Add all components from YAML
     for yaml_model in yaml_schema.models {
-        schema.models.push(yaml_model.into_model());
+        schema.models.push(yaml_model.into_model().unwrap());
     }
 
     for (name, yaml_entity) in yaml_schema.entities {
@@ -437,7 +437,7 @@ fn test_all_generators_with_ddd_schema() {
     }
 
     for (name, yaml_vo) in yaml_schema.value_objects {
-        schema.value_objects.push(yaml_vo.into_value_object(name));
+        schema.value_objects.push(yaml_vo.into_value_object(name).unwrap());
     }
 
     for (name, yaml_svc) in yaml_schema.domain_services {

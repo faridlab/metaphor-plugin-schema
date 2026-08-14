@@ -1,6 +1,7 @@
 use super::*;
 use super::helpers::{parse_type_string, split_attr_args, find_colon_outside_quotes};
 use crate::ast::types::{TypeRef, PrimitiveType};
+use crate::ast::LifecycleShape;
 use indexmap::IndexMap;
 
     #[test]
@@ -101,7 +102,7 @@ models:
 "#;
 
         let schema = parse_model_yaml_str(yaml).unwrap();
-        let model = schema.into_models().remove(0);
+        let model = schema.into_models().unwrap().remove(0);
         let email_field = model.find_field("email").unwrap();
 
         assert!(email_field.has_attribute("unique"));
@@ -243,7 +244,7 @@ models:
 
         // Convert with context - should inject extended fields
         let model = schema.models.into_iter().next().unwrap()
-            .into_model_with_context(&shared_types, &IndexMap::new());
+            .into_model_with_context(&shared_types, &IndexMap::new()).unwrap();
 
         // Check that extended fields are present
         assert!(model.find_field("created_at").is_some());
@@ -312,13 +313,14 @@ models:
             field_type: "datetime".to_string(),
             attributes: vec!["@default(now)".to_string()],
             description: None,
+            lifecycle: None,
         });
         metadata_fields.insert("updated_at".to_string(), YamlField::Simple("datetime".to_string()));
         shared_types.insert("Metadata".to_string(), metadata_fields);
 
         // Convert with context - metadata field should become JSONB
         let model = schema.models.into_iter().next().unwrap()
-            .into_model_with_context(&shared_types, &IndexMap::new());
+            .into_model_with_context(&shared_types, &IndexMap::new()).unwrap();
 
         // Check that metadata is now a JSONB field
         let metadata_field = model.find_field("metadata").unwrap();
@@ -354,6 +356,7 @@ models:
             field_type: "Address".to_string(),
             attributes: vec![],
             description: None,
+            lifecycle: None,
         };
         assert_eq!(field.get_type_name(), Some("Address".to_string()));
     }
@@ -381,7 +384,7 @@ models:
         shared_types.insert("Timestamps".to_string(), timestamps_fields);
 
         let model = schema.models.into_iter().next().unwrap()
-            .into_model_with_context(&shared_types, &IndexMap::new());
+            .into_model_with_context(&shared_types, &IndexMap::new()).unwrap();
 
         // Check that explicit created_at takes precedence over inherited one
         let created_at = model.find_field("created_at").unwrap();
@@ -448,7 +451,7 @@ enums:
         assert_eq!(schema.enums[0].name, "CustomerStatus");
 
         // Convert models - file-level types should be available to all models
-        let models = schema.into_models();
+        let models = schema.into_models().unwrap();
         assert_eq!(models.len(), 2);
 
         // Customer model should have Address and ContactInfo as JSONB fields
@@ -500,7 +503,7 @@ models:
         let schema = parse_model_yaml_str(yaml).unwrap();
         assert_eq!(schema.schema.as_deref(), Some("sapiens"));
 
-        let models = schema.into_models();
+        let models = schema.into_models().unwrap();
         // Inherits the file-level default.
         assert_eq!(models[0].schema.as_deref(), Some("sapiens"));
         assert_eq!(models[0].qualified_table_name(), "sapiens.sessions");
@@ -560,7 +563,7 @@ models:
         shared_types.insert("Metadata".to_string(), metadata_fields);
 
         // Convert with shared types context
-        let models = schema.into_models_with_context(&shared_types);
+        let models = schema.into_models_with_context(&shared_types).unwrap();
         let store = &models[0];
 
         // Timestamps should be extended (inherited as columns)
@@ -678,7 +681,7 @@ value_objects:
         assert_eq!(money_vo.methods.len(), 1);
 
         // Convert to AST
-        let value_objects = schema.into_value_objects();
+        let value_objects = schema.into_value_objects().unwrap();
         assert_eq!(value_objects.len(), 2);
     }
 
@@ -946,5 +949,91 @@ mod enforcement_rule_tests {
 
         // Unknown value errors cleanly instead of silently defaulting.
         assert!(serde_yaml::from_str::<YamlRule>(&format!("{base}enforcement: vibes")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_declaration_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_as_a_bare_shape_string_parses() {
+        let yaml = r#"
+models:
+  - name: Festival
+    fields:
+      state:
+        type: string
+        lifecycle: hand_set
+"#;
+        let schema = parse_model_yaml_str(yaml).unwrap();
+        let model = schema.into_models().unwrap().remove(0);
+        let state = model.find_field("state").unwrap();
+        let lc = state.lifecycle.as_ref().expect("lifecycle must be carried");
+        assert_eq!(lc.shape, LifecycleShape::HandSet);
+        assert!(lc.state_machine.is_none(), "bare form carries no metadata");
+    }
+
+    #[test]
+    fn lifecycle_map_form_carries_metadata() {
+        let yaml = r#"
+models:
+  - name: Festival
+    fields:
+      sub_state:
+        type: string
+        lifecycle:
+          shape: split
+          driver: stage
+          sticky: true
+"#;
+        let schema = parse_model_yaml_str(yaml).unwrap();
+        let model = schema.into_models().unwrap().remove(0);
+        let sub = model.find_field("sub_state").unwrap();
+        let lc = sub.lifecycle.as_ref().expect("lifecycle must be carried");
+        assert_eq!(lc.shape, LifecycleShape::Split);
+        assert_eq!(lc.driver.as_deref(), Some("stage"));
+        assert_eq!(lc.sticky, Some(true));
+    }
+
+    #[test]
+    fn unknown_lifecycle_shape_is_a_named_error() {
+        let yaml = r#"
+models:
+  - name: Festival
+    fields:
+      state:
+        type: string
+        lifecycle: spontaneous
+"#;
+        let schema = parse_model_yaml_str(yaml).unwrap();
+        let err = schema
+            .into_models()
+            .expect_err("unknown shape must not convert");
+        assert!(
+            err.contains("unknown lifecycle shape 'spontaneous'"),
+            "error must name the bad shape, got: {err}"
+        );
+        assert!(
+            err.contains("field 'state'"),
+            "error must name the offending field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_is_optional_and_absent_by_default() {
+        let yaml = r#"
+models:
+  - name: Festival
+    fields:
+      name:
+        type: string
+"#;
+        let schema = parse_model_yaml_str(yaml).unwrap();
+        let model = schema.into_models().unwrap().remove(0);
+        assert!(
+            model.find_field("name").unwrap().lifecycle.is_none(),
+            "fields without a lifecycle key must be untouched"
+        );
     }
 }

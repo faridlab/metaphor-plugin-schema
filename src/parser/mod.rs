@@ -233,10 +233,14 @@ pub fn parse_yaml_model(source: &str) -> Result<ModelFile, ParseError> {
     // Convert YAML schema to ModelFile, applying the file-level `schema:` default
     let file_schema = yaml_schema.schema.clone();
     let models = yaml_schema.models.into_iter().map(|m| {
-        let mut model = m.into_model();
+        let mut model = m.into_model()?;
         model.apply_schema_default(&file_schema);
-        model
-    }).collect();
+        Ok(model)
+    }).collect::<Result<Vec<_>, String>>().map_err(|e| ParseError::SyntaxError {
+        line: 1,
+        col: 1,
+        message: e,
+    })?;
     let enums = yaml_schema.enums.into_iter().map(|e| e.into_enum()).collect();
 
     Ok(ModelFile {
@@ -320,10 +324,14 @@ pub fn parse_yaml_model_flexible(source: &str) -> Result<ModelParseResult, Parse
             let yaml_schema = *yaml_schema;
             let file_schema = yaml_schema.schema.clone();
             let models = yaml_schema.models.into_iter().map(|m| {
-                let mut model = m.into_model();
+                let mut model = m.into_model()?;
                 model.apply_schema_default(&file_schema);
-                model
-            }).collect();
+                Ok(model)
+            }).collect::<Result<Vec<_>, String>>().map_err(|e| ParseError::SyntaxError {
+                line: 1,
+                col: 1,
+                message: e,
+            })?;
             let enums = yaml_schema.enums.into_iter().map(|e| e.into_enum()).collect();
 
             Ok(ModelParseResult::Model(ModelFile {

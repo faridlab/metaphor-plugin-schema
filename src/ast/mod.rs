@@ -12,7 +12,8 @@ pub mod workflow;
 
 // Re-export main types
 pub use model::{
-    Attribute, AttributeValue, CompanyFence, EnumDef, EnumVariant, Field, ForeignKeyAction, Index, IndexType, Model, Relation,
+    Attribute, AttributeValue, CompanyFence, EnumDef, EnumVariant, Field, ForeignKeyAction, Index,
+    IndexType, Lifecycle, LifecycleShape, Model, Relation,
     RelationType, TypeDef, TypeDefField,
     // DDD Entity & Value Object types
     Entity, EntityMethod, ValueObject, ValueObjectMethod,

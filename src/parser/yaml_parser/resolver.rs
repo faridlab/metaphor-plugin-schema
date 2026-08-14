@@ -34,6 +34,7 @@ pub fn resolve_shared_types(shared_types: &IndexMap<String, YamlSharedType>) -> 
                             "@audit_metadata".to_string(),
                         ],
                         description: Some("Audit metadata (created_at, updated_at, deleted_at, created_by, updated_by, deleted_by)".to_string()),
+                        lifecycle: None,
                     },
                 );
                 resolved.insert(name.clone(), metadata_field);
