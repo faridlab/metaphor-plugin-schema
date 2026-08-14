@@ -43,8 +43,9 @@ pub use model::{
 };
 pub use types::{PrimitiveType, TypeRef};
 pub use hook::{
-    Action, ActionType, CommitPolicy, ComputedField, JobPosture, Permission, PermissionAction, Rule,
-    ScheduledJob, State, StateMachine, Transition, Trigger, TriggerEvent, Hook,
+    Action, ActionType, CommitPolicy, ComputedField, Enforcement, JobPosture, Permission,
+    PermissionAction, Rule, ScheduledJob, State, StateMachine, Transition, Trigger, TriggerEvent,
+    Hook,
 };
 pub use workflow::{
     Workflow, WorkflowTrigger, WorkflowConfig, WorkflowHandler, TransactionMode, Step, StepType,

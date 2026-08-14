@@ -908,3 +908,43 @@ authorization:
         assert_eq!(schema.event_sourced.len(), 1);
         assert!(schema.authorization.is_some());
     }
+
+#[cfg(test)]
+mod enforcement_rule_tests {
+    use super::*;
+    use crate::ast::Enforcement;
+
+    /// ADR-0015: `enforcement:` on rules parses in all three modes, defaults
+    /// to Db downstream, and an unknown value is a hard serde error (the
+    /// strict map-format path — the soft list-format parser falls back to
+    /// undeclared, which is also Db).
+    #[test]
+    fn rule_enforcement_parses_all_modes_and_rejects_unknowns() {
+        let base = "when: [create]\ncondition: total > 0\nmessage: bad total\n";
+
+        let db: YamlRule = serde_yaml::from_str(&format!("{base}enforcement: db")).unwrap();
+        assert_eq!(db.enforcement, Some(Enforcement::Db));
+        let ast = db.clone().into_rule("r1".into());
+        assert_eq!(ast.enforcement, Enforcement::Db);
+
+        let service: YamlRule = serde_yaml::from_str(&format!(
+            "{base}enforcement: service\njustification: cross-model check"
+        ))
+        .unwrap();
+        assert_eq!(service.enforcement, Some(Enforcement::Service));
+        let ast = service.into_rule("r2".into());
+        assert_eq!(ast.enforcement, Enforcement::Service);
+        assert_eq!(ast.justification.as_deref(), Some("cross-model check"));
+
+        let both: YamlRule = serde_yaml::from_str(&format!("{base}enforcement: both")).unwrap();
+        assert_eq!(both.enforcement, Some(Enforcement::Both));
+
+        // Legacy rule with no enforcement key → AST default Db.
+        let legacy: YamlRule = serde_yaml::from_str(base).unwrap();
+        assert_eq!(legacy.enforcement, None);
+        assert_eq!(legacy.into_rule("r3".into()).enforcement, Enforcement::Db);
+
+        // Unknown value errors cleanly instead of silently defaulting.
+        assert!(serde_yaml::from_str::<YamlRule>(&format!("{base}enforcement: vibes")).is_err());
+    }
+}

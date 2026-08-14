@@ -708,6 +708,8 @@ impl YamlRule {
             condition: Expression::Raw(self.condition),
             message: self.message,
             code: self.code,
+            enforcement: self.enforcement.unwrap_or_default(),
+            justification: self.justification,
             ..Default::default()
         }
     }

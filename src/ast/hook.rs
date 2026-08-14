@@ -157,9 +157,31 @@ pub struct Rule {
     pub message: String,
     /// Error code (optional)
     pub code: Option<String>,
+    /// Where the invariant is enforced (ADR-0015); defaults to `Db` (the
+    /// historical behavior — guards ride DB constraints).
+    #[serde(default)]
+    pub enforcement: Enforcement,
+    /// Mandatory when `enforcement: service` (ADR-0015): why this invariant
+    /// lives in the service layer instead of the database.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
+}
+
+/// Where a rule's invariant is enforced (ADR-0015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Enforcement {
+    /// Database constraint only (`@unique` / `@non_negative` / `@jsonb_schema` …)
+    #[default]
+    Db,
+    /// Service-layer guard only — requires a `justification`; a raw-SQL write
+    /// path can bypass it, which is why the declaration is reviewable
+    Service,
+    /// Both layers (DB backstop + service guard for a better error)
+    Both,
 }
 
 /// When a rule should be applied

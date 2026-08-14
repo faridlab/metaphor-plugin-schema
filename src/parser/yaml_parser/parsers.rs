@@ -1,6 +1,7 @@
 //! Parser functions: YAML file parsing and format detection
 
 use super::types::*;
+use crate::ast::Enforcement;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use std::path::Path;
@@ -298,12 +299,27 @@ fn parse_hook_yaml_list_format(content: &str) -> Option<YamlHookSchema> {
                         .and_then(|v| v.as_str())
                         .map(String::from);
 
+                    // Tolerant like the rest of this soft parser: a bad enum
+                    // value falls back to undeclared (the strict map-format
+                    // deserializer is the one that hard-errors).
+                    let enforcement = rule_mapping
+                        .get(&Value::String("enforcement".into()))
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| serde_yaml::from_str::<Enforcement>(s).ok());
+
+                    let justification = rule_mapping
+                        .get(&Value::String("justification".into()))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+
                     rules.insert(name.to_string(), YamlRule {
                         when,
                         condition,
                         message,
                         code,
                         severity,
+                        enforcement,
+                        justification,
                     });
                 }
             }

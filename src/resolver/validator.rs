@@ -3,7 +3,7 @@
 //! Validates schema completeness and correctness.
 
 use super::ResolveError;
-use crate::ast::{CompanyFence, ModuleSchema};
+use crate::ast::{CompanyFence, Enforcement, ModuleSchema};
 use std::collections::HashSet;
 
 /// Validates a schema for correctness
@@ -374,6 +374,19 @@ impl<'a> SchemaValidator<'a> {
                     rule.name, hook.name
                 )));
             }
+            // ADR-0015: a service-only invariant is reachable from raw-SQL write
+            // paths with no DB backstop — the justification is what makes that
+            // risk a reviewed decision instead of an accident.
+            if rule.enforcement == Enforcement::Service
+                && rule.justification.as_deref().unwrap_or("").trim().is_empty()
+            {
+                errors.push(ResolveError::validation(format!(
+                    "Rule '{}' in hook '{}' declares enforcement: service without a \
+                     justification — state why this invariant lives in the service \
+                     layer instead of the database (ADR-0015)",
+                    rule.name, hook.name
+                )));
+            }
         }
 
         errors
@@ -715,5 +728,78 @@ mod company_fence_tests {
     fn undeclared_module_gets_no_warnings() {
         let s = schema_with_fence(vec![company_model(false)], None);
         assert!(declaration_warnings(&s).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod enforcement_tests {
+    use super::*;
+    use crate::ast::{Enforcement, Hook, Rule};
+
+    fn schema_with_hook(rule: Rule) -> ModuleSchema {
+        let mut hook = Hook::new("Order", "Order");
+        hook.rules = vec![rule];
+        let mut s = ModuleSchema::new("test");
+        s.hooks.push(hook);
+        s
+    }
+
+    fn rule_with(enforcement: Enforcement, justification: Option<&str>) -> Rule {
+        Rule {
+            name: "positive_total".into(),
+            message: "total must be positive".into(),
+            condition: crate::ast::expressions::Expression::Raw("total > 0".into()),
+            enforcement,
+            justification: justification.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    fn errors_of(s: &ModuleSchema) -> Vec<String> {
+        match SchemaValidator::new(s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn service_without_justification_is_fatal() {
+        let s = schema_with_hook(rule_with(Enforcement::Service, None));
+        let errs = errors_of(&s);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("enforcement: service without a justification")),
+            "service-enforced rule must demand a justification, got: {errs:?}"
+        );
+        // Blank justification is just as missing.
+        let s = schema_with_hook(rule_with(Enforcement::Service, Some("   ")));
+        assert!(
+            errors_of(&s)
+                .iter()
+                .any(|e| e.contains("without a justification")),
+            "whitespace-only justification must not count"
+        );
+    }
+
+    #[test]
+    fn service_with_justification_and_other_modes_are_fine() {
+        let s = schema_with_hook(rule_with(Enforcement::Service, Some("cross-model check; needs both rows in memory")));
+        assert!(errors_of(&s).is_empty(), "justified service rule must validate");
+        let s = schema_with_hook(rule_with(Enforcement::Db, None));
+        assert!(errors_of(&s).is_empty(), "db (default) needs no justification");
+        let s = schema_with_hook(rule_with(Enforcement::Both, None));
+        assert!(errors_of(&s).is_empty(), "both needs no justification — the DB backstop exists");
+    }
+
+    #[test]
+    fn default_enforcement_is_db() {
+        let rule = rule_with(Enforcement::Db, None);
+        let legacy = Rule {
+            name: "x".into(),
+            message: "m".into(),
+            ..Default::default()
+        };
+        assert_eq!(legacy.enforcement, Enforcement::Db);
+        assert_eq!(rule.enforcement, Enforcement::Db);
     }
 }

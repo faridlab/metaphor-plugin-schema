@@ -639,6 +639,10 @@ hooks:
         message: "Order total must be at least $10.00"
         code: "ORDER_BELOW_MINIMUM"       # optional — warnings often omit it
         severity: error                   # error | warning (optional)
+        enforcement: db                   # db | service | both (ADR-0015, optional)
+        # justification: mandatory when enforcement: service — why the invariant
+        # lives in the service layer instead of the database, e.g.:
+        #   justification: "cross-model check; needs both rows in memory"
 
     permissions:
       customer:
@@ -690,6 +694,24 @@ authoring form are accepted everywhere `*.hook.yaml` is consumed. The webgen
 generator tries the map form first and falls back to the canonical flexible
 parser, so it accepts exactly the same hook grammar as the backend codegen — an
 authored hook parses in every generator regardless of which spelling it uses.
+
+### Rule enforcement (ADR-0015)
+
+Every rule carries an `enforcement:` declaration saying **where its invariant
+holds** — the declaration is the review surface for the raw-SQL-bypass risk:
+
+| Value | Meaning |
+|---|---|
+| `db` *(default)* | Database constraint (`@unique` / `@non_negative` / `@jsonb_schema` …) — the historical behavior |
+| `service` | Service-layer guard only. **Requires `justification:`** (empty/whitespace is a hard validation error). A raw-SQL write path can bypass it — the justification is what makes that a reviewed decision |
+| `both` | DB backstop + service guard (e.g. for a better error message) |
+
+Notes:
+
+- Absent key = `db` — existing schemas are unaffected.
+- v1 emits no SQL *from* a rule's `condition`; a `db`-declared invariant still
+  rides the constraint attributes. Condition→SQL compilation and the
+  raw-SQL-reachability lint are planned follow-ups (ADR-0015's hard lint).
 
 ---
 

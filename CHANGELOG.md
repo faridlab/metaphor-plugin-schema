@@ -9,6 +9,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ### Added
 
+- **`enforcement:` / `justification:` on hook rules (ADR-0015).** `db` (default,
+  unchanged for existing schemas) / `service` / `both`; `service` without a
+  non-empty justification is a hard validation error — the declaration is the
+  review surface for raw-SQL write paths that bypass service-layer guards.
+  v1 emits no SQL from rule conditions; condition→SQL and the reachability lint
+  are follow-ups.
+  · [`hook.rs`](src/ast/hook.rs), [`validator.rs`](src/resolver/validator.rs).
+
 - **`scheduled_jobs` from `index.hook.yaml` now reach the module schema** instead of
   being silently dropped at load time. New AST nodes `ScheduledJob` / `JobPosture` /
   `CommitPolicy` (ADR-0020 vocabulary, all optional) carried on `ModuleSchema`.

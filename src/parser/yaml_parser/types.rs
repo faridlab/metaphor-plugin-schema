@@ -2,7 +2,7 @@
 //!
 //! All `YamlXxx` structs that map directly to YAML schema file structure.
 
-use crate::ast::CompanyFence;
+use crate::ast::{CompanyFence, Enforcement};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -1637,6 +1637,12 @@ pub struct YamlRule {
     /// Severity (error, warning)
     #[serde(default)]
     pub severity: Option<String>,
+    /// Where the invariant is enforced (ADR-0015): `db` (default) / `service` / `both`
+    #[serde(default)]
+    pub enforcement: Option<Enforcement>,
+    /// Mandatory when `enforcement: service` — why it isn't a DB constraint
+    #[serde(default)]
+    pub justification: Option<String>,
 }
 
 /// Permission definition in YAML

@@ -377,6 +377,8 @@ impl<'source> WorkflowParser<'source> {
             condition: Expression::default(),
             message: String::new(),
             code: None,
+            enforcement: Default::default(),
+            justification: None,
             span: Span::new(start_line, start_col, 0, 0),
         };
 
