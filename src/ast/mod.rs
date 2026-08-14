@@ -43,8 +43,8 @@ pub use model::{
 };
 pub use types::{PrimitiveType, TypeRef};
 pub use hook::{
-    Action, ActionType, ComputedField, Permission, PermissionAction, Rule, State, StateMachine,
-    Transition, Trigger, TriggerEvent, Hook,
+    Action, ActionType, CommitPolicy, ComputedField, JobPosture, Permission, PermissionAction, Rule,
+    ScheduledJob, State, StateMachine, Transition, Trigger, TriggerEvent, Hook,
 };
 pub use workflow::{
     Workflow, WorkflowTrigger, WorkflowConfig, WorkflowHandler, TransactionMode, Step, StepType,
@@ -213,6 +213,12 @@ pub struct ModuleSchema {
     /// Repository trait definitions
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub traits: Vec<RepositoryTrait>,
+    /// Scheduled (cron/interval) jobs declared in `index.hook.yaml`.
+    ///
+    /// Jobs are module-level, not per-entity; until ADR-0020 tooling they were
+    /// parsed and dropped at load time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scheduled_jobs: Vec<ScheduledJob>,
 }
 
 impl ModuleSchema {

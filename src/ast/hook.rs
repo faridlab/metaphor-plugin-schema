@@ -398,3 +398,60 @@ impl ComputedField {
         self
     }
 }
+
+/// A scheduled (cron/interval) job declared in `index.hook.yaml`.
+///
+/// Carried on [`super::ModuleSchema`] — jobs are module-level, not per-entity.
+/// The `posture`/`triggers`/`commit_policy`/`pickup_lock` vocabulary is
+/// ADR-0020; `posture: None` means the declaration is absent (legacy module).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScheduledJob {
+    /// Job name (the key under `scheduled_jobs:`)
+    pub name: String,
+    /// Schedule expression (cron or interval)
+    pub schedule: String,
+    /// Handler function
+    pub handler: String,
+    /// Scheduling posture (ADR-0020); `None` = undeclared (legacy)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<JobPosture>,
+    /// Trigger sources; required when `posture` is `self_arming`
+    /// (the interval is a floor, the triggers are the contract)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<String>,
+    /// Mid-batch commit policy (ADR-0020): declared, not in a code comment
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_policy: Option<CommitPolicy>,
+    /// Whether the handler claims intake with `FOR UPDATE SKIP LOCKED`
+    /// (required for queue-draining postures — ADR-0020, MMB-4 class)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pickup_lock: bool,
+}
+
+/// The six observed scheduler postures (ADR-0020).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobPosture {
+    /// Plain interval-driven scan (e.g. digest)
+    Pull,
+    /// Domain events re-arm the schedule; the interval is only a floor
+    SelfArming,
+    /// No cron of its own — rides a host module's scheduler
+    HostRiding,
+    /// No cron at all — work happens on read
+    ReadTimeLazy,
+    /// Shipped inactive; activated by post-install/ICP hooks
+    InactiveThenIcp,
+    /// GC work riding the shared autovacuum
+    AutovacuumRide,
+}
+
+/// Mid-batch commit policy for queue-draining jobs (ADR-0020 / E5-D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitPolicy {
+    /// Commit per batch — bounds the replay window, loses atomicity
+    CommitPerBatch,
+    /// One transaction for the whole run — atomic, unbounded replay on crash
+    SingleTransaction,
+}

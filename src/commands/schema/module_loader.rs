@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::ast::ModuleSchema;
+use crate::ast::{ModuleSchema, ScheduledJob};
 use crate::parser::{
     parse_hook, parse_model, parse_yaml_hook_flexible, parse_yaml_model_flexible,
     parse_yaml_workflow, resolve_shared_types, HookParseResult, ModelParseResult, YamlField,
@@ -280,7 +280,16 @@ pub(super) fn build_module_schema(
                     if let Some(module_name) = &index_schema.module {
                         module_schema.name = module_name.clone();
                     }
-                    // Index-level events may be wired in later.
+                    // Scheduled jobs are module-level declarations — carry them
+                    // into the schema instead of dropping them at load time.
+                    for (name, job) in &index_schema.scheduled_jobs {
+                        module_schema.scheduled_jobs.push(ScheduledJob {
+                            name: name.clone(),
+                            schedule: job.schedule.clone(),
+                            handler: job.handler.clone(),
+                            ..Default::default()
+                        });
+                    }
                 }
                 Err(e) => errors.push(e.format_with_source(&content, Some(filename))),
             }
@@ -293,4 +302,50 @@ pub(super) fn build_module_schema(
     }
 
     Ok((module_schema, errors))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: `index.hook.yaml` scheduled jobs used to be parsed and then
+    /// silently dropped at load time ("Index-level events may be wired in
+    /// later"). They must reach [`ModuleSchema::scheduled_jobs`].
+    #[test]
+    fn hook_index_scheduled_jobs_reach_module_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.hook.yaml");
+        std::fs::write(
+            &index,
+            "module: demo\nscheduled_jobs:\n  nightly_gc:\n    schedule: \"0 3 * * *\"\n    handler: gc::run\n",
+        )
+        .unwrap();
+
+        let (schema, errors) = build_module_schema("demo", &[index.clone()]).unwrap();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(schema.name, "demo");
+        assert_eq!(schema.scheduled_jobs.len(), 1);
+        let job = &schema.scheduled_jobs[0];
+        assert_eq!(job.name, "nightly_gc");
+        assert_eq!(job.schedule, "0 3 * * *");
+        assert_eq!(job.handler, "gc::run");
+        // ADR-0020 vocabulary is undeclared on legacy entries.
+        assert_eq!(job.posture, None);
+        assert!(job.triggers.is_empty());
+        assert_eq!(job.commit_policy, None);
+        assert!(!job.pickup_lock);
+    }
+
+    /// A module with no scheduled jobs (the state of all 49 backbone
+    /// `index.hook.yaml` files) must serialize and behave exactly as before.
+    #[test]
+    fn hook_index_without_jobs_stays_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.hook.yaml");
+        std::fs::write(&index, "module: demo\nscheduled_jobs: {}\n").unwrap();
+
+        let (schema, errors) = build_module_schema("demo", &[index]).unwrap();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(schema.scheduled_jobs.is_empty());
+    }
 }
