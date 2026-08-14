@@ -504,6 +504,64 @@ company-scoped models emits no RLS migration file. Because the fence lives in it
 additive, idempotent migration (`ENABLE` + `DROP POLICY IF EXISTS`), it applies equally
 to a fresh database and as a retrofit onto tables that already exist.
 
+### Company Fence (ADR-0014)
+
+The template above is the **strict** fence — the default when nothing is declared. A
+module can declare a different posture in `index.model.yaml`:
+
+```yaml
+module: catalog
+schema: catalog
+company_fence: shared_blank   # strict | shared_blank | shared_tree | none
+```
+
+| Value | Meaning | `USING` / `WITH CHECK` |
+|---|---|---|
+| `strict` *(default)* | Rows visible only within the declaring company | `company_id = <session var>` |
+| `shared_blank` | Master data: NULL-company rows are **shared** with every company; non-NULL rows stay fenced | `company_id = <var> OR company_id IS NULL` |
+| `shared_tree` | Hierarchical: rows visible within the company **subtree** rooted at the declaring company | `company_id IN (SELECT company_id FROM organization.company_subtree(<var>))` |
+| `none` | No company dimension at all — **nothing is emitted** | — |
+
+Compatibility and rules:
+
+- **Undeclared = `strict`, byte-identical.** Modules predating the key produce exactly
+  the same migrations as before (test-enforced).
+- **`@global` still wins per model** under any declaration — a `@global company_id`
+  column unfences that one model even in a `shared_blank` module.
+- **`none` + a non-`@global` `company_id` column is a hard validation error.** That
+  combination would silently unfence every row the module stores; fix it per model
+  (`@global`, drop the column, or pick a real fence). This is the one fatal case —
+  the other oddities (a declared fence with no fenced model; `shared_blank` where
+  every `company_id` is NOT NULL, making the shared arm dead) are printed as
+  warnings by `validate` and `generate`.
+
+For `shared_tree`, the migration also ships a helper function exactly once, before any
+policy that reads it:
+
+```sql
+CREATE OR REPLACE FUNCTION organization.company_subtree(root uuid)
+RETURNS TABLE (company_id uuid)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH RECURSIVE tree AS (
+        SELECT c.id AS node_id
+        FROM organization.companies c
+        WHERE c.id = root
+        UNION ALL
+        SELECT c.id
+        FROM organization.companies c
+        JOIN tree t ON c.parent_company_id = t.node_id
+    )
+    SELECT node_id FROM tree
+$$;
+```
+
+Convention: the hierarchy is `organization.companies(parent_company_id)`, the subtree is
+**root-inclusive**, and `company_subtree(NULL)` returns **no rows** — so an unscoped
+session sees nothing under every template (fail-closed is uniform). The down migration
+drops the function (`DROP FUNCTION IF EXISTS organization.company_subtree(uuid);`).
+
 ---
 
 ## Soft Delete

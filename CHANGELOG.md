@@ -7,6 +7,25 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- **`scheduled_jobs` from `index.hook.yaml` now reach the module schema** instead of
+  being silently dropped at load time. New AST nodes `ScheduledJob` / `JobPosture` /
+  `CommitPolicy` (ADR-0020 vocabulary, all optional) carried on `ModuleSchema`.
+  · [`hook.rs`](src/ast/hook.rs), [`module_loader.rs`](src/commands/schema/module_loader.rs).
+
+- **`company_fence:` module declaration (ADR-0014)** in `index.model.yaml` —
+  `strict` (default, byte-identical to undeclared) / `shared_blank` (NULL-company rows
+  shared) / `shared_tree` (subtree visibility via the emitted
+  `organization.company_subtree` recursive-CTE helper) / `none` (nothing emitted; a
+  non-`@global` `company_id` column under `none` is a hard validation error).
+  Per-model `@global` still unfences under any declaration; the diff-based migration
+  path honors the declaration via `TableSnapshot.company_fence`. Advisory
+  `declaration_warnings` (no-effect fence, dead shared-NULL arm) print from `validate`
+  and `generate` without gating.
+  · [`sql.rs`](src/generators/sql.rs), [`validator.rs`](src/resolver/validator.rs),
+  [`schema_diff.rs`](src/migration/schema_diff.rs).
+
 ## [0.6.3] — 2026-07-31
 
 ### Fixed

@@ -3,7 +3,7 @@
 //! Validates schema completeness and correctness.
 
 use super::ResolveError;
-use crate::ast::ModuleSchema;
+use crate::ast::{CompanyFence, ModuleSchema};
 use std::collections::HashSet;
 
 /// Validates a schema for correctness
@@ -51,11 +51,45 @@ impl<'a> SchemaValidator<'a> {
             errors.extend(self.validate_workflow(workflow));
         }
 
+        // Validate the module-level company fence (ADR-0014)
+        errors.extend(self.validate_company_fence());
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
+    }
+
+    /// Validate the module-level `company_fence:` declaration (ADR-0014).
+    ///
+    /// One fatal combination: `company_fence: none` alongside a model with a
+    /// non-`@global` `company_id` column. That module silently unfences every
+    /// row it stores — the declaration says "no company dimension" while the
+    /// schema says otherwise, so the module is lying about its shape and the
+    /// correct fix (mark the column `@global`, drop it, or pick a real fence)
+    /// is a per-model decision the validator must not make silently.
+    fn validate_company_fence(&self) -> Vec<ResolveError> {
+        if self.schema.company_fence != Some(CompanyFence::None) {
+            return Vec::new();
+        }
+        self.schema
+            .models
+            .iter()
+            .filter(|m| {
+                m.fields
+                    .iter()
+                    .any(|f| f.name == "company_id" && !f.has_attribute("global"))
+            })
+            .map(|m| {
+                ResolveError::validation(format!(
+                    "module declares company_fence: none but model '{}' has a non-@global \
+                     'company_id' column — this would silently unfence its rows (ADR-0014); \
+                     mark the column @global, remove it, or declare a real fence",
+                    m.name
+                ))
+            })
+            .collect()
     }
 
     fn validate_model(&self, model: &crate::ast::Model) -> Vec<ResolveError> {
@@ -440,6 +474,58 @@ impl<'a> SchemaValidator<'a> {
     }
 }
 
+/// Non-fatal declarations audit (ADR-0014 and friends) — advisory messages that
+/// must NEVER enter the `Vec<ResolveError>` flow (that would break generate on
+/// legacy modules). Callers print them; they change nothing.
+///
+/// Current checks (company fence):
+/// - a declared fence (`strict`/`shared_blank`/`shared_tree`) with no fenced
+///   model at all — the declaration has no effect;
+/// - `shared_blank` where every `company_id` column is NOT NULL — the shared
+///   NULL arm is dead, and `strict` is probably what was meant.
+pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(fence) = schema.company_fence else {
+        return warnings;
+    };
+
+    let fenced: Vec<&crate::ast::Model> = schema
+        .models
+        .iter()
+        .filter(|m| {
+            m.fields
+                .iter()
+                .any(|f| f.name == "company_id" && !f.has_attribute("global"))
+        })
+        .collect();
+
+    if fenced.is_empty() && fence != CompanyFence::None {
+        warnings.push(format!(
+            "company_fence: {fence:?} is declared but no model carries a non-@global \
+             'company_id' column — the declaration has no effect"
+        ));
+        return warnings;
+    }
+
+    if fence == CompanyFence::SharedBlank {
+        let all_required = fenced.iter().all(|m| {
+            m.fields
+                .iter()
+                .filter(|f| f.name == "company_id" && !f.has_attribute("global"))
+                .all(|f| !f.type_ref.is_optional())
+        });
+        if all_required {
+            warnings.push(
+                "company_fence: shared_blank but every company_id column is NOT NULL — the \
+                 shared-NULL arm can never match; strict is probably what was meant"
+                    .to_string(),
+            );
+        }
+    }
+
+    warnings
+}
+
 #[cfg(test)]
 mod fk_target_tests {
     use super::*;
@@ -509,5 +595,125 @@ mod fk_target_tests {
             !errs.iter().any(|e| e.contains("@foreign_key")),
             "a cross-module FK must not be flagged by the single-module validator, got: {errs:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod company_fence_tests {
+    use super::*;
+    use crate::ast::{Attribute, Field, Model, PrimitiveType, TypeRef};
+
+    fn id_field() -> Field {
+        let mut f = Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(Attribute::new("id"));
+        f
+    }
+
+    fn schema_with(models: Vec<Model>) -> ModuleSchema {
+        let mut s = ModuleSchema::new("test");
+        s.models = models;
+        s
+    }
+
+    fn errors_of(s: &ModuleSchema) -> Vec<String> {
+        match SchemaValidator::new(s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    fn company_model(global: bool) -> Model {
+        let mut f = Field::new("company_id", TypeRef::Primitive(PrimitiveType::Uuid));
+        // Not a cross-module FK test — silence the _id FK check.
+        f.attributes
+            .push(Attribute::new("exclude_from_foreign_key_check"));
+        if global {
+            f.attributes.push(Attribute::new("global"));
+        }
+        let mut m = Model::new("Scoped");
+        m.fields = vec![id_field(), f];
+        m
+    }
+
+    fn schema_with_fence(models: Vec<Model>, fence: Option<CompanyFence>) -> ModuleSchema {
+        let mut s = schema_with(models);
+        s.company_fence = fence;
+        s
+    }
+
+    #[test]
+    fn none_fence_with_stray_company_column_is_fatal() {
+        let s = schema_with_fence(vec![company_model(false)], Some(CompanyFence::None));
+        let errs = errors_of(&s);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("company_fence: none") && e.contains("'Scoped'")),
+            "none + non-@global company_id must be a hard error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn none_fence_with_global_or_no_column_is_fine() {
+        let global_only = schema_with_fence(vec![company_model(true)], Some(CompanyFence::None));
+        assert!(
+            errors_of(&global_only).is_empty(),
+            "@global column under none is a deliberate unfence"
+        );
+        let mut bare = Model::new("Bare");
+        bare.fields = vec![id_field()];
+        let no_column = schema_with_fence(vec![bare], Some(CompanyFence::None));
+        assert!(errors_of(&no_column).is_empty());
+    }
+
+    #[test]
+    fn undeclared_and_fenced_declarations_are_fine() {
+        for fence in [None, Some(CompanyFence::Strict), Some(CompanyFence::SharedBlank), Some(CompanyFence::SharedTree)] {
+            let s = schema_with_fence(vec![company_model(false)], fence);
+            assert!(
+                errors_of(&s).is_empty(),
+                "{fence:?} with a fenced model must validate"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_when_declared_fence_has_no_fenced_model() {
+        let mut bare = Model::new("Bare");
+        bare.fields = vec![id_field()];
+        let s = schema_with_fence(vec![bare], Some(CompanyFence::Strict));
+        let warnings = declaration_warnings(&s);
+        assert!(
+            warnings.iter().any(|w| w.contains("no effect")),
+            "expected a no-effect warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn warns_when_shared_blank_null_arm_is_dead() {
+        let mut required = company_model(false);
+        required.fields[1].type_ref = TypeRef::optional(
+            TypeRef::Primitive(PrimitiveType::Uuid),
+        );
+        // make it non-optional again — the dead-arm case
+        let mut not_null = company_model(false);
+        not_null.fields[1].type_ref = TypeRef::Primitive(PrimitiveType::Uuid);
+        let s = schema_with_fence(vec![not_null], Some(CompanyFence::SharedBlank));
+        let warnings = declaration_warnings(&s);
+        assert!(
+            warnings.iter().any(|w| w.contains("NOT NULL")),
+            "expected a dead-NULL-arm warning, got: {warnings:?}"
+        );
+        // and a nullable company_id under shared_blank is the healthy shape
+        let s = schema_with_fence(vec![required], Some(CompanyFence::SharedBlank));
+        assert!(
+            !declaration_warnings(&s).iter().any(|w| w.contains("NOT NULL")),
+            "nullable company_id must not warn"
+        );
+    }
+
+    #[test]
+    fn undeclared_module_gets_no_warnings() {
+        let s = schema_with_fence(vec![company_model(false)], None);
+        assert!(declaration_warnings(&s).is_empty());
     }
 }

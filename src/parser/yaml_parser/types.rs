@@ -2,6 +2,7 @@
 //!
 //! All `YamlXxx` structs that map directly to YAML schema file structure.
 
+use crate::ast::CompanyFence;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -681,6 +682,11 @@ pub struct YamlModelIndexSchema {
     /// Module-level configuration
     #[serde(default)]
     pub config: Option<YamlModelModuleConfig>,
+    /// Module-level company fence declaration (ADR-0014):
+    /// `strict` / `shared_blank` / `shared_tree` / `none`. Absent = legacy
+    /// per-model inference (backward compatible).
+    #[serde(default)]
+    pub company_fence: Option<CompanyFence>,
 }
 
 /// A shared type definition that can be:

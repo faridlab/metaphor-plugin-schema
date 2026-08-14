@@ -2,6 +2,7 @@
 //!
 //! Compares database schemas and generates ALTER statements for changes.
 
+use crate::ast::CompanyFence;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -29,6 +30,11 @@ pub struct TableSnapshot {
     /// read when emitting the fence).
     #[serde(default)]
     pub company_scoped: bool,
+    /// The module-level fence declaration (ADR-0014) in force for this table; `None` on
+    /// snapshots serialized before the key existed (and on introspected DB snapshots) means
+    /// undeclared → `strict`, matching the legacy template.
+    #[serde(default)]
+    pub company_fence: Option<CompanyFence>,
 }
 
 /// Snapshot of a column
@@ -527,10 +533,18 @@ pub fn generate_up_migration(diff: &SchemaDiff, new_schema: &SchemaSnapshot, des
 
             // A new company-scoped table gets its RLS fence in the same migration (ADR-0008) — the
             // full-regen path emits this too; without it, a table added via the incremental path would
-            // ship UNFENCED.
-            if table.company_scoped {
+            // ship UNFENCED. The template follows the module declaration (ADR-0014); an undeclared
+            // (or pre-declaration) snapshot means `strict`.
+            if table.company_scoped && table.company_fence != Some(CompanyFence::None) {
                 writeln!(output, "-- Company RLS fence (ADR-0008)").unwrap();
+                let fence = table.company_fence.unwrap_or(CompanyFence::Strict);
+                if matches!(fence, CompanyFence::SharedTree) {
+                    let (helper, _) = crate::generators::sql::company_subtree_helper_sql();
+                    output.push_str(&helper);
+                    writeln!(output).unwrap();
+                }
                 let (up, _down) = crate::generators::sql::company_rls_sql(
+                    &fence,
                     table_name,
                     &format!("{table_name}_company_isolation"),
                 );
@@ -615,11 +629,28 @@ pub fn generate_up_migration(diff: &SchemaDiff, new_schema: &SchemaSnapshot, des
         }
 
         // A `company_id` column added to an existing table makes it newly company-scoped — install
-        // the RLS fence now (ADR-0008), respecting `@global` via the snapshot's `company_scoped`.
+        // the RLS fence now (ADR-0008), respecting `@global` via the snapshot's `company_scoped`
+        // and the module declaration (ADR-0014) via `company_fence`.
         if change.columns_added.iter().any(|c| c.name == "company_id") {
-            if new_schema.tables.get(table_name).map(|t| t.company_scoped).unwrap_or(false) {
+            let newly_scoped = new_schema
+                .tables
+                .get(table_name)
+                .map(|t| t.company_scoped && t.company_fence != Some(CompanyFence::None))
+                .unwrap_or(false);
+            let fence = new_schema
+                .tables
+                .get(table_name)
+                .and_then(|t| t.company_fence)
+                .unwrap_or(CompanyFence::Strict);
+            if newly_scoped {
                 writeln!(output, "-- Company RLS fence (ADR-0008): table became company-scoped").unwrap();
+                if matches!(fence, CompanyFence::SharedTree) {
+                    let (helper, _) = crate::generators::sql::company_subtree_helper_sql();
+                    output.push_str(&helper);
+                    writeln!(output).unwrap();
+                }
                 let (up, _down) = crate::generators::sql::company_rls_sql(
+                    &fence,
                     table_name,
                     &format!("{table_name}_company_isolation"),
                 );
@@ -845,7 +876,7 @@ mod tests {
                 columns: IndexMap::new(),
                 indexes: IndexMap::new(),
                 primary_key: None,
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -879,7 +910,7 @@ mod tests {
                 columns: cols,
                 indexes: IndexMap::new(),
                 primary_key: Some("id".to_string()),
-                company_scoped: true,
+                company_scoped: true, company_fence: None,
             },
         );
         let diff = diff_schemas(&old, &new);
@@ -894,6 +925,74 @@ mod tests {
     }
 
     #[test]
+    fn diff_up_honors_the_module_fence_declaration() {
+        // ADR-0014 on the incremental path: the snapshot's company_fence selects
+        // the template; a pre-declaration snapshot (None) means strict — the
+        // legacy bytes above are the proof for that arm.
+        let old = SchemaSnapshot::default();
+        let mut cols = IndexMap::new();
+        cols.insert("company_id".to_string(), company_id_col());
+
+        let mut shared_blank = SchemaSnapshot::default();
+        shared_blank.tables.insert(
+            "partners".to_string(),
+            TableSnapshot {
+                name: "partners".to_string(),
+                columns: cols.clone(),
+                indexes: IndexMap::new(),
+                primary_key: Some("id".to_string()),
+                company_scoped: true,
+                company_fence: Some(CompanyFence::SharedBlank),
+            },
+        );
+        let up = generate_up_migration(&diff_schemas(&old, &shared_blank), &shared_blank, false);
+        assert!(
+            up.contains("OR company_id IS NULL"),
+            "shared_blank must add the shared-NULL arm:\n{up}"
+        );
+
+        let mut shared_tree = SchemaSnapshot::default();
+        shared_tree.tables.insert(
+            "branches".to_string(),
+            TableSnapshot {
+                name: "branches".to_string(),
+                columns: cols,
+                indexes: IndexMap::new(),
+                primary_key: Some("id".to_string()),
+                company_scoped: true,
+                company_fence: Some(CompanyFence::SharedTree),
+            },
+        );
+        let up = generate_up_migration(&diff_schemas(&old, &shared_tree), &shared_tree, false);
+        assert!(
+            up.contains("organization.company_subtree("),
+            "shared_tree must read the subtree helper:\n{up}"
+        );
+        assert!(
+            up.contains("CREATE OR REPLACE FUNCTION organization.company_subtree"),
+            "the diff path must ship the helper with the policy:\n{up}"
+        );
+
+        let mut unfenced = SchemaSnapshot::default();
+        unfenced.tables.insert(
+            "messages".to_string(),
+            TableSnapshot {
+                name: "messages".to_string(),
+                columns: IndexMap::new(),
+                indexes: IndexMap::new(),
+                primary_key: Some("id".to_string()),
+                company_scoped: false, // none-fence modules validate to this shape
+                company_fence: Some(CompanyFence::None),
+            },
+        );
+        let up = generate_up_migration(&diff_schemas(&old, &unfenced), &unfenced, false);
+        assert!(
+            !up.contains("ROW LEVEL SECURITY"),
+            "a none-fence module must not be fenced:\n{up}"
+        );
+    }
+
+    #[test]
     fn diff_up_leaves_an_unscoped_new_table_unfenced() {
         let old = SchemaSnapshot::default();
         let mut new = SchemaSnapshot::default();
@@ -904,7 +1003,7 @@ mod tests {
                 columns: IndexMap::new(),
                 indexes: IndexMap::new(),
                 primary_key: Some("id".to_string()),
-                company_scoped: false, // reference data / @global — no fence
+                company_scoped: false, company_fence: None, // reference data / @global — no fence
             },
         );
         let diff = diff_schemas(&old, &new);
@@ -923,14 +1022,14 @@ mod tests {
         let mut old = SchemaSnapshot::default();
         old.tables.insert("orders".to_string(), TableSnapshot {
             name: "orders".to_string(), columns: old_cols.clone(),
-            indexes: IndexMap::new(), primary_key: Some("id".to_string()), company_scoped: false,
+            indexes: IndexMap::new(), primary_key: Some("id".to_string()), company_scoped: false, company_fence: None,
         });
         let mut new_cols = old_cols.clone();
         new_cols.insert("company_id".to_string(), company_id_col());
         let mut new = SchemaSnapshot::default();
         new.tables.insert("orders".to_string(), TableSnapshot {
             name: "orders".to_string(), columns: new_cols,
-            indexes: IndexMap::new(), primary_key: Some("id".to_string()), company_scoped: true,
+            indexes: IndexMap::new(), primary_key: Some("id".to_string()), company_scoped: true, company_fence: None,
         });
         let diff = diff_schemas(&old, &new);
         let up = generate_up_migration(&diff, &new, false);
@@ -971,7 +1070,7 @@ mod tests {
                 columns: old_columns,
                 indexes: IndexMap::new(),
                 primary_key: Some("id".to_string()),
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -983,7 +1082,7 @@ mod tests {
                 columns: new_columns,
                 indexes: IndexMap::new(),
                 primary_key: Some("id".to_string()),
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -1004,7 +1103,7 @@ mod tests {
                 columns: IndexMap::new(),
                 indexes: IndexMap::new(),
                 primary_key: None,
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -1069,7 +1168,7 @@ mod tests {
                 columns: old_columns,
                 indexes: IndexMap::new(),
                 primary_key: Some("id".to_string()),
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -1081,7 +1180,7 @@ mod tests {
                 columns: new_columns,
                 indexes: IndexMap::new(),
                 primary_key: Some("id".to_string()),
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -1129,7 +1228,7 @@ mod tests {
                 columns: old_columns,
                 indexes: IndexMap::new(),
                 primary_key: None,
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 
@@ -1141,7 +1240,7 @@ mod tests {
                 columns: new_columns,
                 indexes: IndexMap::new(),
                 primary_key: None,
-                company_scoped: false,
+                company_scoped: false, company_fence: None,
             },
         );
 

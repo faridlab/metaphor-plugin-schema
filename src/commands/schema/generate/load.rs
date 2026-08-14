@@ -11,7 +11,7 @@ use colored::Colorize;
 use std::path::PathBuf;
 
 use crate::ast::ModuleSchema;
-use crate::resolver::{resolve_schema, ResolvedSchema};
+use crate::resolver::{declaration_warnings, resolve_schema, ResolvedSchema};
 
 use super::super::discovery::{find_module_schema_path, find_schema_files};
 use super::super::module_loader::build_module_schema;
@@ -65,6 +65,11 @@ pub(super) fn load_and_resolve(
 
     let is_filtered =
         models_filter.is_some() || hooks_filter.is_some() || workflows_filter.is_some();
+
+    // Declaration warnings (ADR-0014) are advisory only — never a gate.
+    for warning in declaration_warnings(&module_schema) {
+        println!("  {} {}", "⚠".yellow(), warning);
+    }
 
     let resolved = match resolve_schema(&module_schema) {
         Ok(resolved) => resolved,

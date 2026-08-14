@@ -4,7 +4,7 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::resolver::resolve_schema;
+use crate::resolver::{declaration_warnings, resolve_schema};
 
 use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
@@ -36,6 +36,10 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
     match resolve_schema(&module_schema) {
         Ok(_resolved) => {
             println!("  {} All schemas are valid", "✓".green().bold());
+            // Advisory declarations audit (ADR-0014) — printed, never a gate.
+            for warning in declaration_warnings(&module_schema) {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
         }
         Err(errors) => {
             for err in &errors {

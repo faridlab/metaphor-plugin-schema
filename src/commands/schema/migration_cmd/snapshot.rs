@@ -140,6 +140,7 @@ pub(super) fn build_schema_snapshot(
                 indexes,
                 primary_key,
                 company_scoped,
+                company_fence: resolved.schema.company_fence,
             },
         );
     }

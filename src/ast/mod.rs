@@ -12,7 +12,7 @@ pub mod workflow;
 
 // Re-export main types
 pub use model::{
-    Attribute, AttributeValue, EnumDef, EnumVariant, Field, ForeignKeyAction, Index, IndexType, Model, Relation,
+    Attribute, AttributeValue, CompanyFence, EnumDef, EnumVariant, Field, ForeignKeyAction, Index, IndexType, Model, Relation,
     RelationType, TypeDef, TypeDefField,
     // DDD Entity & Value Object types
     Entity, EntityMethod, ValueObject, ValueObjectMethod,
@@ -219,6 +219,12 @@ pub struct ModuleSchema {
     /// parsed and dropped at load time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scheduled_jobs: Vec<ScheduledJob>,
+    /// Module-level company fence declaration (ADR-0014). `None` = undeclared
+    /// (legacy module → per-model inference); `Some(CompanyFence::None)` =
+    /// explicit "no company dimension" (emits nothing, validated against
+    /// stray `company_id` columns).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_fence: Option<CompanyFence>,
 }
 
 impl ModuleSchema {

@@ -4,7 +4,7 @@
 //! Supports both single-file and split-by-model output.
 
 use super::{GenerateError, GeneratedOutput, Generator};
-use crate::ast::{EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, PrimitiveType, RelationType, TypeRef};
+use crate::ast::{CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, PrimitiveType, RelationType, TypeRef};
 use crate::resolver::ResolvedSchema;
 use crate::utils::{pluralize, to_snake_case};
 use std::fmt::Write;
@@ -72,31 +72,105 @@ mod ident_segment_tests {
     }
 }
 
-/// The company Row-Level-Security policy statements for one table (ADR-0008), as `(up, down)`.
+/// The session company var every fence template reads (ADR-0008).
+///
+/// The fail-closed shape is load-bearing: `current_setting(.., true)` returns NULL for an
+/// unset var instead of erroring, and `NULLIF(.., '')` collapses the empty string a prior
+/// `set_config(.., true)` can leave behind — so an unscoped session never sees private rows
+/// (and never hits a `''::uuid` cast error).
+pub const COMPANY_VAR_SQL: &str = "NULLIF(current_setting('app.company_id', true), '')::uuid";
+
+/// The visibility predicate a [`CompanyFence`] template enforces on `company_id`.
+///
+/// Pure string — shared by the `USING` and `WITH CHECK` arms of [`company_rls_sql`]. All
+/// shapes fail closed for an unset/empty session var: `strict` compares against NULL (zero
+/// rows), `shared_blank` keeps only the shared NULL rows, `shared_tree` gets an empty
+/// subtree. [`CompanyFence::None`] never reaches a policy (the emitters skip it) but maps to
+/// the strict predicate defensively.
+fn fence_predicate(fence: &CompanyFence) -> String {
+    match fence {
+        CompanyFence::Strict | CompanyFence::None => {
+            format!("company_id = {COMPANY_VAR_SQL}")
+        }
+        CompanyFence::SharedBlank => {
+            format!("company_id = {COMPANY_VAR_SQL} OR company_id IS NULL")
+        }
+        CompanyFence::SharedTree => format!(
+            "company_id IN (SELECT company_id FROM organization.company_subtree({COMPANY_VAR_SQL}))"
+        ),
+    }
+}
+
+/// The company Row-Level-Security policy statements for one table (ADR-0008, ADR-0014), as
+/// `(up, down)`.
 ///
 /// Pure SQL, no provenance comments — the single source of truth for the fence policy, shared by the
 /// full-regen migration path (`SqlGenerator::generate_rls_migration`) and the diff-based incremental
 /// path (`migration::schema_diff`) so the two can never drift. `table_ref` is written verbatim into
 /// the statements (qualified `schema.table` from full regen, or the bare table name the diff path
-/// uses); `policy_name` is the per-table policy identifier.
+/// uses); `policy_name` is the per-table policy identifier; `fence` selects the ADR-0014 template
+/// (`Strict` is byte-identical to the pre-ADR-0014 output — enforced by test).
 ///
-/// The fail-closed `NULLIF(current_setting('app.company_id', true), '')::uuid` and the `FORCE` are
-/// load-bearing — see ADR-0008 and the live proof.
-pub fn company_rls_sql(table_ref: &str, policy_name: &str) -> (String, String) {
-    let fence = "NULLIF(current_setting('app.company_id', true), '')::uuid";
+/// The `FORCE` is load-bearing — see ADR-0008 and the live proof.
+pub fn company_rls_sql(
+    fence: &CompanyFence,
+    table_ref: &str,
+    policy_name: &str,
+) -> (String, String) {
+    let predicate = fence_predicate(fence);
     let mut up = String::new();
     writeln!(up, "ALTER TABLE {} ENABLE ROW LEVEL SECURITY;", table_ref).unwrap();
     writeln!(up, "ALTER TABLE {} FORCE  ROW LEVEL SECURITY;", table_ref).unwrap();
     writeln!(up, "DROP POLICY IF EXISTS {} ON {};", policy_name, table_ref).unwrap();
     writeln!(up, "CREATE POLICY {} ON {}", policy_name, table_ref).unwrap();
     writeln!(up, "    FOR ALL").unwrap();
-    writeln!(up, "    USING      (company_id = {})", fence).unwrap();
-    writeln!(up, "    WITH CHECK (company_id = {});", fence).unwrap();
+    writeln!(up, "    USING      ({predicate})").unwrap();
+    writeln!(up, "    WITH CHECK ({predicate});").unwrap();
 
     let mut down = String::new();
     writeln!(down, "DROP POLICY IF EXISTS {} ON {};", policy_name, table_ref).unwrap();
     writeln!(down, "ALTER TABLE {} NO FORCE ROW LEVEL SECURITY;", table_ref).unwrap();
     writeln!(down, "ALTER TABLE {} DISABLE ROW LEVEL SECURITY;", table_ref).unwrap();
+    (up, down)
+}
+
+/// The `organization.company_subtree(uuid)` helper the `shared_tree` fence depends on, as
+/// `(up, down)` (ADR-0014).
+///
+/// Recursive CTE over `organization.companies(parent_company_id)` — no path/ltree column
+/// exists, and none is added. Convention: root-inclusive, and `subtree(NULL)` returns no
+/// rows (an unscoped session sees nothing — fail-closed like every other template). The
+/// CTE column is aliased `node_id` so it can't collide with the `RETURNS TABLE` output
+/// parameter name. `CREATE OR REPLACE` + `DROP IF EXISTS` keep re-runs idempotent; emit
+/// once per migration, before any `shared_tree` policy.
+pub fn company_subtree_helper_sql() -> (String, String) {
+    let mut up = String::new();
+    writeln!(up, "-- Company subtree helper (ADR-0014 shared_tree fence).").unwrap();
+    writeln!(up, "-- Root-inclusive closure over organization.companies(parent_company_id);").unwrap();
+    writeln!(up, "-- company_subtree(NULL) returns no rows (fail-closed).").unwrap();
+    writeln!(up, "CREATE OR REPLACE FUNCTION organization.company_subtree(root uuid)").unwrap();
+    writeln!(up, "RETURNS TABLE (company_id uuid)").unwrap();
+    writeln!(up, "LANGUAGE sql").unwrap();
+    writeln!(up, "STABLE").unwrap();
+    writeln!(up, "AS $$").unwrap();
+    writeln!(up, "    WITH RECURSIVE tree AS (").unwrap();
+    writeln!(up, "        SELECT c.id AS node_id").unwrap();
+    writeln!(up, "        FROM organization.companies c").unwrap();
+    writeln!(up, "        WHERE c.id = root").unwrap();
+    writeln!(up, "        UNION ALL").unwrap();
+    writeln!(up, "        SELECT c.id").unwrap();
+    writeln!(up, "        FROM organization.companies c").unwrap();
+    writeln!(up, "        JOIN tree t ON c.parent_company_id = t.node_id").unwrap();
+    writeln!(up, "    )").unwrap();
+    writeln!(up, "    SELECT node_id FROM tree").unwrap();
+    writeln!(up, "$$;").unwrap();
+
+    let mut down = String::new();
+    writeln!(
+        down,
+        "DROP FUNCTION IF EXISTS organization.company_subtree(uuid);"
+    )
+    .unwrap();
     (up, down)
 }
 
@@ -257,6 +331,12 @@ impl SqlGenerator {
     /// company-scoped (no policy is generated — the "silence means fenced" polarity maps 1:1 to
     /// "no `company_id` column ⇒ no policy").
     ///
+    /// `module_fence` is the module-level declaration (ADR-0014): `None` (undeclared, legacy)
+    /// defaults to `Strict` — byte-identical to pre-ADR-0014 output, enforced by test — and
+    /// `Some(CompanyFence::None)` emits nothing for the whole module (validated elsewhere to
+    /// never combine with a non-`@global` `company_id` column). Per-model `@global` still
+    /// unfences an individual model under any declaration.
+    ///
     /// Returns `(up_sql, down_sql)`. The design and every literal here is proven live against
     /// Postgres 16 and recorded in ADR-0008. Load-bearing details:
     ///
@@ -270,11 +350,19 @@ impl SqlGenerator {
     ///   so `company_id = NULL` yields **zero rows** (fail-closed), never a `''::uuid` error.
     /// - `FOR ALL … WITH CHECK` — also rejects write-forgery (a caller scoped to A cannot INSERT a
     ///   B-owned row), giving write-side symmetry at no cost.
-    pub fn generate_rls_migration(model: &Model) -> Option<(String, String)> {
+    pub fn generate_rls_migration(
+        model: &Model,
+        module_fence: Option<&CompanyFence>,
+    ) -> Option<(String, String)> {
+        // Explicit "no company dimension" — nothing is emitted, by declaration.
+        if matches!(module_fence, Some(CompanyFence::None)) {
+            return None;
+        }
         Self::company_fence_column(model)?;
+        let fence = module_fence.copied().unwrap_or(CompanyFence::Strict);
         let qualified = model.qualified_table_name();
         let policy = format!("{}_company_isolation", model.collection_name());
-        let (mut up, mut down) = company_rls_sql(&qualified, &policy);
+        let (mut up, mut down) = company_rls_sql(&fence, &qualified, &policy);
         // Prepend the provenance header (the shared helper emits only the statements so the diff-based
         // migration path can reuse it verbatim).
         up.insert_str(
@@ -1145,19 +1233,21 @@ impl SqlGenerator {
             );
         }
 
-        // 6. Company row-level-security fence (ADR-0008).
+        // 6. Company row-level-security fence (ADR-0008, ADR-0014).
         //
         // One additive migration per module covering every company-scoped model — emitted LAST so
         // every table (and its deferred FKs) already exists. Kept separate from the create-table
         // migrations on purpose: it applies cleanly to an already-migrated database (the retrofit
         // case), and `ENABLE`/`DROP POLICY IF EXISTS` make it idempotent on re-run. Models with no
         // `company_id` column, or one marked `@global`, contribute nothing — so a module with no
-        // fenced tables emits no file.
+        // fenced tables emits no file. The module-level `company_fence:` declaration (ADR-0014)
+        // selects the template; undeclared modules get `strict`, byte-identical to pre-ADR-0014.
+        let module_fence = schema.schema.company_fence.as_ref();
         let rls: Vec<(String, String)> = schema
             .schema
             .models
             .iter()
-            .filter_map(Self::generate_rls_migration)
+            .filter_map(|m| Self::generate_rls_migration(m, module_fence))
             .collect();
         // A module may hand-author its own RLS fence (e.g. with a fail-loud stray check); setting
         // `config.generators.rls_migration: false` opts out of this generated duplicate.
@@ -1177,6 +1267,15 @@ impl SqlGenerator {
             let mut down = String::new();
             writeln!(down, "-- Down: remove the company RLS fence for {} module", module_name).unwrap();
             writeln!(down).unwrap();
+            // `shared_tree` policies read organization.company_subtree — ship the helper in the
+            // same migration, before any policy that depends on it (exactly once).
+            if module_fence == Some(&CompanyFence::SharedTree) {
+                let (helper_up, helper_down) = company_subtree_helper_sql();
+                writeln!(up, "{}", helper_up).unwrap();
+                writeln!(up).unwrap();
+                writeln!(down, "{}", helper_down).unwrap();
+                writeln!(down).unwrap();
+            }
             for (u, d) in &rls {
                 writeln!(up, "{}", u).unwrap();
                 writeln!(down, "{}", d).unwrap();
@@ -1582,7 +1681,7 @@ mod tests {
 
     #[test]
     fn rls_migration_emits_the_proven_forced_nullif_policy() {
-        let (up, down) = SqlGenerator::generate_rls_migration(&company_scoped_model())
+        let (up, down) = SqlGenerator::generate_rls_migration(&company_scoped_model(), None)
             .expect("a model with company_id must get an RLS policy");
         // FORCE is load-bearing: without it the table owner bypasses the policy.
         assert!(up.contains("FORCE  ROW LEVEL SECURITY"), "must FORCE RLS:\n{up}");
@@ -1645,14 +1744,114 @@ mod tests {
             .find(|f| f.name == "company_id").unwrap()
             .attributes.push(Attribute::new("global"));
         assert!(
-            SqlGenerator::generate_rls_migration(&global).is_none(),
+            SqlGenerator::generate_rls_migration(&global, None).is_none(),
             "@global must unfence — no RLS policy emitted"
         );
 
         // A model with no company_id column (child row / reference data) gets no policy.
         assert!(
-            SqlGenerator::generate_rls_migration(&create_test_model()).is_none(),
+            SqlGenerator::generate_rls_migration(&create_test_model(), None).is_none(),
             "a model without company_id is not fenced"
+        );
+    }
+
+    /// ADR-0014: an undeclared module fence must produce byte-identical output
+    /// to an explicit `strict` declaration — the compat contract for the ~60
+    /// legacy modules that predate the key.
+    #[test]
+    fn rls_undeclared_fence_matches_strict_byte_for_byte() {
+        let model = company_scoped_model();
+        let legacy = SqlGenerator::generate_rls_migration(&model, None).unwrap();
+        let strict = SqlGenerator::generate_rls_migration(&model, Some(&CompanyFence::Strict)).unwrap();
+        assert_eq!(legacy.0, strict.0, "undeclared must equal strict (up)");
+        assert_eq!(legacy.1, strict.1, "undeclared must equal strict (down)");
+    }
+
+    /// ADR-0014 `shared_blank`: both arms gain the shared-NULL escape.
+    #[test]
+    fn rls_shared_blank_adds_the_null_escape_to_both_arms() {
+        let model = company_scoped_model();
+        let (up, _down) =
+            SqlGenerator::generate_rls_migration(&model, Some(&CompanyFence::SharedBlank)).unwrap();
+        assert!(
+            up.contains("USING      (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid OR company_id IS NULL)"),
+            "USING must gain the shared-NULL arm:\n{up}"
+        );
+        assert!(
+            up.contains("WITH CHECK (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid OR company_id IS NULL)"),
+            "WITH CHECK must gain the shared-NULL arm:\n{up}"
+        );
+    }
+
+    /// ADR-0014 `shared_tree`: the policy reads the subtree helper, and the
+    /// module migration ships the helper exactly once, before the policies.
+    #[test]
+    fn rls_shared_tree_uses_the_subtree_helper_emitted_once() {
+        let mut schema = ModuleSchema::new("tree");
+        schema.models.push(company_scoped_model());
+        schema.company_fence = Some(CompanyFence::SharedTree);
+        let output = SqlGenerator::new()
+            .with_split(true)
+            .generate(&ResolvedSchema { schema })
+            .unwrap();
+
+        let rls_up = output
+            .files
+            .keys()
+            .find(|p| p.to_string_lossy().ends_with("_enable_company_rls.up.sql"))
+            .expect("shared_tree module must still get its RLS migration");
+        let sql = &output.files[rls_up];
+        assert!(
+            sql.matches("CREATE OR REPLACE FUNCTION organization.company_subtree").count() == 1,
+            "helper must appear exactly once:\n{sql}"
+        );
+        assert!(
+            sql.contains("USING      (company_id IN (SELECT company_id FROM organization.company_subtree(NULLIF(current_setting('app.company_id', true), '')::uuid)))"),
+            "USING must read the subtree helper:\n{sql}"
+        );
+        // Helper precedes the policy that depends on it.
+        let helper_at = sql.find("CREATE OR REPLACE FUNCTION").expect("helper");
+        let policy_at = sql.find("CREATE POLICY").expect("policy");
+        assert!(helper_at < policy_at, "helper must be created before the policy");
+
+        let rls_down = output
+            .files
+            .keys()
+            .find(|p| p.to_string_lossy().ends_with("_enable_company_rls.down.sql"))
+            .expect("down migration");
+        assert!(
+            output.files[rls_down]
+                .contains("DROP FUNCTION IF EXISTS organization.company_subtree(uuid);"),
+            "down must drop the helper"
+        );
+    }
+
+    /// ADR-0014 `none`: the declaration emits nothing — and a stray non-@global
+    /// `company_id` under `none` is the validator's fatal case, not the
+    /// generator's (defense in depth: the generator stays silent too).
+    #[test]
+    fn rls_none_fence_emits_nothing_even_with_a_stray_column() {
+        let model = company_scoped_model();
+        assert!(
+            SqlGenerator::generate_rls_migration(&model, Some(&CompanyFence::None)).is_none(),
+            "company_fence: none must emit no policy at all"
+        );
+    }
+
+    /// Per-model `@global` still unfences under a declared module fence.
+    #[test]
+    fn rls_global_model_is_unfenced_under_shared_blank() {
+        let mut global = company_scoped_model();
+        global
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "company_id")
+            .unwrap()
+            .attributes
+            .push(Attribute::new("global"));
+        assert!(
+            SqlGenerator::generate_rls_migration(&global, Some(&CompanyFence::SharedBlank)).is_none(),
+            "@global must unfence even under a declared fence"
         );
     }
 

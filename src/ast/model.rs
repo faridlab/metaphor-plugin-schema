@@ -362,6 +362,31 @@ pub enum RelationType {
     ManyToMany,
 }
 
+/// The module-level company fence declaration (ADR-0014).
+///
+/// Declared in `index.model.yaml` as `company_fence:`; drives RLS emission.
+/// The module-level declaration is the *default posture* — a per-model
+/// `@global` attribute still unfences that individual model under any
+/// declaration. `Option<CompanyFence>::None` means the declaration is absent
+/// (legacy module → inference, byte-identical to pre-ADR behavior);
+/// `Some(CompanyFence::None)` is an explicit "this module has no company
+/// dimension at all" — no fence, no RLS, no synthesized columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanyFence {
+    /// Rows are visible only within the declaring company (RLS, fail-closed)
+    Strict,
+    /// Master-data posture: rows with a NULL `company_id` are shared
+    /// (visible to every company); non-NULL rows stay company-fenced
+    SharedBlank,
+    /// Hierarchical posture: rows are visible within the company *subtree*
+    /// rooted at the declaring company (`organization.company_subtree`)
+    SharedTree,
+    /// No company dimension at all — nothing is emitted (must not be combined
+    /// with a non-`@global` `company_id` column; validated as an error)
+    None,
+}
+
 /// Foreign key action for ON DELETE and ON UPDATE
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

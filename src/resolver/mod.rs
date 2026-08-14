@@ -15,7 +15,7 @@ pub mod validator;
 pub use flow_resolver::FlowResolver;
 pub use reference_resolver::ReferenceResolver;
 pub use type_resolver::TypeResolver;
-pub use validator::SchemaValidator;
+pub use validator::{declaration_warnings, SchemaValidator};
 
 use crate::ast::ModuleSchema;
 use thiserror::Error;
