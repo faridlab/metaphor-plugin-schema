@@ -61,7 +61,7 @@ impl HandlerGenerator {
         // Generate custom action handlers if hook has state machine
         if let Some(h) = hook {
             if let Some(sm) = &h.state_machine {
-                self.write_transition_handlers(&mut output, model, sm)?;
+                self.write_transition_handlers(&mut output, model, &h.name, sm)?;
             }
         }
 
@@ -156,9 +156,10 @@ impl HandlerGenerator {
         // Only import state machine if the hook has one defined
         if let Some(h) = hook {
             if h.state_machine.is_some() {
-                // Use re-exported state machine types (not private module path)
+                // Use re-exported state machine types (not private module path).
+                // The types are named from the HOOK (StateMachineGenerator), not the model.
                 writeln!(output, "use crate::domain::state_machine::{{{}State, {}StateMachine, {}Transition}};",
-                    model.name, model.name, model.name).unwrap();
+                    h.name, h.name, h.name).unwrap();
             }
         }
 
@@ -425,7 +426,7 @@ impl HandlerGenerator {
         Ok(())
     }
 
-    fn write_transition_handlers(&self, output: &mut String, model: &Model, sm: &crate::ast::StateMachine) -> Result<(), GenerateError> {
+    fn write_transition_handlers(&self, output: &mut String, model: &Model, sm_name: &str, sm: &crate::ast::StateMachine) -> Result<(), GenerateError> {
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
 
@@ -463,7 +464,7 @@ impl HandlerGenerator {
             writeln!(output, "    #[cfg(feature = \"auth\")]").unwrap();
             writeln!(output, "    {{").unwrap();
             // Permission-based check: use transition's allowed_roles() method
-            writeln!(output, "        let allowed_roles = {}Transition::{}.allowed_roles();", model.name, to_pascal_case(&transition.name)).unwrap();
+            writeln!(output, "        let allowed_roles = {}Transition::{}.allowed_roles();", sm_name, to_pascal_case(&transition.name)).unwrap();
             // `AuthContext` exposes raw `permissions: Vec<String>` — no
             // `has_permission` method exists on the framework type.
             writeln!(output, "        let has_specific_perm = auth.permissions.iter().any(|p| p == \"{}:transition:{}\");", model_snake, transition_snake).unwrap();
@@ -481,10 +482,10 @@ impl HandlerGenerator {
 
             let status_field = self.find_status_field(model, &sm.field);
             writeln!(output, "    // Create state machine from entity's actual status and validate transition").unwrap();
-            writeln!(output, "    let current_state: {}State = entity.{}.to_string().parse()", model.name, status_field).unwrap();
-            writeln!(output, "        .unwrap_or({}State::default());", model.name).unwrap();
-            writeln!(output, "    let sm = {}StateMachine::from_state(current_state);", model.name).unwrap();
-            writeln!(output, "    if !sm.can_transition({}Transition::{}) {{", model.name, to_pascal_case(&transition.name)).unwrap();
+            writeln!(output, "    let current_state: {}State = entity.{}.to_string().parse()", sm_name, status_field).unwrap();
+            writeln!(output, "        .unwrap_or({}State::default());", sm_name).unwrap();
+            writeln!(output, "    let sm = {}StateMachine::from_state(current_state);", sm_name).unwrap();
+            writeln!(output, "    if !sm.can_transition({}Transition::{}) {{", sm_name, to_pascal_case(&transition.name)).unwrap();
             writeln!(output, "        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<{}ResponseDto>::error(\"Transition not allowed from current state\")));", model.name).unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();

@@ -306,7 +306,7 @@ impl SeederGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "    let database_url = env::var(\"DATABASE_URL\")").unwrap();
-        writeln!(output, "        .expect(\"DATABASE_URL must be set\");").unwrap();
+        writeln!(output, "        .map_err(|e| anyhow::anyhow!(\"DATABASE_URL must be set: {{e}}\"))?;").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    println!(\"Connecting to database...\");").unwrap();

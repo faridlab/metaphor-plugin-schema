@@ -386,7 +386,8 @@ impl ValueObjectGenerator {
         // Builder pattern
         writeln!(output, "    /// Create a builder for {}", name).unwrap();
         writeln!(output, "    pub fn builder() -> {}Builder {{", name).unwrap();
-        writeln!(output, "        {}Builder::default()", name).unwrap();
+        // Qualified call: a field named `default` emits an inherent setter shadowing the trait.
+        writeln!(output, "        <{}Builder as Default>::default()", name).unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
@@ -591,7 +592,7 @@ impl ValueObjectGenerator {
         // Builder pattern
         writeln!(output, "    /// Create a builder for Metadata").unwrap();
         writeln!(output, "    pub fn builder() -> MetadataBuilder {{").unwrap();
-        writeln!(output, "        MetadataBuilder::default()").unwrap();
+        writeln!(output, "        <MetadataBuilder as Default>::default()").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 

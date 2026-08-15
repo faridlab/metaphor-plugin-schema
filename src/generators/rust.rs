@@ -98,14 +98,24 @@ impl RustGenerator {
             .unwrap_or(false)
     }
 
-    /// Return the `StateMachine` config for this model if its hook defines one.
+    /// Return the hook carrying this model's state machine, if any.
     ///
     /// Looks through `schema.schema.hooks` for a hook associated with this model
     /// (matched by `model_ref` or `name`) that carries a `state_machine` definition.
-    fn find_state_machine_field<'a>(&self, model: &Model, schema: &'a ResolvedSchema) -> Option<&'a StateMachine> {
+    ///
+    /// State-machine TYPE names derive from the HOOK's name (see
+    /// `StateMachineGenerator::generate_hook_file`), so every entity-side
+    /// reference must use the hook name too — deriving them from the model
+    /// name breaks whenever the two differ.
+    fn find_state_machine_hook<'a>(&self, model: &Model, schema: &'a ResolvedSchema) -> Option<&'a crate::ast::hook::Hook> {
         schema.schema.hooks
             .iter()
-            .find(|h| h.model_ref == model.name || h.name == model.name)
+            .find(|h| (h.model_ref == model.name || h.name == model.name) && h.state_machine.is_some())
+    }
+
+    /// Return the `StateMachine` config for this model if its hook defines one.
+    fn find_state_machine_field<'a>(&self, model: &Model, schema: &'a ResolvedSchema) -> Option<&'a StateMachine> {
+        self.find_state_machine_hook(model, schema)
             .and_then(|h| h.state_machine.as_ref())
     }
 
@@ -278,7 +288,7 @@ impl RustGenerator {
     }
 
     /// Generate entity methods implementation block
-    fn generate_entity_methods(&self, model: &Model, entity: Option<&Entity>, state_machine: Option<&StateMachine>, output: &mut String) {
+    fn generate_entity_methods(&self, model: &Model, entity: Option<&Entity>, state_machine: Option<&StateMachine>, sm_type_name: Option<&str>, output: &mut String) {
         let name = &model.name;
         let pk_field = self.get_pk_field(model);
         let pk_type = self.get_pk_type(model);
@@ -289,7 +299,9 @@ impl RustGenerator {
         // Builder static method
         writeln!(output, "    /// Create a builder for {}", name).unwrap();
         writeln!(output, "    pub fn builder() -> {}Builder {{", name).unwrap();
-        writeln!(output, "        {}Builder::default()", name).unwrap();
+        // Qualified call: a builder field literally named `default` emits an
+        // inherent `fn default(self, ..)` setter that shadows the trait method.
+        writeln!(output, "        <{}Builder as Default>::default()", name).unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
@@ -604,6 +616,9 @@ impl RustGenerator {
         // TRANSITION_TO — state machine transition method (Phase 2)
         // ===================================================================
         if let Some(sm) = state_machine {
+            // The machine's types are named from the HOOK (see
+            // StateMachineGenerator), not from the model.
+            let sm_name = sm_type_name.unwrap_or(name);
             let sm_field = &sm.field;
             // Find the Rust type for the state machine field (for explicit parse turbofish)
             let sm_field_rust_type = model.fields.iter()
@@ -620,14 +635,14 @@ impl RustGenerator {
             writeln!(output, "    /// Returns `Err` if the transition is not permitted from the current state.").unwrap();
             writeln!(output, "    /// Use this method instead of assigning `self.{}` directly.", sm_field).unwrap();
             writeln!(output, "    pub fn transition_to(&mut self, new_state: {name}State) -> Result<(), StateMachineError> {{",
-                name = name).unwrap();
+                name = sm_name).unwrap();
             // Convert entity's field type to state machine's state type via Display/FromStr
             // parse::<{Name}State>() returns Result<_, StateMachineError> so ? works directly
             writeln!(output,
                 "        let current = self.{field}.to_string().parse::<{name}State>()?;",
-                field = sm_field, name = name).unwrap();
+                field = sm_field, name = sm_name).unwrap();
             writeln!(output, "        let mut sm = {name}StateMachine::from_state(current);",
-                name = name).unwrap();
+                name = sm_name).unwrap();
             writeln!(output, "        sm.transition_to_state(new_state)?;").unwrap();
             // Convert state machine's state type back to entity's field type via Display/FromStr
             // Explicit turbofish type avoids type inference failures for non-String error types
@@ -830,8 +845,13 @@ impl RustGenerator {
                 // Optional: pass through (builder Option<T> -> entity Option<T>)
                 writeln!(output, "            {}: self.{},", field_name, field_name).unwrap();
             } else if let Some(default_expr) = self.builder_field_default_expr(field, schema) {
-                // Required with @default: unwrap_or
-                writeln!(output, "            {}: self.{}.unwrap_or({}),", field_name, field_name, default_expr).unwrap();
+                // Required with @default: unwrap_or (unwrap_or_default when the
+                // default is a Default::default() call — clippy::unwrap_or_default)
+                if default_expr == "Default::default()" || default_expr.ends_with("::default()") {
+                    writeln!(output, "            {}: self.{}.unwrap_or_default(),", field_name, field_name).unwrap();
+                } else {
+                    writeln!(output, "            {}: self.{}.unwrap_or({}),", field_name, field_name, default_expr).unwrap();
+                }
             } else {
                 // Required without default: use validated local variable
                 writeln!(output, "            {},", field_name).unwrap();
@@ -1381,11 +1401,12 @@ impl RustGenerator {
             writeln!(output, "use crate::domain::value_objects::*;").unwrap();
         }
 
-        // Import state machine types when the model has a state machine hook (Phase 2)
-        if state_machine.is_some() {
+        // Import state machine types when the model has a state machine hook (Phase 2).
+        // The types are named from the HOOK's name (StateMachineGenerator), not the model's.
+        if let Some(sm_hook) = self.find_state_machine_hook(model, schema) {
             writeln!(output).unwrap();
             writeln!(output, "use crate::domain::state_machine::{{{name}StateMachine, {name}State, StateMachineError}};",
-                name = model.name).unwrap();
+                name = sm_hook.name).unwrap();
         }
 
         // Generate error types used in entity methods (before struct definition)
@@ -1465,7 +1486,8 @@ impl RustGenerator {
 
         // Generate entity methods implementation block (including DDD methods if entity exists)
         // Note: entity was already found at the beginning of this function for error type extraction
-        self.generate_entity_methods(model, entity, state_machine, &mut output);
+        self.generate_entity_methods(model, entity, state_machine,
+            self.find_state_machine_hook(model, schema).map(|h| h.name.as_str()), &mut output);
 
         // Generate backbone_orm::EntityRepoMeta implementation (needs schema for enum detection)
         {
