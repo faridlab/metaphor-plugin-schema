@@ -19,6 +19,37 @@ use std::path::PathBuf;
 const AUDIT_METADATA_DEFAULT_JSON: &str =
     r#"'{"created_at":null,"updated_at":null,"deleted_at":null,"created_by":null,"updated_by":null,"deleted_by":null}'::jsonb"#;
 
+/// Postgres *reserved* words (the ones that cannot be identifiers at all,
+/// Appendix C) that plausibly collide with snake_case field names. A field
+/// named `default` is legal in the schema DSL — and is Odoo's real column on
+/// `mail.message.subtype` — but `default BOOLEAN NOT NULL` is a syntax error
+/// (found applying backbone-mail's create_mail_message_subtype migration).
+/// Quote exactly these, never everything, so regenerated migrations stay
+/// byte-identical for every module whose fields are not reserved words.
+const PG_RESERVED_IDENTIFIERS: &[&str] = &[
+    "all", "and", "any", "array", "as", "asc", "authorization", "binary", "both", "case",
+    "cast", "check", "collate", "column", "concurrently", "constraint", "create", "cross",
+    "current_catalog", "current_date", "current_role", "current_schema", "current_time",
+    "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct", "do",
+    "else", "end", "except", "false", "fetch", "for", "foreign", "freeze", "from", "full",
+    "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect", "into",
+    "is", "isnull", "join", "lateral", "leading", "left", "like", "limit", "localtime",
+    "localtimestamp", "natural", "not", "notnull", "null", "offset", "on", "only", "or",
+    "order", "outer", "overlaps", "placing", "primary", "references", "returning", "right",
+    "select", "session_user", "similar", "some", "symmetric", "table", "then", "to",
+    "trailing", "true", "union", "unique", "user", "using", "variadic", "verbose", "when",
+    "where", "window", "with",
+];
+
+/// Quote a column identifier iff it is a Postgres reserved word.
+pub(crate) fn quote_ident(name: &str) -> String {
+    if PG_RESERVED_IDENTIFIERS.contains(&name) {
+        format!("\"{}\"", name)
+    } else {
+        name.to_string()
+    }
+}
+
 /// Reduce an arbitrary index-field expression to a valid lower-case Postgres
 /// identifier segment.
 ///
@@ -232,7 +263,7 @@ impl SqlGenerator {
 
         // Add primary key constraint if needed
         if let Some(pk) = &primary_key {
-            columns.push(format!("    PRIMARY KEY ({})", pk));
+            columns.push(format!("    PRIMARY KEY ({})", quote_ident(pk)));
         }
 
         writeln!(output, "{}", columns.join(",\n")).unwrap();
@@ -260,7 +291,10 @@ impl SqlGenerator {
                 writeln!(
                     output,
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_{}_{} ON {} ({});",
-                    table_name, field.name, qualified, field.name
+                    table_name,
+                    field.name,
+                    qualified,
+                    quote_ident(&field.name)
                 )
                 .unwrap();
             }
@@ -286,19 +320,28 @@ impl SqlGenerator {
                 writeln!(
                     output,
                     "CREATE INDEX IF NOT EXISTS idx_{}_{}_deleted_at ON {} (({}->>'deleted_at'));",
-                    table_name, field.name, qualified, field.name
+                    table_name,
+                    field.name,
+                    qualified,
+                    quote_ident(&field.name)
                 )
                 .unwrap();
                 writeln!(
                     output,
                     "CREATE INDEX IF NOT EXISTS idx_{}_{}_created_at ON {} (({}->>'created_at'));",
-                    table_name, field.name, qualified, field.name
+                    table_name,
+                    field.name,
+                    qualified,
+                    quote_ident(&field.name)
                 )
                 .unwrap();
                 writeln!(
                     output,
                     "CREATE INDEX IF NOT EXISTS idx_{}_{}_updated_at ON {} (({}->>'updated_at'));",
-                    table_name, field.name, qualified, field.name
+                    table_name,
+                    field.name,
+                    qualified,
+                    quote_ident(&field.name)
                 )
                 .unwrap();
 
@@ -436,7 +479,7 @@ impl SqlGenerator {
         // DB CHECK module after module. Emitting it here closes every writer for every future module. A
         // column CHECK also passes for NULL, so it is safe on optional fields.
         if field.has_attribute("non_negative") {
-            constraints.push(format!("CHECK ({} >= 0)", field.name));
+            constraints.push(format!("CHECK ({} >= 0)", quote_ident(&field.name)));
         }
 
         let constraint_str = if constraints.is_empty() {
@@ -445,7 +488,7 @@ impl SqlGenerator {
             format!(" {}", constraints.join(" "))
         };
 
-        Ok(format!("    {} {}{}", field.name, sql_type, constraint_str))
+        Ok(format!("    {} {}{}", quote_ident(&field.name), sql_type, constraint_str))
     }
 
     /// Generate JSONB CHECK constraint for type validation
@@ -499,10 +542,11 @@ impl SqlGenerator {
         writeln!(output, "CREATE OR REPLACE FUNCTION {}() RETURNS trigger AS $$", trigger_func_name).unwrap();
         writeln!(output, "BEGIN").unwrap();
         writeln!(output, "    IF TG_OP = 'INSERT' THEN").unwrap();
-        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{created_at}}', to_jsonb(NOW()));", field_name, field_name).unwrap();
-        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));", field_name, field_name).unwrap();
+        let q = quote_ident(field_name);
+        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{created_at}}', to_jsonb(NOW()));", q, q).unwrap();
+        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));", q, q).unwrap();
         writeln!(output, "    ELSIF TG_OP = 'UPDATE' THEN").unwrap();
-        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));", field_name, field_name).unwrap();
+        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));", q, q).unwrap();
         writeln!(output, "    END IF;").unwrap();
         writeln!(output, "    RETURN NEW;").unwrap();
         writeln!(output, "END;").unwrap();
@@ -597,7 +641,7 @@ impl SqlGenerator {
 
         // Check if field exists as a real column
         if model.fields.iter().any(|f| f.name == field_name) {
-            return field_name.to_string();
+            return quote_ident(field_name);
         }
 
         // Known sub-keys of audit_metadata JSONB fields
