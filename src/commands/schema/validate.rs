@@ -40,6 +40,16 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
             for warning in declaration_warnings(&module_schema) {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
+            // The missing-fence-declaration case is the ONE declarations issue that IS a gate
+            // here (and in validate-workspace): ADR-0014's sweep is enforced by failing loud,
+            // not by a warning authors learn to scroll past. Generate keeps it warning-only
+            // so unswept legacy modules can still regenerate.
+            if module_schema.company_fence.is_none() {
+                anyhow::bail!(
+                    "no 'company_fence:' declaration in index.model.yaml — ADR-0014 requires \
+                     an explicit posture per module (strict | shared_blank | shared_tree | none)"
+                );
+            }
         }
         Err(errors) => {
             for err in &errors {

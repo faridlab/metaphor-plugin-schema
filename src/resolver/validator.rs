@@ -668,7 +668,15 @@ pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
 /// Fence warnings for [`declaration_warnings`] — see ADR-0014.
 fn fence_warnings(schema: &ModuleSchema) -> Vec<String> {
     let Some(fence) = schema.company_fence else {
-        return Vec::new();
+        // ADR-0014 sweep: every module declares an explicit posture. Undeclared is the
+        // warning generate shows (never a gate here — legacy modules must still regen);
+        // `validate` / `validate-workspace` make the same condition a hard failure.
+        return vec![
+            "no 'company_fence:' declaration in index.model.yaml — ADR-0014 requires an \
+             explicit posture per module (strict | shared_blank | shared_tree | none); \
+             'metaphor schema validate-workspace' lists every undeclared module"
+                .to_string(),
+        ];
     };
 
     let fenced: Vec<&crate::ast::Model> = schema
@@ -927,9 +935,16 @@ mod company_fence_tests {
     }
 
     #[test]
-    fn undeclared_module_gets_no_warnings() {
+    fn undeclared_module_warns_on_generate() {
+        // ADR-0014: `generate` stays warning-only (unswept legacy modules must still
+        // regen), but the missing declaration is no longer SILENT — the warning points
+        // at `validate-workspace`, where the same gap is a hard failure.
         let s = schema_with_fence(vec![company_model(false)], None);
-        assert!(declaration_warnings(&s).is_empty());
+        let warnings = declaration_warnings(&s);
+        assert!(
+            warnings.len() == 1 && warnings[0].contains("company_fence"),
+            "expected exactly the missing-declaration warning, got: {warnings:?}"
+        );
     }
 }
 

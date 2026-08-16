@@ -80,6 +80,23 @@ pub enum Commands {
         module: Option<String>,
     },
 
+    /// Validate cross-module foreign keys + company-fence declarations across the
+    /// whole workspace (alias for `schema validate-workspace`)
+    ///
+    /// Example: metaphor schema validate-workspace
+    ///
+    /// Two gates in one pass: every `@foreign_key(other.Entity.id)` must resolve
+    /// against a module listed in `metaphor.yaml`, and every schema module must
+    /// declare an explicit `company_fence:` posture (ADR-0014). An undeclared
+    /// posture decides nothing silently — it fails here and in per-module
+    /// `validate`; only `schema generate` keeps it a warning.
+    ///
+    /// Must exist at TOP level for the same dispatch reason as `doctor` above:
+    /// `metaphor schema validate-workspace` arrives as
+    /// `metaphor-schema validate-workspace`.
+    #[command(name = "validate-workspace")]
+    ValidateWorkspace,
+
     /// Generate server-side Rust code (alias for `schema generate`)
     ///
     /// Example: metaphor-schema generate:rust bersihir --target all

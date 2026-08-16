@@ -35,6 +35,13 @@ fn main() -> Result<()> {
             schema::execute(schema::SchemaAction::Undeclared { module })?;
         }
 
+        // Shortcut: validate-workspace → same as `schema validate-workspace`. Top
+        // level for the same dispatch reason as doctor above — `metaphor schema
+        // validate-workspace` arrives here as `metaphor-schema validate-workspace`.
+        Commands::ValidateWorkspace => {
+            schema::execute(schema::SchemaAction::ValidateWorkspace)?;
+        }
+
         // Shortcut: generate:rust → same as `schema generate`. The MODULE
         // arg is optional here too; the inner SchemaAction::Generate dispatch
         // applies the same auto-detect-or-error logic.
