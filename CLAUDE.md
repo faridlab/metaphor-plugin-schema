@@ -28,6 +28,7 @@ Fallback when outside a Metaphor workspace: `cargo build`, `cargo test`, `cargo 
 - **SHOULD** expose feature flags for optional capabilities (e.g. `features = ["tokio", "sqlx"]`) rather than forcing all deps.
 - **NEVER** add business / domain logic here — that belongs in `module` projects. Crates are plumbing.
 - **NEVER** couple to a specific backend (db, cache) when a trait-based abstraction is viable. Keep the core transport-agnostic; put adapters behind features.
+- **MUST** read and follow the target repo's own `CLAUDE.md` when working across repos — before editing in another repo, read its rules; the more local `CLAUDE.md` always wins.
 
 ## Folder cheatsheet
 
