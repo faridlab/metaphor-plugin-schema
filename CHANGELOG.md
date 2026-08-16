@@ -7,7 +7,24 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-08-16
+
 ### Added
+
+- **ADR-0014 fence sweep is machine-enforced.** `metaphor schema
+  validate-workspace` (and per-module `validate`) now hard-fail when a module's
+  `index.model.yaml` lacks a `company_fence:` declaration — the error lists the
+  four legal postures. `metaphor schema generate` stays warning-only so
+  unswept modules can still regenerate while a workspace is mid-sweep.
+  · [`validate_workspace.rs`](src/commands/schema/validate_workspace.rs).
+
+- **Posture flips regenerate their RLS.** The diff-based migration path now
+  detects a `company_fence` change on an already-fenced table and emits the
+  flip SQL: `DROP POLICY IF EXISTS` + the new posture's template (with the
+  `company_subtree` helper emitted once before any `shared_tree` policy);
+  flip-to-`none` drops the policy and disables RLS. Previously an incremental
+  regen silently kept the old posture's policy on existing tables.
+  · [`schema_diff.rs`](src/migration/schema_diff.rs).
 
 - **Scheduled-job posture vocabulary + pickup-lock lint (ADR-0020).**
   `index.hook.yaml` jobs accept `posture:` (pull / self_arming / host_riding /
