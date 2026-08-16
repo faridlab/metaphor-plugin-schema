@@ -66,6 +66,12 @@ impl DatabaseIntrospector {
                     // The DB can't tell us `@global`; the fence decision is read only from the
                     // schema-derived `new` snapshot, so the introspected side stays `false`.
                     company_scoped: false,
+                    // Same for the ADR-0014 declaration — it lives in index.model.yaml,
+                    // not in the database. `None` + `company_scoped: false` makes the
+                    // introspected side's effective posture `none`, so a fence diff
+                    // against it emits a full install (DROP IF EXISTS + new template),
+                    // which is correct regardless of which template was live before.
+                    company_fence: None,
                 },
             );
         }

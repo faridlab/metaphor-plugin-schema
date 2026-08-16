@@ -91,6 +91,12 @@ pub struct TableChange {
     pub indexes_removed: Vec<String>,
     /// Possible column renames (heuristic: same type, one added + one removed)
     pub rename_candidates: Vec<RenameCandidate>,
+    /// ADR-0014 posture flip on an existing table: (old, new) effective fence. Columns and
+    /// indexes may be untouched — without this field the flip is invisible to the incremental
+    /// path and the old policy template silently stays in place. `None` when the table is new,
+    /// gains `company_id` in this same diff (the gain path installs the fence fresh), or the
+    /// posture is unchanged.
+    pub fence_flip: Option<(CompanyFence, CompanyFence)>,
 }
 
 /// A possible column rename detected by matching types between added and removed columns.
@@ -258,6 +264,16 @@ pub fn diff_schemas(old: &SchemaSnapshot, new: &SchemaSnapshot) -> SchemaDiff {
     diff
 }
 
+/// The fence posture a snapshot effectively carries: an unscoped table (no `company_id`, or
+/// `@global`) is unfenced regardless of declaration; a scoped table with no declaration
+/// (legacy snapshot) means `strict`, matching the legacy template the diff path emits.
+fn effective_posture(table: &TableSnapshot) -> CompanyFence {
+    if !table.company_scoped {
+        return CompanyFence::None;
+    }
+    table.company_fence.unwrap_or(CompanyFence::Strict)
+}
+
 fn diff_tables(old: &TableSnapshot, new: &TableSnapshot) -> TableChange {
     let mut change = TableChange {
         table_name: new.name.clone(),
@@ -274,6 +290,17 @@ fn diff_tables(old: &TableSnapshot, new: &TableSnapshot) -> TableChange {
     for col_name in old.columns.keys() {
         if !new.columns.contains_key(col_name) {
             change.columns_removed.push(col_name.clone());
+        }
+    }
+
+    // Posture flip on an existing table (ADR-0014): same columns, different fence
+    // declaration → the RLS policy template must be re-emitted. Skipped when `company_id`
+    // is newly added here — that path installs the fence from scratch, so a flip record
+    // would only duplicate it.
+    if change.columns_added.iter().all(|c| c.name != "company_id") {
+        let (old_posture, new_posture) = (effective_posture(old), effective_posture(new));
+        if old_posture != new_posture {
+            change.fence_flip = Some((old_posture, new_posture));
         }
     }
 
@@ -407,6 +434,7 @@ impl TableChange {
             || !self.columns_modified.is_empty()
             || !self.indexes_added.is_empty()
             || !self.indexes_removed.is_empty()
+            || self.fence_flip.is_some()
     }
 }
 
@@ -459,6 +487,11 @@ pub fn generate_up_migration(diff: &SchemaDiff, new_schema: &SchemaSnapshot, des
     use super::pipeline::is_safe_type_widening;
 
     let mut output = String::new();
+
+    // The shared_tree helper is `CREATE OR REPLACE` — emitting it once per migration before
+    // the first policy that reads it is the convention (company_subtree_helper_sql docs).
+    // Both new-table and flip emissions below share this flag.
+    let mut subtree_helper_emitted = false;
 
     // Create new enums first (tables may reference them)
     for enum_name in &diff.enums_added {
@@ -538,10 +571,11 @@ pub fn generate_up_migration(diff: &SchemaDiff, new_schema: &SchemaSnapshot, des
             if table.company_scoped && table.company_fence != Some(CompanyFence::None) {
                 writeln!(output, "-- Company RLS fence (ADR-0008)").unwrap();
                 let fence = table.company_fence.unwrap_or(CompanyFence::Strict);
-                if matches!(fence, CompanyFence::SharedTree) {
+                if matches!(fence, CompanyFence::SharedTree) && !subtree_helper_emitted {
                     let (helper, _) = crate::generators::sql::company_subtree_helper_sql();
                     output.push_str(&helper);
                     writeln!(output).unwrap();
+                    subtree_helper_emitted = true;
                 }
                 let (up, _down) = crate::generators::sql::company_rls_sql(
                     &fence,
@@ -656,6 +690,49 @@ pub fn generate_up_migration(diff: &SchemaDiff, new_schema: &SchemaSnapshot, des
                 );
                 output.push_str(&up);
             }
+        }
+
+        // Posture flip on an existing fenced table (ADR-0014): drop the old policy and
+        // install the new template. `company_rls_sql` re-enables RLS and DROP POLICY IF
+        // EXISTS before CREATE, so flipping between fenced postures is one call; flipping
+        // to `none` must instead strip the policy and disable RLS entirely.
+        if let Some((old_fence, new_fence)) = &change.fence_flip {
+            writeln!(
+                output,
+                "-- Company fence posture flip (ADR-0014): {old_fence:?} -> {new_fence:?}"
+            )
+            .unwrap();
+            if *new_fence == CompanyFence::None {
+                writeln!(
+                    output,
+                    "DROP POLICY IF EXISTS {table_name}_company_isolation ON {table_name};"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "ALTER TABLE {table_name} NO FORCE ROW LEVEL SECURITY;"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "ALTER TABLE {table_name} DISABLE ROW LEVEL SECURITY;"
+                )
+                .unwrap();
+            } else {
+                if matches!(new_fence, CompanyFence::SharedTree) && !subtree_helper_emitted {
+                    let (helper, _) = crate::generators::sql::company_subtree_helper_sql();
+                    output.push_str(&helper);
+                    writeln!(output).unwrap();
+                    subtree_helper_emitted = true;
+                }
+                let (up, _down) = crate::generators::sql::company_rls_sql(
+                    new_fence,
+                    table_name,
+                    &format!("{table_name}_company_isolation"),
+                );
+                output.push_str(&up);
+            }
+            writeln!(output).unwrap();
         }
 
         // Modify columns — with type widening annotations
@@ -815,6 +892,28 @@ pub fn generate_down_migration(diff: &SchemaDiff) -> String {
                 table_name, col.name
             )
             .unwrap();
+        }
+
+        // Reverse a posture flip: strip whatever the flip installed, restore the old
+        // template. Flipping back to an unfenced posture (old = None) just strips.
+        if let Some((old_fence, _new_fence)) = &change.fence_flip {
+            writeln!(
+                output,
+                "DROP POLICY IF EXISTS {table_name}_company_isolation ON {table_name};"
+            )
+            .unwrap();
+            if *old_fence != CompanyFence::None {
+                if matches!(old_fence, CompanyFence::SharedTree) {
+                    let (helper, _) = crate::generators::sql::company_subtree_helper_sql();
+                    output.push_str(&helper);
+                }
+                let (up, _down) = crate::generators::sql::company_rls_sql(
+                    old_fence,
+                    table_name,
+                    &format!("{table_name}_company_isolation"),
+                );
+                output.push_str(&up);
+            }
         }
     }
 
@@ -1034,6 +1133,157 @@ mod tests {
         let diff = diff_schemas(&old, &new);
         let up = generate_up_migration(&diff, &new, false);
         assert!(up.contains("orders_company_isolation"), "must fence a table that gains company_id:\n{up}");
+    }
+
+    #[test]
+    fn diff_detects_a_posture_flip_with_no_column_changes() {
+        // The gap this closes: identical columns, different declaration → the incremental
+        // path must still see a change (previously the flip was invisible and the old
+        // policy template silently stayed in place).
+        let mut cols = IndexMap::new();
+        cols.insert("company_id".to_string(), company_id_col());
+        let snapshot = |fence: Option<CompanyFence>| {
+            let mut s = SchemaSnapshot::default();
+            s.tables.insert(
+                "branches".to_string(),
+                TableSnapshot {
+                    name: "branches".to_string(),
+                    columns: cols.clone(),
+                    indexes: IndexMap::new(),
+                    primary_key: Some("id".to_string()),
+                    company_scoped: true,
+                    company_fence: fence,
+                },
+            );
+            s
+        };
+        // Legacy snapshot (undeclared) is effectively strict; declare shared_tree now.
+        let diff = diff_schemas(&snapshot(None), &snapshot(Some(CompanyFence::SharedTree)));
+        assert!(
+            diff.table_changes.contains_key("branches"),
+            "a posture flip alone must register as a table change"
+        );
+        assert_eq!(
+            diff.table_changes["branches"].fence_flip,
+            Some((CompanyFence::Strict, CompanyFence::SharedTree))
+        );
+    }
+
+    #[test]
+    fn diff_up_re_emits_the_policy_on_a_flip_to_shared_blank() {
+        let mut cols = IndexMap::new();
+        cols.insert("company_id".to_string(), company_id_col());
+        let snapshot = |fence: CompanyFence| {
+            let mut s = SchemaSnapshot::default();
+            s.tables.insert(
+                "partners".to_string(),
+                TableSnapshot {
+                    name: "partners".to_string(),
+                    columns: cols.clone(),
+                    indexes: IndexMap::new(),
+                    primary_key: Some("id".to_string()),
+                    company_scoped: true,
+                    company_fence: Some(fence),
+                },
+            );
+            s
+        };
+        let old = snapshot(CompanyFence::Strict);
+        let new = snapshot(CompanyFence::SharedBlank);
+        let diff = diff_schemas(&old, &new);
+        let up = generate_up_migration(&diff, &new, false);
+        assert!(
+            up.contains("posture flip (ADR-0014): Strict -> SharedBlank"),
+            "flip banner:\n{up}"
+        );
+        assert!(
+            up.contains("OR company_id IS NULL"),
+            "new template must be the shared_blank one:\n{up}"
+        );
+        let down = generate_down_migration(&diff);
+        assert!(
+            down.contains("DROP POLICY IF EXISTS partners_company_isolation"),
+            "rollback strips the flipped-in policy:\n{down}"
+        );
+    }
+
+    #[test]
+    fn diff_up_ships_the_subtree_helper_once_on_a_flip_to_shared_tree() {
+        let mut cols = IndexMap::new();
+        cols.insert("company_id".to_string(), company_id_col());
+        let snapshot = |fence: CompanyFence| {
+            let mut s = SchemaSnapshot::default();
+            for name in ["branches", "departments"] {
+                s.tables.insert(
+                    name.to_string(),
+                    TableSnapshot {
+                        name: name.to_string(),
+                        columns: cols.clone(),
+                        indexes: IndexMap::new(),
+                        primary_key: Some("id".to_string()),
+                        company_scoped: true,
+                        company_fence: Some(fence),
+                    },
+                );
+            }
+            s
+        };
+        let old = snapshot(CompanyFence::Strict);
+        let new = snapshot(CompanyFence::SharedTree);
+        let diff = diff_schemas(&old, &new);
+        let up = generate_up_migration(&diff, &new, false);
+        assert!(
+            up.contains("organization.company_subtree("),
+            "shared_tree policy must read the helper:\n{up}"
+        );
+        assert_eq!(
+            up.matches("CREATE OR REPLACE FUNCTION organization.company_subtree").count(),
+            1,
+            "helper must appear exactly once even with two flipped tables:\n{up}"
+        );
+        assert_eq!(
+            up.matches("branches_company_isolation").count() >= 1
+                && up.matches("departments_company_isolation").count() >= 1,
+            true,
+            "each flipped table gets its policy:\n{up}"
+        );
+    }
+
+    #[test]
+    fn diff_up_strips_the_fence_on_a_flip_to_none() {
+        let mut cols = IndexMap::new();
+        cols.insert("company_id".to_string(), company_id_col());
+        let snapshot = |fence: CompanyFence| {
+            let mut s = SchemaSnapshot::default();
+            s.tables.insert(
+                "notes".to_string(),
+                TableSnapshot {
+                    name: "notes".to_string(),
+                    columns: cols.clone(),
+                    indexes: IndexMap::new(),
+                    primary_key: Some("id".to_string()),
+                    company_scoped: true,
+                    company_fence: Some(fence),
+                },
+            );
+            s
+        };
+        let old = snapshot(CompanyFence::Strict);
+        let new = snapshot(CompanyFence::None);
+        let diff = diff_schemas(&old, &new);
+        let up = generate_up_migration(&diff, &new, false);
+        assert!(
+            up.contains("DROP POLICY IF EXISTS notes_company_isolation"),
+            "flip to none must drop the policy:\n{up}"
+        );
+        assert!(
+            up.contains("ALTER TABLE notes DISABLE ROW LEVEL SECURITY;"),
+            "flip to none must disable RLS:\n{up}"
+        );
+        assert!(
+            !up.contains("CREATE POLICY"),
+            "flip to none must not re-create a policy:\n{up}"
+        );
     }
 
     #[test]

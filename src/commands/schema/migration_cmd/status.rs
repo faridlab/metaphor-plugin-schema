@@ -48,7 +48,14 @@ pub(in crate::commands::schema) fn execute_status(
         .map_err(|e| anyhow::anyhow!("Schema validation failed: {:?}", e))?;
 
     let new_schema = build_schema_snapshot(&resolved);
-    let old_schema = get_old_schema(&schema_path, database_url.as_deref())?;
+    // Same module-pg-schema rule as `migration` — status drift-checks the
+    // module's own schema, never `public`.
+    let pg_schema = module_schema
+        .models
+        .iter()
+        .find_map(|m| m.schema.as_deref().filter(|s| !s.is_empty()))
+        .unwrap_or("public");
+    let old_schema = get_old_schema(&schema_path, database_url.as_deref(), pg_schema)?;
 
     let diff = diff_schemas(&old_schema, &new_schema);
 

@@ -22,21 +22,28 @@ use crate::ast::{IndexType, PrimitiveType, TypeRef};
 /// Get the "old" schema for diffing — from a live database (if URL provided
 /// and the `database` feature is enabled) or from a `.schema_snapshot.json`
 /// file alongside the schema directory.
+///
+/// `pg_schema` is the module's own Postgres schema (`schema:` in
+/// index.model.yaml, e.g. `organization`); live introspection reads THAT
+/// schema, not `public` — backbone modules live in their own schemas, so
+/// introspecting public would diff the module against unrelated tables.
 pub(super) fn get_old_schema(
     schema_path: &Path,
     database_url: Option<&str>,
+    pg_schema: &str,
 ) -> Result<crate::migration::SchemaSnapshot> {
     #[cfg(feature = "database")]
     if let Some(url) = database_url {
         println!(
-            "  {} {}",
+            "  {} {} (schema: {})",
             "Introspecting database:".blue(),
-            url.split('@').last().unwrap_or("***")
+            url.split('@').last().unwrap_or("***"),
+            pg_schema
         );
 
         let introspector = crate::migration::DatabaseIntrospector::new(url);
         let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
-        let schema = rt.block_on(introspector.introspect("public"))?;
+        let schema = rt.block_on(introspector.introspect(pg_schema))?;
 
         println!(
             "  {} Found {} tables, {} enums",

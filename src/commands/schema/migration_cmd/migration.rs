@@ -61,7 +61,15 @@ pub(in crate::commands::schema) fn execute_migration(
         .map_err(|e| anyhow::anyhow!("Schema validation failed: {:?}", e))?;
 
     let new_schema = build_schema_snapshot(&resolved);
-    let old_schema = get_old_schema(&schema_path, database_url.as_deref())?;
+    // The module's own Postgres schema (index.model.yaml `schema:`); models may
+    // override per-model, so take the first non-empty one as the introspection
+    // target. Bare table names in both snapshots then line up 1:1.
+    let pg_schema = module_schema
+        .models
+        .iter()
+        .find_map(|m| m.schema.as_deref().filter(|s| !s.is_empty()))
+        .unwrap_or("public");
+    let old_schema = get_old_schema(&schema_path, database_url.as_deref(), pg_schema)?;
 
     let diff = diff_schemas(&old_schema, &new_schema);
 
