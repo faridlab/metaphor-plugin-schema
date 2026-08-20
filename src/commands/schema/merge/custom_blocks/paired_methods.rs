@@ -16,7 +16,10 @@
 /// Replace the generated `CUSTOM METHODS` block with the one from the
 /// existing file. Returns the regenerated content unchanged when either
 /// side lacks the markers.
-pub(super) fn merge_custom_methods_block(generated_content: &str, existing_content: &str) -> String {
+pub(super) fn merge_custom_methods_block(
+    generated_content: &str,
+    existing_content: &str,
+) -> String {
     let start_marker = "// <<< CUSTOM METHODS START >>>";
     let end_marker = "// <<< CUSTOM METHODS END >>>";
 

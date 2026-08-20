@@ -27,7 +27,7 @@ use std::fs;
 use std::path::Path;
 
 use paired_methods::merge_custom_methods_block;
-use single_marker::{collect_custom_blocks, insert_custom_blocks};
+use single_marker::{insert_custom_blocks, parse_custom_regions};
 
 /// Merge Rust files (typically `mod.rs`, but the strategy applies to any
 /// generated `.rs` file), preserving `// <<< CUSTOM` regions.
@@ -53,14 +53,15 @@ pub(in crate::commands::schema) fn merge_rust_mod_custom(
 
     let result = merge_custom_methods_block(generated_content, &existing_content);
 
-    let custom_blocks = collect_custom_blocks(&existing_content, &result);
-    if custom_blocks.is_empty() {
-        return Ok(result);
+    let generated_lines: Vec<String> = result.lines().map(|l| l.to_string()).collect();
+    let regions = parse_custom_regions(&existing_content, &generated_lines);
+    let mut result_lines = generated_lines;
+    insert_custom_blocks(&mut result_lines, &regions);
+    let mut out = result_lines.join("\n");
+    if generated_content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
     }
-
-    let mut result_lines: Vec<String> = result.lines().map(|l| l.to_string()).collect();
-    insert_custom_blocks(&mut result_lines, &custom_blocks);
-    Ok(result_lines.join("\n"))
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -82,8 +83,14 @@ mod tests {
         let (_tmp, path) = write_temp(existing);
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
-        assert!(result.contains("foo_custom"), "custom mod declaration should be preserved");
-        assert!(result.contains("// <<< CUSTOM"), "custom marker should be preserved");
+        assert!(
+            result.contains("foo_custom"),
+            "custom mod declaration should be preserved"
+        );
+        assert!(
+            result.contains("// <<< CUSTOM"),
+            "custom marker should be preserved"
+        );
     }
 
     #[test]
@@ -93,9 +100,18 @@ mod tests {
         let (_tmp, path) = write_temp(existing);
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
-        assert!(result.contains("let y = 2;"), "custom line y should be preserved");
-        assert!(result.contains("let z = 3;"), "custom line z should be preserved");
-        assert!(result.contains("// END CUSTOM"), "END CUSTOM marker should be present");
+        assert!(
+            result.contains("let y = 2;"),
+            "custom line y should be preserved"
+        );
+        assert!(
+            result.contains("let z = 3;"),
+            "custom line z should be preserved"
+        );
+        assert!(
+            result.contains("// END CUSTOM"),
+            "END CUSTOM marker should be present"
+        );
     }
 
     /// Regression: the named paired format `// <<< CUSTOM <SECTION> START >>>` ...
@@ -244,10 +260,16 @@ let service = Arc::new(Service::new(repo));
         let (_tmp, path) = write_temp(existing);
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
-        assert!(result.contains("CustomService"), "custom block should be placed via fuzzy anchor");
+        assert!(
+            result.contains("CustomService"),
+            "custom block should be placed via fuzzy anchor"
+        );
         let svc_pos = result.find("let service").unwrap();
         let custom_pos = result.find("CustomService").unwrap();
-        assert!(svc_pos < custom_pos, "custom block should come after anchor line");
+        assert!(
+            svc_pos < custom_pos,
+            "custom block should come after anchor line"
+        );
     }
 
     /// Regression: an earlier implementation capped paired CUSTOM blocks
@@ -325,7 +347,10 @@ pub struct FooModule {
         let (_tmp, path) = write_temp(existing);
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
-        assert_eq!(result, generated, "should return generated content unchanged");
+        assert_eq!(
+            result, generated,
+            "should return generated content unchanged"
+        );
     }
 
     #[test]
@@ -335,7 +360,10 @@ pub struct FooModule {
         let (_tmp, path) = write_temp(existing);
 
         let result = merge_rust_mod_custom(generated, &path).unwrap();
-        assert_eq!(result, generated, "should return generated content for empty existing file");
+        assert_eq!(
+            result, generated,
+            "should return generated content for empty existing file"
+        );
     }
 
     /// Regression: when the generator flips from type-alias output (else-branch)
@@ -395,5 +423,312 @@ impl DomainPolicy<CustomerLoyaltyAccount> for CustomerLoyaltyAccountDomainPolicy
         );
         assert!(result.contains("pub struct CustomerLoyaltyAccountDomainPolicy;"));
         assert!(result.contains("impl DomainPolicy<CustomerLoyaltyAccount>"));
+    }
+}
+
+#[cfg(test)]
+mod slot_pairing_regressions {
+    use super::*;
+    use std::io::Write as _;
+
+    fn merge(existing: &str, generated: &str) -> String {
+        let mut f = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        f.write_all(existing.as_bytes()).unwrap();
+        merge_rust_mod_custom(generated, f.path()).unwrap()
+    }
+
+    /// Distilled shape of a module lib.rs: struct FIELDS + impl METHODS
+    /// slots the template emits, a builder-struct FIELDS region the template
+    /// does NOT emit (anchor fallback), and build()-body wiring + construction
+    /// blocks whose natural anchors are pure closers.
+    fn module_shape() -> (&'static str, &'static str) {
+        let existing = "pub struct FooModule {
+    pub(crate) account_service: Arc<AccountService>,
+    // <<< CUSTOM FIELDS
+    pub(crate) db_pool: PgPool,
+    pub(crate) write_service: Arc<WriteService>,
+    // END CUSTOM
+}
+
+impl FooModule {
+    // <<< CUSTOM METHODS
+    /// Hand-written accessor the composition seam consumes.
+    pub fn write_service(&self) -> Arc<WriteService> {
+        self.write_service.clone()
+    }
+    // END CUSTOM
+}
+
+pub struct FooModuleBuilder {
+    db_pool: Option<PgPool>,
+    // <<< CUSTOM FIELDS
+    deferred_tax: Option<Arc<dyn DeferredTaxLookup>>,
+    // END CUSTOM
+}
+
+impl FooModuleBuilder {
+    // <<< CUSTOM - custom builder methods
+    pub fn with_deferred_tax(mut self) -> Self { self }
+    // END CUSTOM
+
+    pub fn build(self) -> anyhow::Result<FooModule> {
+        // <<< CUSTOM
+        let write_service = std::sync::Arc::new(WriteService::new());
+        // END CUSTOM
+        Ok(FooModule {
+            account_service,
+            // <<< CUSTOM
+            db_pool,
+            write_service,
+            // END CUSTOM
+        })
+    }
+}
+";
+        let generated = "\
+pub struct FooModule {
+    pub(crate) account_service: Arc<AccountService>,
+    // <<< CUSTOM FIELDS
+    // END CUSTOM
+}
+
+impl FooModule {
+    // <<< CUSTOM METHODS
+    // END CUSTOM
+}
+
+pub struct FooModuleBuilder {
+    db_pool: Option<PgPool>,
+}
+
+impl FooModuleBuilder {
+    // <<< CUSTOM - custom builder methods
+    // END CUSTOM
+
+    pub fn build(self) -> anyhow::Result<FooModule> {
+        // <<< CUSTOM
+        // END CUSTOM
+        Ok(FooModule {
+            account_service,
+            // <<< CUSTOM
+            // END CUSTOM
+        })
+    }
+}
+";
+        (existing, generated)
+    }
+
+    /// The struct's CUSTOM FIELDS region must fill the struct's FIELDS slot,
+    /// and the impl's METHODS region must fill the METHODS slot (in-file
+    /// order preserved). Regression for the backbone-accounting v0.6.1 regen
+    /// where the METHODS block was appended at EOF outside its impl.
+    #[test]
+    fn named_regions_fill_their_named_slots() {
+        let (existing, generated) = module_shape();
+        let result = merge(existing, generated);
+
+        let struct_fields = result
+            .find("// <<< CUSTOM FIELDS")
+            .and_then(|s| result[s..].find("// END CUSTOM").map(|e| &result[s..s + e]));
+        assert!(
+            struct_fields.is_some_and(|zone| zone.contains("db_pool: PgPool")),
+            "struct FIELDS slot must hold the user's fields, got:\n{result}"
+        );
+
+        let impl_open = result.find("impl FooModule {").expect("impl present");
+        let builder_decl = result.find("pub struct FooModuleBuilder").expect("builder");
+        let methods_zone = &result[impl_open..builder_decl];
+        assert!(
+            methods_zone.contains("pub fn write_service(&self)"),
+            "METHODS content must land inside impl FooModule, got:\n{result}"
+        );
+    }
+
+    /// A module-scope `let` block from build() must NEVER be relocated into
+    /// the struct's CUSTOM FIELDS slot. Regression for the backbone-accounting
+    /// v0.6.1 regen: an unanchored wiring block clobbered the already-placed
+    /// struct fields, splicing `let` statements into the struct body.
+    #[test]
+    fn unanchored_block_never_lands_in_fields_slot() {
+        let (existing, generated) = module_shape();
+        let result = merge(existing, generated);
+
+        let struct_close = result.find("}\n").expect("struct closes");
+        let struct_zone = &result[..struct_close];
+        assert!(
+            !struct_zone.contains("let write_service"),
+            "build()-body wiring must not splice into the struct, got:\n{result}"
+        );
+        let build_fn = result.find("pub fn build").expect("build fn");
+        assert!(
+            result[build_fn..].contains("let write_service = std::sync::Arc::new"),
+            "wiring block must stay inside build(), got:\n{result}"
+        );
+    }
+
+    /// A CUSTOM region in a struct the template no longer gives a slot
+    /// (builder struct fields) re-inserts after its anchor INSIDE that
+    /// struct — never into another struct's slot.
+    #[test]
+    fn slotless_region_anchor_inserts_in_place() {
+        let (existing, generated) = module_shape();
+        let result = merge(existing, generated);
+
+        let builder_decl = result.find("pub struct FooModuleBuilder").unwrap();
+        let builder_impl = result.find("impl FooModuleBuilder").unwrap();
+        let builder_zone = &result[builder_decl..builder_impl];
+        assert!(
+            builder_zone.contains("deferred_tax: Option<Arc<dyn DeferredTaxLookup>>"),
+            "builder fields must stay inside the builder struct, got:\n{result}"
+        );
+    }
+
+    /// Merge must be idempotent: running it again over its own output (same
+    /// generated content) is a byte-identical no-op.
+    #[test]
+    fn merge_is_idempotent() {
+        let (existing, generated) = module_shape();
+        let once = merge(existing, generated);
+        let twice = merge(&once, generated);
+        assert_eq!(once, twice, "second pass must not move anything");
+    }
+
+    /// Pure closing punctuation (`));`, `});`, …) never serves as an anchor:
+    /// the block follows the nearest SUBSTANTIVE preceding line instead.
+    /// Regression for blocks lost between regens when their only preceding
+    /// neighbour was a closer that vanished from the template.
+    #[test]
+    fn pure_closer_is_not_an_anchor() {
+        let existing = "fn build() -> Foo {
+    let svc = mount(
+        pool.clone(),
+    );
+    // <<< CUSTOM
+    let extra = Extra::new();
+    // END CUSTOM
+    Foo { svc }
+}
+";
+        let generated = "fn build() -> Foo {
+    let svc = mount_renamed(pool);
+    Foo { svc }
+}
+";
+        let result = merge(existing, generated);
+        assert!(
+            result.contains("let extra = Extra::new();"),
+            "block anchored past a closer must survive, got:\n{result}"
+        );
+        let mount_pos = result.find("let svc = mount_renamed").unwrap();
+        let extra_pos = result.find("let extra").unwrap();
+        assert!(
+            mount_pos < extra_pos,
+            "block should follow the substantive anchor line, got:\n{result}"
+        );
+    }
+
+    /// A template marker rename (`// <<< CUSTOM INIT` → bare `// <<< CUSTOM`)
+    /// still pairs by indent+ordinal, so renamed slots keep their content.
+    #[test]
+    fn marker_rename_pairs_by_indent() {
+        let existing = "impl Builder {
+    fn build(self) -> Foo {
+        // <<< CUSTOM INIT
+        let extra = Extra::new();
+        // END CUSTOM
+        Ok(Foo {})
+    }
+}
+";
+        let generated = "impl Builder {
+    fn build(self) -> Foo {
+        // <<< CUSTOM
+        // END CUSTOM
+        Ok(Foo {})
+    }
+}
+";
+        let result = merge(existing, generated);
+        assert!(
+            result.contains("let extra = Extra::new();"),
+            "renamed marker must still pair, got:\n{result}"
+        );
+        let slot = result.find("// <<< CUSTOM\n").unwrap();
+        let extra = result.find("let extra").unwrap();
+        assert!(
+            slot < extra,
+            "content must sit inside the renamed slot, got:\n{result}"
+        );
+    }
+
+    /// A prose comment that MENTIONS the marker ("add the field in the
+    /// // <<< CUSTOM section …") is not a marker. Treating it as one creates
+    /// a ghost region whose content is re-inserted at the ghost's anchor,
+    /// scrambling surrounding code. Regression for the backbone-accounting
+    /// workflow file whose impl block was reordered mid-declaration.
+    #[test]
+    fn comment_mentioning_marker_is_not_a_marker() {
+        let existing = "// Phase 1: satisfy WorkflowContext.
+// add `pub entity: GLPosting` in the // <<< CUSTOM section and remove the todo!.
+#[allow(unused_variables)]
+impl WorkflowContext<GLPostingFlowInstance> for GLPostingFlowInstance {
+    fn entity(&self) -> &GLPostingFlowInstance {
+        self
+    }
+}
+";
+        let generated = "// Phase 1: satisfy WorkflowContext.
+// add `pub entity: GLPosting` in the // <<< CUSTOM section and remove the todo!.
+#[allow(unused_variables)]
+impl WorkflowContext<GLPostingFlowInstance> for GLPostingFlowInstance {
+    fn entity(&self) -> &GLPostingFlowInstance {
+        self
+    }
+}
+";
+        let result = merge(existing, generated);
+        assert_eq!(
+            result, generated,
+            "a comment mentioning the marker must not shift any lines"
+        );
+    }
+
+    /// A module-scope block (`pub mod …`) whose anchor line sits INSIDE a
+    /// reflowed multi-line `pub use foo::{…}` group must escape the group:
+    /// insert AFTER its closing `};`, never between the group's items.
+    /// Regression for the backbone-accounting repositories/mod.rs splice
+    /// (90 syntax errors from `pub mod` lines inside a use-group body).
+    #[test]
+    fn module_scope_block_inserts_after_open_use_group() {
+        let existing = "pub use reconciliation_repository::{
+    ReconciliationFilter, ReconciliationPaginatedResult, ReconciliationRepository,
+};
+// <<< CUSTOM
+// Hand-authored ports (not schema-derived).
+pub mod bank_reconciliation_repository;
+// END CUSTOM
+";
+        let generated = "pub use reconciliation_repository::{
+    ReconciliationRepository,
+    ReconciliationPaginationParams,
+    ReconciliationPaginatedResult,
+    ReconciliationFilter,
+};
+";
+        let result = merge(existing, generated);
+        let group_close = result.find("};").expect("use group closes");
+        let custom_start = result.find("// <<< CUSTOM").expect("block present");
+        assert!(
+            custom_start > group_close,
+            "module-scope block must land after the use group's closer, got:\n{result}"
+        );
+        let bank_mod = result
+            .find("pub mod bank_reconciliation_repository;")
+            .unwrap();
+        assert!(
+            bank_mod > group_close,
+            "pub mod must not sit inside the use group, got:\n{result}"
+        );
     }
 }

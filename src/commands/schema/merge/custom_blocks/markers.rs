@@ -22,9 +22,11 @@ pub(super) fn normalize_line(line: &str) -> String {
 
 /// Whether a line contains a real `// <<< CUSTOM` start marker.
 ///
-/// Doc comments (`///`) and module doc comments (`//!`) that mention the
-/// marker string inside prose or backticks are NOT markers — treating them
-/// as markers creates ghost blocks that leak stale content into regen output.
+/// The marker must BE the line's first comment — not merely mentioned inside
+/// one. Doc comments (`///`, `//!`) and prose comments that reference the
+/// marker string ("add the field in the // <<< CUSTOM section …") are NOT
+/// markers: treating them as markers creates ghost blocks whose captured
+/// content is then re-inserted at the ghost's anchor, scrambling the file.
 ///
 /// Two marker shapes are honoured:
 /// - bare:   `// <<< CUSTOM` ... `// END CUSTOM`
@@ -43,31 +45,66 @@ pub(super) fn is_custom_start_marker(line: &str) -> bool {
     if is_named_custom_end(line) {
         return false;
     }
-    is_named_custom_start(line) || line.contains("// <<< CUSTOM")
+    is_named_custom_start(line) || comment_starts_with(line, "<<< CUSTOM")
 }
 
 /// Whether a line contains a real `// END CUSTOM` end marker. Doc comments
-/// are excluded for the same reason as [`is_custom_start_marker`]. Recognises
-/// both the bare (`// END CUSTOM`) and named (`// <<< CUSTOM <SECTION> END >>>`) shapes.
+/// and prose that merely mention "END CUSTOM" are excluded for the same
+/// reason as [`is_custom_start_marker`]. Recognises both the bare
+/// (`// END CUSTOM`) and named (`// <<< CUSTOM <SECTION> END >>>`) shapes.
 pub(super) fn is_custom_end_marker(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("///") || trimmed.starts_with("//!") {
         return false;
     }
-    is_named_custom_end(line) || line.contains("END CUSTOM")
+    is_named_custom_end(line) || comment_starts_with(line, "END CUSTOM")
 }
 
 /// Named paired format `// <<< CUSTOM <SECTION> START >>>`. The ` START >>>`
 /// suffix distinguishes it from the matching named END line.
 fn is_named_custom_start(line: &str) -> bool {
-    line.contains("<<< CUSTOM") && line.contains("START >>>")
+    comment_starts_with(line, "<<< CUSTOM") && line.contains("START >>>")
 }
 
 /// Named paired format `// <<< CUSTOM <SECTION> END >>>`. This line contains
 /// `<<< CUSTOM`, so callers must check it BEFORE the bare `// <<< CUSTOM` start
 /// test (see [`is_custom_start_marker`]).
 fn is_named_custom_end(line: &str) -> bool {
-    line.contains("<<< CUSTOM") && line.contains("END >>>")
+    comment_starts_with(line, "<<< CUSTOM") && line.contains("END >>>")
+}
+
+/// Whether the line's FIRST `//` comment begins with `prefix`. `//` sequences
+/// inside string literals are skipped, so a trailing tag after a string
+/// (`let u = "https://x"; // <<< CUSTOM - note`) still counts. A comment that
+/// mentions the marker mid-prose does not.
+fn comment_starts_with(line: &str, prefix: &str) -> bool {
+    first_comment_content(line).is_some_and(|c| c.starts_with(prefix))
+}
+
+/// Content following the line's first `//` comment introducer, ignoring `//`
+/// inside string literals. `None` when the line carries no comment.
+fn first_comment_content(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_string = false;
+            }
+        } else if c == b'"' {
+            in_string = true;
+        } else if c == b'/' && bytes[i + 1] == b'/' {
+            return Some(line[i + 2..].trim_start());
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Whether the line is PURELY a CUSTOM marker with no other content (e.g.
@@ -96,7 +133,11 @@ pub(super) fn find_anchor_line(existing_lines: &[&str], start_index: usize) -> O
     loop {
         let prev = existing_lines[j].trim();
         if !prev.is_empty() && !is_custom_start_marker(prev) && !is_custom_end_marker(prev) {
-            if matches!(prev, "}" | "})" | "});" | "}," | "};") {
+            // Pure punctuation (`}`, `});`, `));`, `],` …) never serves as an
+            // anchor: closers repeat throughout a file and vanish or match at
+            // the wrong scope between regens — the backbone-accounting
+            // v0.6.1 regen lost two blocks to `));` anchors.
+            if is_pure_closer(prev) {
                 if j == 0 {
                     return None;
                 }
@@ -110,4 +151,13 @@ pub(super) fn find_anchor_line(existing_lines: &[&str], start_index: usize) -> O
         }
         j -= 1;
     }
+}
+
+/// A line made only of closing punctuation — brace/paren/bracket closers,
+/// commas, and semicolons. Never unique enough to anchor a CUSTOM block.
+fn is_pure_closer(line: &str) -> bool {
+    !line.is_empty()
+        && line
+            .chars()
+            .all(|c| matches!(c, '}' | ')' | ']' | ',' | ';' | ' '))
 }
