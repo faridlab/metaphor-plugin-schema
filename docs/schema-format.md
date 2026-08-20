@@ -177,6 +177,28 @@ Unknown shape names are a **named conversion error** (`unknown lifecycle shape
 '…' (expected one of …)`) that names the offending field. Fields without a
 `lifecycle:` key are untouched — existing schemas are unaffected.
 
+### Entity lifecycle fields (status enums)
+
+An entity's lifecycle state is **one `status` enum field** — never a boolean
+impostor (`is_active`, `is_archived`), never a jsonb blob for a group of
+columns that carry FKs. Rules:
+
+- Model a lifecycle as an enum whose variants are the real states the workflow
+  distinguishes (start from `active` / `inactive`; add `draft`, `cancelled`, …
+  only when a workflow demands the distinction — a boolean can only ever hold
+  two of them, and every extra boolean multiplies the invalid state space).
+- One default variant, declared `default: true`, matching the column default
+  the migration installs (`'active'`).
+- Migrations that create these enum types MUST create them **unqualified**
+  (`CREATE TYPE bank_status …`, not `CREATE TYPE banking.bank_status`): the
+  generated sqlx enums carry an unqualified `type_name`, and a schema-qualified
+  type makes Postgres describe columns as `schema.type`, so native decode fails
+  with a mismatched-types error on any select that doesn't cast `::text`.
+- Flipping an existing boolean: migrate only rows deviating from the boolean's
+  own column default (`UPDATE … SET status = 'inactive' WHERE NOT is_active`),
+  never an unconditional true→active / false→inactive rewrite; pair every up
+  with a restore-down.
+
 ### Enums
 
 Define enumeration types:
