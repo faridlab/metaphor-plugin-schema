@@ -100,8 +100,13 @@ impl DatabaseIntrospector {
             let num_scale: Option<i32> = row.get("numeric_scale");
             let udt_name: String = row.get("udt_name");
 
-            let sql_type =
-                normalize_pg_type(&data_type, &udt_name, char_max_len, num_precision, num_scale);
+            let sql_type = normalize_pg_type(
+                &data_type,
+                &udt_name,
+                char_max_len,
+                num_precision,
+                num_scale,
+            );
 
             if let Some(table) = tables.get_mut(&table_name) {
                 table.columns.insert(
@@ -291,13 +296,11 @@ pub fn normalize_pg_type(
         "macaddr" => "MACADDR".to_string(),
         "date" => "DATE".to_string(),
         "interval" => "INTERVAL".to_string(),
-        "numeric" => {
-            match (num_precision, num_scale) {
-                (Some(p), Some(s)) if s > 0 => format!("DECIMAL({}, {})", p, s),
-                (Some(p), _) => format!("DECIMAL({})", p),
-                _ => "DECIMAL".to_string(),
-            }
-        }
+        "numeric" => match (num_precision, num_scale) {
+            (Some(p), Some(s)) if s > 0 => format!("DECIMAL({}, {})", p, s),
+            (Some(p), _) => format!("DECIMAL({})", p),
+            _ => "DECIMAL".to_string(),
+        },
         "timestamp with time zone" => "TIMESTAMPTZ".to_string(),
         "timestamp without time zone" => "TIMESTAMP".to_string(),
         "time with time zone" => "TIMETZ".to_string(),
@@ -437,10 +440,7 @@ mod tests {
 
     #[test]
     fn test_normalize_uuid() {
-        assert_eq!(
-            normalize_pg_type("uuid", "uuid", None, None, None),
-            "UUID"
-        );
+        assert_eq!(normalize_pg_type("uuid", "uuid", None, None, None), "UUID");
     }
 
     #[test]
@@ -477,10 +477,7 @@ mod tests {
     fn test_parse_index_columns_multi() {
         let def =
             "CREATE INDEX idx_orders_user_date ON public.orders USING btree (user_id, created_at)";
-        assert_eq!(
-            parse_index_columns(def),
-            vec!["user_id", "created_at"]
-        );
+        assert_eq!(parse_index_columns(def), vec!["user_id", "created_at"]);
     }
 
     #[test]

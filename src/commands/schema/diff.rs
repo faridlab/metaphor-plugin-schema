@@ -35,8 +35,8 @@ pub(super) fn execute_diff(module: &str, base: &str) -> Result<()> {
 
     let (module_schema, _) = build_module_schema(module, &schema_files)?;
 
-    let resolved = resolve_schema(&module_schema)
-        .map_err(|_| anyhow::anyhow!("Schema validation failed"))?;
+    let resolved =
+        resolve_schema(&module_schema).map_err(|_| anyhow::anyhow!("Schema validation failed"))?;
 
     let targets = GenerationTarget::all();
     let generated = generate_all_with_options(&resolved, &targets, &GenerationOptions::default())?;

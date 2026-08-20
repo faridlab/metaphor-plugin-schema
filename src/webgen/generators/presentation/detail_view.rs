@@ -8,8 +8,8 @@ use std::fs;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefinition, FieldType};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case};
 use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case};
 
 /// Generator for detail view components
 pub struct DetailViewGenerator {
@@ -31,7 +31,9 @@ impl DetailViewGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let details_dir = self.config.output_dir
+        let details_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("components")
             .join("details")
@@ -67,7 +69,7 @@ impl DetailViewGenerator {
         let field_displays = self.generate_field_displays(entity, enums);
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Detail View
  *
  * Displays detailed information for a {entity_pascal} entity.
@@ -289,8 +291,14 @@ function JsonDisplay({{ label, value }}: {{ label: string; value: Record<string,
     }
 
     /// Generate field displays
-    fn generate_field_displays(&self, entity: &EntityDefinition, _enums: &[EnumDefinition]) -> String {
-        let displays: Vec<String> = entity.fields.iter()
+    fn generate_field_displays(
+        &self,
+        entity: &EntityDefinition,
+        _enums: &[EnumDefinition],
+    ) -> String {
+        let displays: Vec<String> = entity
+            .fields
+            .iter()
             .filter(|f| !self.is_sensitive_field(f) && !self.is_timestamp_field(f))
             .map(|f| self.generate_field_display(f))
             .collect();
@@ -350,21 +358,21 @@ function JsonDisplay({{ label, value }}: {{ label: string; value: Record<string,
     /// Check if field is sensitive
     fn is_sensitive_field(&self, field: &FieldDefinition) -> bool {
         let name = field.name.to_lowercase();
-        name.contains("password") ||
-        name.contains("secret") ||
-        name.contains("token") ||
-        name.contains("hash")
+        name.contains("password")
+            || name.contains("secret")
+            || name.contains("token")
+            || name.contains("hash")
     }
 
     /// Check if field is a timestamp field
     fn is_timestamp_field(&self, field: &FieldDefinition) -> bool {
         let name = field.name.to_lowercase();
-        name == "created_at" ||
-        name == "createdat" ||
-        name == "updated_at" ||
-        name == "updatedat" ||
-        name == "deleted_at" ||
-        name == "deletedat"
+        name == "created_at"
+            || name == "createdat"
+            || name == "updated_at"
+            || name == "updatedat"
+            || name == "deleted_at"
+            || name == "deletedat"
     }
 
     /// Convert field name to label

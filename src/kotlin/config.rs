@@ -112,10 +112,7 @@ impl GeneratorConfig {
             })
             .unwrap_or_else(|| {
                 // Default path based on --app option (without kotlin/id/startapp prefix)
-                PathBuf::from(format!(
-                    "apps/{}/shared/src/commonMain",
-                    self.app
-                ))
+                PathBuf::from(format!("apps/{}/shared/src/commonMain", self.app))
             })
     }
 

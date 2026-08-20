@@ -279,7 +279,13 @@ impl Step {
     }
 
     pub fn terminal(name: impl Into<String>, status: TerminalStatus) -> Self {
-        Self::new(name, StepType::Terminal(TerminalStep { status, ..Default::default() }))
+        Self::new(
+            name,
+            StepType::Terminal(TerminalStep {
+                status,
+                ..Default::default()
+            }),
+        )
     }
 }
 
@@ -752,15 +758,27 @@ impl Default for CompensationType {
 #[serde(untagged)]
 pub enum WorkflowHandler {
     /// Emit an event
-    Emit { emit: String, data: Option<HashMap<String, Expression>> },
+    Emit {
+        emit: String,
+        data: Option<HashMap<String, Expression>>,
+    },
     /// Notify someone
-    Notify { notify: String, message: Option<Expression> },
+    Notify {
+        notify: String,
+        message: Option<Expression>,
+    },
     /// Execute an action
-    Action { action: String, params: HashMap<String, Expression> },
+    Action {
+        action: String,
+        params: HashMap<String, Expression>,
+    },
 }
 
 impl Default for WorkflowHandler {
     fn default() -> Self {
-        Self::Emit { emit: String::new(), data: None }
+        Self::Emit {
+            emit: String::new(),
+            data: None,
+        }
     }
 }

@@ -1,17 +1,17 @@
 //! Code generators for Kotlin mobile apps
 
-pub mod domain;
 pub mod application;
+pub mod domain;
 pub mod infrastructure;
 pub mod presentation;
 pub mod tests;
 
+use crate::ast::ModuleSchema;
 use crate::kotlin::config::GenerationTarget;
 use crate::kotlin::error::Result;
 use crate::kotlin::lang::KotlinTypeMapper;
 use crate::kotlin::templates;
-use crate::ast::ModuleSchema;
-use handlebars::{Handlebars, handlebars_helper};
+use handlebars::{handlebars_helper, Handlebars};
 use std::path::Path;
 
 /// Main mobile code generator
@@ -88,18 +88,29 @@ impl MobileGenerator {
 
         // Infrastructure templates
         handlebars.register_template_string("api_client", templates::API_CLIENT_TEMPLATE)?;
-        handlebars.register_template_string("offline_repository", templates::OFFLINE_REPOSITORY_TEMPLATE)?;
-        handlebars.register_template_string("sqldelight_schema", templates::SQLDELIGHT_SCHEMA_TEMPLATE)?;
-        handlebars.register_template_string("sqldelight_queries", templates::SQLDELIGHT_QUERIES_TEMPLATE)?;
+        handlebars.register_template_string(
+            "offline_repository",
+            templates::OFFLINE_REPOSITORY_TEMPLATE,
+        )?;
+        handlebars
+            .register_template_string("sqldelight_schema", templates::SQLDELIGHT_SCHEMA_TEMPLATE)?;
+        handlebars.register_template_string(
+            "sqldelight_queries",
+            templates::SQLDELIGHT_QUERIES_TEMPLATE,
+        )?;
 
         // Presentation templates
         handlebars.register_template_string("viewmodel", templates::VIEWMODEL_TEMPLATE)?;
-        handlebars.register_template_string("component_card", templates::COMPONENT_CARD_TEMPLATE)?;
+        handlebars
+            .register_template_string("component_card", templates::COMPONENT_CARD_TEMPLATE)?;
 
         // Test templates (3B + 3C)
-        handlebars.register_template_string("validator_test", templates::VALIDATOR_TEST_TEMPLATE)?;
-        handlebars.register_template_string("viewmodel_test", templates::VIEWMODEL_TEST_TEMPLATE)?;
-        handlebars.register_template_string("api_client_test", templates::API_CLIENT_TEST_TEMPLATE)?;
+        handlebars
+            .register_template_string("validator_test", templates::VALIDATOR_TEST_TEMPLATE)?;
+        handlebars
+            .register_template_string("viewmodel_test", templates::VIEWMODEL_TEST_TEMPLATE)?;
+        handlebars
+            .register_template_string("api_client_test", templates::API_CLIENT_TEST_TEMPLATE)?;
 
         // Sync templates (Phase 4)
         handlebars.register_template_string("sync_handler", templates::SYNC_HANDLER_TEMPLATE)?;
@@ -116,14 +127,24 @@ impl MobileGenerator {
     /// Two checks (in priority order):
     /// 1. `enabled_generators` whitelist — if non-empty, only listed targets run
     /// 2. `disabled_generators` blacklist — if target appears here, skip it
-    pub fn is_disabled_for_model(&self, model: &crate::ast::Model, target: crate::kotlin::config::GenerationTarget) -> bool {
+    pub fn is_disabled_for_model(
+        &self,
+        model: &crate::ast::Model,
+        target: crate::kotlin::config::GenerationTarget,
+    ) -> bool {
         let target_name = target.as_str();
         // Whitelist: if enabled is set, skip any target NOT in the list
         if !model.enabled_generators.is_empty() {
-            return !model.enabled_generators.iter().any(|e| e.eq_ignore_ascii_case(target_name));
+            return !model
+                .enabled_generators
+                .iter()
+                .any(|e| e.eq_ignore_ascii_case(target_name));
         }
         // Blacklist: skip if explicitly disabled
-        model.disabled_generators.iter().any(|d| d.eq_ignore_ascii_case(target_name))
+        model
+            .disabled_generators
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(target_name))
     }
 
     /// Generate code for a module schema
@@ -140,11 +161,12 @@ impl MobileGenerator {
         let old_manifest = load_manifest(&mfest_path);
 
         // Expand All → every concrete target
-        let mut targets_to_generate: Vec<GenerationTarget> = if targets.contains(&GenerationTarget::All) {
-            GenerationTarget::all_targets().to_vec()
-        } else {
-            targets.to_vec()
-        };
+        let mut targets_to_generate: Vec<GenerationTarget> =
+            if targets.contains(&GenerationTarget::All) {
+                GenerationTarget::all_targets().to_vec()
+            } else {
+                targets.to_vec()
+            };
 
         // Apply module-level generators.disabled from schema index config
         if let Some(ref gen_cfg) = schema.generators_config {
@@ -179,7 +201,9 @@ impl MobileGenerator {
             result.merge(application::generate_usecases(self, schema, output_dir)?);
         }
         if targets_to_generate.contains(&GenerationTarget::AppServices) {
-            result.merge(application::generate_app_services(self, schema, output_dir)?);
+            result.merge(application::generate_app_services(
+                self, schema, output_dir,
+            )?);
         }
         if targets_to_generate.contains(&GenerationTarget::Mappers) {
             result.merge(application::generate_mappers(self, schema, output_dir)?);
@@ -190,10 +214,14 @@ impl MobileGenerator {
 
         // Generate infrastructure layer
         if targets_to_generate.contains(&GenerationTarget::ApiClients) {
-            result.merge(infrastructure::generate_api_clients(self, schema, output_dir)?);
+            result.merge(infrastructure::generate_api_clients(
+                self, schema, output_dir,
+            )?);
         }
         if targets_to_generate.contains(&GenerationTarget::OfflineRepositories) {
-            result.merge(infrastructure::generate_offline_repositories(self, schema, output_dir)?);
+            result.merge(infrastructure::generate_offline_repositories(
+                self, schema, output_dir,
+            )?);
         }
         if targets_to_generate.contains(&GenerationTarget::Database) {
             result.merge(infrastructure::generate_database(self, schema, output_dir)?);
@@ -212,10 +240,14 @@ impl MobileGenerator {
 
         // Generate navigation and theme (module-level, not per-model)
         if targets_to_generate.contains(&GenerationTarget::Navigation) {
-            result.merge(presentation::navigation::generate_navigation(self, schema, output_dir)?);
+            result.merge(presentation::navigation::generate_navigation(
+                self, schema, output_dir,
+            )?);
         }
         if targets_to_generate.contains(&GenerationTarget::Theme) {
-            result.merge(presentation::theme::generate_theme(self, schema, output_dir)?);
+            result.merge(presentation::theme::generate_theme(
+                self, schema, output_dir,
+            )?);
         }
 
         // Generate test stubs (commonTest) — 3B ValidatorTest + ViewModelTest, 3C ApiClientTest
@@ -224,7 +256,8 @@ impl MobileGenerator {
         }
 
         // Cleanup stale files and persist updated manifest.
-        let (updated_manifest, stale_deleted) = cleanup_stale(&old_manifest, &result.generated_files);
+        let (updated_manifest, stale_deleted) =
+            cleanup_stale(&old_manifest, &result.generated_files);
         result.stale_deleted_files = stale_deleted;
         if let Err(e) = save_manifest(&mfest_path, &updated_manifest) {
             eprintln!("Warning: could not save mobilegen manifest: {}", e);
@@ -233,7 +266,8 @@ impl MobileGenerator {
         // Drop an ownership manifest at the generated-tree root so it's obvious
         // the whole `generated/` subtree is generator-owned and overwritten on
         // every regen. Hand-written code lives OUTSIDE this tree.
-        let codegen_yaml = resolve_output_path(output_dir, &self.package_name, "metaphor.codegen.yaml");
+        let codegen_yaml =
+            resolve_output_path(output_dir, &self.package_name, "metaphor.codegen.yaml");
         if let Some(parent) = codegen_yaml.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -270,7 +304,11 @@ user_owned: []
 // ─── Manifest helpers ────────────────────────────────────────────────────────
 
 /// Compute the resolved on-disk path for a generated file (mirrors write_generated_file logic).
-pub fn resolve_output_path(output_dir: &Path, package_name: &str, relative_path: &str) -> std::path::PathBuf {
+pub fn resolve_output_path(
+    output_dir: &Path,
+    package_name: &str,
+    relative_path: &str,
+) -> std::path::PathBuf {
     let package_path = package_name.replace('.', "/");
     let output_str = output_dir.to_string_lossy();
     let kotlin_path = if output_str.ends_with("kotlin") || output_str.contains("/kotlin/") {
@@ -412,7 +450,9 @@ pub fn write_generated_file(
         // e.g., ".../kotlin/com/bersihir" already contains the package
         let expected_package_suffix = format!("/kotlin/{}/", package_path);
         let expected_package_suffix_no_slash = format!("/kotlin/{}", package_path);
-        if output_str.contains(&expected_package_suffix) || output_str.ends_with(&expected_package_suffix_no_slash) {
+        if output_str.contains(&expected_package_suffix)
+            || output_str.ends_with(&expected_package_suffix_no_slash)
+        {
             // Output already includes kotlin and package directory
             relative_path.to_string()
         } else {

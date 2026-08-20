@@ -1,10 +1,10 @@
 //! Enum (sealed class) generator
 
+use crate::ast::{EnumDef, ModuleSchema};
 use crate::kotlin::error::{MobileGenError, Result};
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::{EnumDef, ModuleSchema};
 use crate::kotlin::lang::KotlinNaming;
 
 /// Generate sealed class enums for all enum definitions in a schema
@@ -56,7 +56,13 @@ typealias Metadata = Map<String, JsonElement?>\n",
         package = package_name
     );
     let relative_path = format!("{}/domain/enums/Metadata.kt", module_name);
-    match write_generated_file(output_dir, &generator.package_name, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        &generator.package_name,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -87,9 +93,7 @@ fn generate_enum(
                     let mut chars = s.chars();
                     match chars.next() {
                         None => String::new(),
-                        Some(first) => {
-                            first.to_uppercase().collect::<String>() + chars.as_str()
-                        }
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                     }
                 })
                 .collect::<Vec<_>>()
@@ -121,13 +125,15 @@ fn generate_enum(
         .map_err(|e| MobileGenError::template(format!("Enum template error: {}", e)))?;
 
     // Create output path: domain/{module}/enums/{EnumName}.kt
-    let relative_path = format!(
-        "{}/domain/enums/{}.kt",
-        module_name,
-        enum_def.name
-    );
+    let relative_path = format!("{}/domain/enums/{}.kt", module_name, enum_def.name);
 
-    match write_generated_file(output_dir, &generator.package_name, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        &generator.package_name,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }

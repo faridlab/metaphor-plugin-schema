@@ -122,10 +122,24 @@ mod tests {
         let generated = "export const x = 2;\n\n// <<< CUSTOM: schemas\n// END CUSTOM\n";
         let (_t, path) = tmp(existing);
         let out = preserve_custom_blocks(generated, &path);
-        assert!(out.contains("export const x = 2;"), "regenerated body must win outside the block");
-        assert!(out.contains("export const listSchema = x;"), "custom body preserved");
-        assert_eq!(out.matches("// <<< CUSTOM: schemas").count(), 1, "no duplicate marker");
-        assert_eq!(out.matches("export const listSchema").count(), 1, "no duplicate body");
+        assert!(
+            out.contains("export const x = 2;"),
+            "regenerated body must win outside the block"
+        );
+        assert!(
+            out.contains("export const listSchema = x;"),
+            "custom body preserved"
+        );
+        assert_eq!(
+            out.matches("// <<< CUSTOM: schemas").count(),
+            1,
+            "no duplicate marker"
+        );
+        assert_eq!(
+            out.matches("export const listSchema").count(),
+            1,
+            "no duplicate body"
+        );
         // placement: the block stays where the generator put it (end), not inside x.
         assert!(out.find("export const x = 2;").unwrap() < out.find("listSchema").unwrap());
     }
@@ -140,7 +154,10 @@ mod tests {
 
     #[test]
     fn missing_file_returns_generated() {
-        let out = preserve_custom_blocks("a\n// <<< CUSTOM\n// END CUSTOM\n", Path::new("/no/such/file.ts"));
+        let out = preserve_custom_blocks(
+            "a\n// <<< CUSTOM\n// END CUSTOM\n",
+            Path::new("/no/such/file.ts"),
+        );
         assert_eq!(out, "a\n// <<< CUSTOM\n// END CUSTOM\n");
     }
 }

@@ -77,11 +77,11 @@ pub mod utils;
 pub mod webgen;
 
 /// Re-export commonly used types
-pub use ast::{Model, Hook, Workflow};
-pub use git::{GitChangeDetector, ChangedSchema, ChangeSummary};
+pub use ast::{Hook, Model, Workflow};
+pub use git::{ChangeSummary, ChangedSchema, GitChangeDetector};
 pub use merge::{MergeStrategy, OpenApiMerger};
-pub use migration::{SchemaDiff, SchemaSnapshot, diff_schemas, generate_migration};
-pub use parser::{parse_model, parse_hook};
+pub use migration::{diff_schemas, generate_migration, SchemaDiff, SchemaSnapshot};
+pub use parser::{parse_hook, parse_model};
 
 /// Re-export audit metadata constant for use by other generators
 pub use parser::yaml_parser::AUDIT_METADATA_TYPE_NAME;

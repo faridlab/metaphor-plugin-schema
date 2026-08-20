@@ -314,6 +314,9 @@ mod tests {
     #[test]
     fn test_trigger_type_key() {
         assert_eq!(TriggerType::AfterCreate.as_key(), "after_create");
-        assert_eq!(TriggerType::OnEvent("UserCreated".to_string()).as_key(), "on_event_UserCreated");
+        assert_eq!(
+            TriggerType::OnEvent("UserCreated".to_string()).as_key(),
+            "on_event_UserCreated"
+        );
     }
 }

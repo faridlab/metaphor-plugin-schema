@@ -2,11 +2,11 @@
 //!
 //! This module handles loading and parsing of metaphor-webgen.yaml configuration files.
 
+use crate::webgen::config::Config;
+use crate::webgen::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use crate::webgen::config::Config;
-use crate::webgen::error::{Error, Result};
 
 /// Project-level configuration file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +49,13 @@ pub struct ModuleConfig {
 impl ProjectConfig {
     /// Load configuration from a file
     pub fn load_from_file(path: &PathBuf) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| Error::Parse(format!("Failed to read config file {}: {}", path.display(), e)))?;
+        let content = fs::read_to_string(path).map_err(|e| {
+            Error::Parse(format!(
+                "Failed to read config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         Self::parse(&content)
     }
@@ -166,6 +171,9 @@ modules:
         let config = project_config.module_config("sapiens");
 
         assert_eq!(config.module, "sapiens");
-        assert_eq!(config.output_dir, PathBuf::from("apps/webapp/src/modules/sapiens"));
+        assert_eq!(
+            config.output_dir,
+            PathBuf::from("apps/webapp/src/modules/sapiens")
+        );
     }
 }

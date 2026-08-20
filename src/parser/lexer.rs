@@ -403,7 +403,9 @@ mod tests {
         assert_eq!(tokens.len(), 2);
 
         assert!(matches!(tokens[0].kind, TokenKind::String(ref s) if s == "hello world"));
-        assert!(matches!(tokens[1].kind, TokenKind::SingleQuoteString(ref s) if s == "single quotes"));
+        assert!(
+            matches!(tokens[1].kind, TokenKind::SingleQuoteString(ref s) if s == "single quotes")
+        );
     }
 
     #[test]

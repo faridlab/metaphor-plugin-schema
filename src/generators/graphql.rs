@@ -189,10 +189,7 @@ impl GraphqlGenerator {
             }
             Some(PrimitiveType::DateTime) | Some(PrimitiveType::Timestamp) => {
                 if field.type_ref.is_optional() {
-                    format!(
-                        "{}: e.{}.map(|v| v.to_rfc3339())",
-                        name, name
-                    )
+                    format!("{}: e.{}.map(|v| v.to_rfc3339())", name, name)
                 } else {
                     format!("{}: e.{}.to_rfc3339()", name, name)
                 }
@@ -211,7 +208,9 @@ impl GraphqlGenerator {
                     format!("{}: e.{}.to_string()", name, name)
                 }
             }
-            Some(PrimitiveType::Decimal) | Some(PrimitiveType::Money) | Some(PrimitiveType::Percentage) => {
+            Some(PrimitiveType::Decimal)
+            | Some(PrimitiveType::Money)
+            | Some(PrimitiveType::Percentage) => {
                 if field.type_ref.is_optional() {
                     format!("{}: e.{}.map(|v| v.to_string())", name, name)
                 } else {
@@ -220,10 +219,7 @@ impl GraphqlGenerator {
             }
             Some(PrimitiveType::Json) => {
                 if field.type_ref.is_optional() {
-                    format!(
-                        "{}: e.{}.map(|v| async_graphql::Json(v))",
-                        name, name
-                    )
+                    format!("{}: e.{}.map(|v| async_graphql::Json(v))", name, name)
                 } else {
                     format!("{}: async_graphql::Json(e.{})", name, name)
                 }
@@ -232,7 +228,8 @@ impl GraphqlGenerator {
             None if matches!(field.type_ref, TypeRef::Custom(_)) => {
                 format!("{}: e.{}.to_string()", name, name)
             }
-            None if matches!(field.type_ref, TypeRef::Optional(ref inner) if matches!(**inner, TypeRef::Custom(_))) => {
+            None if matches!(field.type_ref, TypeRef::Optional(ref inner) if matches!(**inner, TypeRef::Custom(_))) =>
+            {
                 format!("{}: e.{}.map(|v| v.to_string())", name, name)
             }
             // Map types → Json wrapper
@@ -242,7 +239,8 @@ impl GraphqlGenerator {
                     name, name
                 )
             }
-            None if matches!(field.type_ref, TypeRef::Optional(ref inner) if matches!(**inner, TypeRef::Map { .. })) => {
+            None if matches!(field.type_ref, TypeRef::Optional(ref inner) if matches!(**inner, TypeRef::Map { .. })) =>
+            {
                 format!(
                     "{}: e.{}.as_ref().map(|v| async_graphql::Json(serde_json::to_value(v).unwrap_or_else(|e| {{ eprintln!(\"WARN: JSON serialization failed: {{}}\", e); serde_json::Value::Null }})))",
                     name, name
@@ -267,17 +265,25 @@ impl GraphqlGenerator {
     fn parse_target_type(p: &PrimitiveType) -> Option<&'static str> {
         match p {
             PrimitiveType::Uuid => Some("uuid::Uuid"),
-            PrimitiveType::DateTime | PrimitiveType::Timestamp => Some("chrono::DateTime<chrono::Utc>"),
+            PrimitiveType::DateTime | PrimitiveType::Timestamp => {
+                Some("chrono::DateTime<chrono::Utc>")
+            }
             PrimitiveType::Date => Some("chrono::NaiveDate"),
             PrimitiveType::Time => Some("chrono::NaiveTime"),
-            PrimitiveType::Decimal | PrimitiveType::Money | PrimitiveType::Percentage => Some("rust_decimal::Decimal"),
+            PrimitiveType::Decimal | PrimitiveType::Money | PrimitiveType::Percentage => {
+                Some("rust_decimal::Decimal")
+            }
             _ => None,
         }
     }
 
     /// Generate conversion expression from a variable holding the GraphQL input type
     /// to the entity's Rust type. Returns (expression, is_fallible).
-    fn input_to_entity_expr(var: &str, type_ref: &TypeRef, enum_map: &HashMap<String, String>) -> (String, bool) {
+    fn input_to_entity_expr(
+        var: &str,
+        type_ref: &TypeRef,
+        enum_map: &HashMap<String, String>,
+    ) -> (String, bool) {
         match type_ref {
             TypeRef::Primitive(p) => {
                 if let Some(target) = Self::parse_target_type(p) {
@@ -376,8 +382,13 @@ impl GraphqlGenerator {
                         let type_str = rest.trim_end_matches(',').trim();
                         // Extract the base type from Optional/Array wrappers
                         let base = type_str
-                            .strip_prefix("Option<").and_then(|s| s.strip_suffix('>'))
-                            .or_else(|| type_str.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')))
+                            .strip_prefix("Option<")
+                            .and_then(|s| s.strip_suffix('>'))
+                            .or_else(|| {
+                                type_str
+                                    .strip_prefix("Vec<")
+                                    .and_then(|s| s.strip_suffix('>'))
+                            })
                             .unwrap_or(type_str);
                         let pascal_schema = to_pascal_case(&schema_type);
                         if base != pascal_schema {
@@ -419,28 +430,50 @@ impl GraphqlGenerator {
         // Header
         writeln!(output, "//! {} GraphQL resolvers", model_name).unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+        writeln!(
+            output,
+            "//! Generated by metaphor-schema. Do not edit manually."
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Imports
         writeln!(output, "use std::sync::Arc;").unwrap();
         writeln!(output, "use async_graphql::*;").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "use crate::application::service::{}Service;", model_name).unwrap();
+        writeln!(
+            output,
+            "use crate::application::service::{}Service;",
+            model_name
+        )
+        .unwrap();
         writeln!(output, "use crate::domain::entity::*;").unwrap();
         writeln!(output).unwrap();
 
         // ============================================================
         // GraphQL Output Type
         // ============================================================
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output, "// GraphQL Output Type").unwrap();
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "/// {} GraphQL output type", model_name).unwrap();
         writeln!(output, "#[derive(Debug, Clone, SimpleObject)]").unwrap();
-        writeln!(output, "#[graphql(name = \"{}{}\")]", pascal_module, model_name).unwrap();
+        writeln!(
+            output,
+            "#[graphql(name = \"{}{}\")]",
+            pascal_module, model_name
+        )
+        .unwrap();
         writeln!(output, "pub struct {}Gql {{", model_name).unwrap();
 
         for field in &model.fields {
@@ -477,13 +510,26 @@ impl GraphqlGenerator {
         // ============================================================
         // Paginated Response Type
         // ============================================================
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output, "// Paginated Response").unwrap();
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "#[derive(Debug, SimpleObject)]").unwrap();
-        writeln!(output, "#[graphql(name = \"{}{}PaginatedResponse\")]", pascal_module, model_name).unwrap();
+        writeln!(
+            output,
+            "#[graphql(name = \"{}{}PaginatedResponse\")]",
+            pascal_module, model_name
+        )
+        .unwrap();
         writeln!(output, "pub struct {}PaginatedResponse {{", model_name).unwrap();
         writeln!(output, "    pub data: Vec<{}Gql>,", model_name).unwrap();
         writeln!(output, "    pub total: i64,").unwrap();
@@ -496,15 +542,28 @@ impl GraphqlGenerator {
         // ============================================================
         // Input Types
         // ============================================================
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output, "// Input Types").unwrap();
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Create input (non-system fields, respect required/optional)
         writeln!(output, "/// Input for creating a {}", model_name).unwrap();
         writeln!(output, "#[derive(Debug, InputObject)]").unwrap();
-        writeln!(output, "#[graphql(name = \"{}Create{}Input\")]", pascal_module, model_name).unwrap();
+        writeln!(
+            output,
+            "#[graphql(name = \"{}Create{}Input\")]",
+            pascal_module, model_name
+        )
+        .unwrap();
         writeln!(output, "pub struct Create{}Input {{", model_name).unwrap();
 
         for field in &model.fields {
@@ -523,9 +582,18 @@ impl GraphqlGenerator {
         // Update input (all fields wrapped in Option for partial update)
         writeln!(output, "/// Input for updating a {}", model_name).unwrap();
         writeln!(output, "///").unwrap();
-        writeln!(output, "/// All fields are optional. Only provided fields will be updated.").unwrap();
+        writeln!(
+            output,
+            "/// All fields are optional. Only provided fields will be updated."
+        )
+        .unwrap();
         writeln!(output, "#[derive(Debug, InputObject)]").unwrap();
-        writeln!(output, "#[graphql(name = \"{}Update{}Input\")]", pascal_module, model_name).unwrap();
+        writeln!(
+            output,
+            "#[graphql(name = \"{}Update{}Input\")]",
+            pascal_module, model_name
+        )
+        .unwrap();
         writeln!(output, "pub struct Update{}Input {{", model_name).unwrap();
 
         for field in &model.fields {
@@ -544,57 +612,101 @@ impl GraphqlGenerator {
         // ============================================================
         // GraphQL Resolver — Phase 1: type alias over GenericGraphQLResolver
         // ============================================================
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output, "// GraphQL Resolver (Phase 1 — type alias)").unwrap();
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "use backbone_core::GenericGraphQLResolver;").unwrap();
-        writeln!(output, "use crate::presentation::dto::{{Create{n}Dto, Update{n}Dto}};",
-            n = model_name).unwrap();
+        writeln!(
+            output,
+            "use crate::presentation::dto::{{Create{n}Dto, Update{n}Dto}};",
+            n = model_name
+        )
+        .unwrap();
         // Note: `{n}Service` is already imported earlier in this file (top imports).
         // Re-importing here would trigger E0252 "name defined multiple times".
         writeln!(output).unwrap();
 
         writeln!(output, "/// GraphQL resolver for {} entities.", model_name).unwrap();
         writeln!(output, "///").unwrap();
-        writeln!(output, "/// All standard CRUD queries and mutations are provided by `GenericGraphQLResolver`.").unwrap();
+        writeln!(
+            output,
+            "/// All standard CRUD queries and mutations are provided by `GenericGraphQLResolver`."
+        )
+        .unwrap();
         writeln!(output, "/// Entity-specific computed fields and custom mutations go in the `// <<< CUSTOM` zone.").unwrap();
         writeln!(output, "pub type {n}GraphQLResolver = GenericGraphQLResolver<{n}, Create{n}Dto, Update{n}Dto, {n}Service>;",
             n = model_name).unwrap();
         writeln!(output).unwrap();
 
         // Legacy Query/Mutation stubs for server.rs composition — still needed for MergedObject.
-        writeln!(output, "/// Query root for {} — delegates to GenericGraphQLResolver.", model_name).unwrap();
+        writeln!(
+            output,
+            "/// Query root for {} — delegates to GenericGraphQLResolver.",
+            model_name
+        )
+        .unwrap();
         writeln!(output, "#[derive(Default)]").unwrap();
         writeln!(output, "pub struct {}Query;", model_name).unwrap();
         writeln!(output).unwrap();
 
-        writeln!(output, "#[Object(name = \"{}{}Query\")]", pascal_module, model_name).unwrap();
+        writeln!(
+            output,
+            "#[Object(name = \"{}{}Query\")]",
+            pascal_module, model_name
+        )
+        .unwrap();
         writeln!(output, "impl {}Query {{", model_name).unwrap();
 
         // List query
         writeln!(output, "    /// List {} with pagination", model_plural).unwrap();
-        writeln!(
-            output,
-            "    async fn {}_{}(",
-            module_snake, model_plural
-        ).unwrap();
+        writeln!(output, "    async fn {}_{}(", module_snake, model_plural).unwrap();
         writeln!(output, "        &self,").unwrap();
         writeln!(output, "        ctx: &Context<'_>,").unwrap();
         writeln!(output, "        #[graphql(default = 1)] page: i32,").unwrap();
         writeln!(output, "        #[graphql(default = 20)] limit: i32,").unwrap();
-        writeln!(output, "    ) -> Result<{}PaginatedResponse> {{", model_name).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(
+            output,
+            "    ) -> Result<{}PaginatedResponse> {{",
+            model_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
         writeln!(output, "        let p = page.max(1) as u32;").unwrap();
         writeln!(output, "        let l = limit.clamp(1, 100) as u32;").unwrap();
-        writeln!(output, "        let (items, total) = service.list(p, l, Default::default()).await").unwrap();
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(
+            output,
+            "        let (items, total) = service.list(p, l, Default::default()).await"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        let total_pages = if l == 0 {{ 0 }} else {{ ((total as f64) / (l as f64)).ceil() as i32 }};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        Ok({}PaginatedResponse {{", model_name).unwrap();
-        writeln!(output, "            data: items.into_iter().map(Into::into).collect(),").unwrap();
+        writeln!(
+            output,
+            "            data: items.into_iter().map(Into::into).collect(),"
+        )
+        .unwrap();
         writeln!(output, "            total: total as i64,").unwrap();
         writeln!(output, "            page: p as i32,").unwrap();
         writeln!(output, "            limit: l as i32,").unwrap();
@@ -609,16 +721,40 @@ impl GraphqlGenerator {
             output,
             "    async fn {}_{}(&self, ctx: &Context<'_>, id: String) -> Result<Option<{}Gql>> {{",
             module_snake, model_snake, model_name
-        ).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
         if use_typed_id {
-            writeln!(output, "        let typed_id: {}Id = id.parse()", model_name).unwrap();
-            writeln!(output, "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;", model_name).unwrap();
-            writeln!(output, "        let entity = service.find_by_id(typed_id).await").unwrap();
+            writeln!(
+                output,
+                "        let typed_id: {}Id = id.parse()",
+                model_name
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;",
+                model_name
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "        let entity = service.find_by_id(typed_id).await"
+            )
+            .unwrap();
         } else {
             writeln!(output, "        let entity = service.find_by_id(&id).await").unwrap();
         }
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
         writeln!(output, "        Ok(entity.map(Into::into))").unwrap();
         writeln!(output, "    }}").unwrap();
 
@@ -628,16 +764,29 @@ impl GraphqlGenerator {
         // ============================================================
         // Mutation Resolvers
         // ============================================================
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output, "// Mutation Resolvers").unwrap();
-        writeln!(output, "// =================================================================").unwrap();
+        writeln!(
+            output,
+            "// ================================================================="
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "#[derive(Default)]").unwrap();
         writeln!(output, "pub struct {}Mutation;", model_name).unwrap();
         writeln!(output).unwrap();
 
-        writeln!(output, "#[Object(name = \"{}{}Mutation\")]", pascal_module, model_name).unwrap();
+        writeln!(
+            output,
+            "#[Object(name = \"{}{}Mutation\")]",
+            pascal_module, model_name
+        )
+        .unwrap();
         writeln!(output, "impl {}Mutation {{", model_name).unwrap();
 
         // Create mutation
@@ -646,12 +795,18 @@ impl GraphqlGenerator {
             output,
             "    async fn {}_create_{}(",
             module_snake, model_snake
-        ).unwrap();
+        )
+        .unwrap();
         writeln!(output, "        &self,").unwrap();
         writeln!(output, "        ctx: &Context<'_>,").unwrap();
         writeln!(output, "        input: Create{}Input,", model_name).unwrap();
         writeln!(output, "    ) -> Result<{}Gql> {{", model_name).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        let entity = {} {{", model_name).unwrap();
 
@@ -664,14 +819,16 @@ impl GraphqlGenerator {
                 }
                 "created_at" => {
                     if field.type_ref.is_optional() {
-                        writeln!(output, "            created_at: Some(chrono::Utc::now()),").unwrap();
+                        writeln!(output, "            created_at: Some(chrono::Utc::now()),")
+                            .unwrap();
                     } else {
                         writeln!(output, "            created_at: chrono::Utc::now(),").unwrap();
                     }
                 }
                 "updated_at" => {
                     if field.type_ref.is_optional() {
-                        writeln!(output, "            updated_at: Some(chrono::Utc::now()),").unwrap();
+                        writeln!(output, "            updated_at: Some(chrono::Utc::now()),")
+                            .unwrap();
                     } else {
                         writeln!(output, "            updated_at: chrono::Utc::now(),").unwrap();
                     }
@@ -712,7 +869,11 @@ impl GraphqlGenerator {
         writeln!(output, "        }};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        let created = service.create(entity).await").unwrap();
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
         writeln!(output, "        Ok(created.into())").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -723,22 +884,55 @@ impl GraphqlGenerator {
             output,
             "    async fn {}_update_{}(",
             module_snake, model_snake
-        ).unwrap();
+        )
+        .unwrap();
         writeln!(output, "        &self,").unwrap();
         writeln!(output, "        ctx: &Context<'_>,").unwrap();
         writeln!(output, "        id: String,").unwrap();
         writeln!(output, "        input: Update{}Input,", model_name).unwrap();
         writeln!(output, "    ) -> Result<{}Gql> {{", model_name).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
         if use_typed_id {
-            writeln!(output, "        let typed_id: {}Id = id.parse()", model_name).unwrap();
-            writeln!(output, "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;", model_name).unwrap();
-            writeln!(output, "        let mut entity = service.find_by_id(typed_id).await").unwrap();
+            writeln!(
+                output,
+                "        let typed_id: {}Id = id.parse()",
+                model_name
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;",
+                model_name
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "        let mut entity = service.find_by_id(typed_id).await"
+            )
+            .unwrap();
         } else {
-            writeln!(output, "        let mut entity = service.find_by_id(&id).await").unwrap();
+            writeln!(
+                output,
+                "        let mut entity = service.find_by_id(&id).await"
+            )
+            .unwrap();
         }
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?").unwrap();
-        writeln!(output, "            .ok_or_else(|| Error::new(format!(\"{} not found: {{}}\", id)))?;", model_name).unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            .ok_or_else(|| Error::new(format!(\"{} not found: {{}}\", id)))?;",
+            model_name
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Generate field update assignments
@@ -760,18 +954,36 @@ impl GraphqlGenerator {
                     output,
                     "        if let Some(val) = input.{} {{ entity.{} = {}; }}",
                     field_name, field_name, expr
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
 
         writeln!(output).unwrap();
         if use_typed_id {
-            writeln!(output, "        let updated = service.update(typed_id, entity).await").unwrap();
+            writeln!(
+                output,
+                "        let updated = service.update(typed_id, entity).await"
+            )
+            .unwrap();
         } else {
-            writeln!(output, "        let updated = service.update(&id, entity).await").unwrap();
+            writeln!(
+                output,
+                "        let updated = service.update(&id, entity).await"
+            )
+            .unwrap();
         }
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?").unwrap();
-        writeln!(output, "            .ok_or_else(|| Error::new(format!(\"{} not found: {{}}\", id)))?;", model_name).unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            .ok_or_else(|| Error::new(format!(\"{} not found: {{}}\", id)))?;",
+            model_name
+        )
+        .unwrap();
         writeln!(output, "        Ok(updated.into())").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -782,49 +994,128 @@ impl GraphqlGenerator {
             output,
             "    async fn {}_delete_{}(&self, ctx: &Context<'_>, id: String) -> Result<bool> {{",
             module_snake, model_snake
-        ).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
         // Framework exposes `soft_delete` and `hard_delete`, not bare `delete`.
         // Default to `soft_delete` so the `deleted_at` audit trail is preserved
         // (modules with `soft_delete: false` should override via a custom resolver).
         if use_typed_id {
-            writeln!(output, "        let typed_id: {}Id = id.parse()", model_name).unwrap();
-            writeln!(output, "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;", model_name).unwrap();
+            writeln!(
+                output,
+                "        let typed_id: {}Id = id.parse()",
+                model_name
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "            .map_err(|_| Error::new(format!(\"Invalid {} ID: {{}}\", id)))?;",
+                model_name
+            )
+            .unwrap();
             writeln!(output, "        service.soft_delete(typed_id).await").unwrap();
         } else {
             writeln!(output, "        service.soft_delete(&id).await").unwrap();
         }
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))").unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))"
+        )
+        .unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // ── Atomic batch mutations ──
         // Bulk soft delete by ids
-        writeln!(output, "    /// Bulk soft-delete {} by ids (atomic). Returns the number deleted.", model_plural).unwrap();
+        writeln!(
+            output,
+            "    /// Bulk soft-delete {} by ids (atomic). Returns the number deleted.",
+            model_plural
+        )
+        .unwrap();
         writeln!(output, "    async fn {}_bulk_delete_{}(&self, ctx: &Context<'_>, ids: Vec<String>) -> Result<i64> {{", module_snake, model_plural).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
-        writeln!(output, "        let n = service.bulk_soft_delete(ids).await").unwrap();
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let n = service.bulk_soft_delete(ids).await"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
         writeln!(output, "        Ok(n as i64)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Bulk restore by ids
-        writeln!(output, "    /// Bulk restore {} by ids (atomic). Returns the restored entities.", model_plural).unwrap();
+        writeln!(
+            output,
+            "    /// Bulk restore {} by ids (atomic). Returns the restored entities.",
+            model_plural
+        )
+        .unwrap();
         writeln!(output, "    async fn {}_bulk_restore_{}(&self, ctx: &Context<'_>, ids: Vec<String>) -> Result<Vec<{}Gql>> {{", module_snake, model_plural, model_name).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
-        writeln!(output, "        let restored = service.bulk_restore(ids).await").unwrap();
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
-        writeln!(output, "        Ok(restored.into_iter().map(Into::into).collect())").unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let restored = service.bulk_restore(ids).await"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        Ok(restored.into_iter().map(Into::into).collect())"
+        )
+        .unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Restore all soft-deleted
-        writeln!(output, "    /// Restore all soft-deleted {}. Returns the number restored.", model_plural).unwrap();
-        writeln!(output, "    async fn {}_restore_all_{}(&self, ctx: &Context<'_>) -> Result<i64> {{", module_snake, model_plural).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
+        writeln!(
+            output,
+            "    /// Restore all soft-deleted {}. Returns the number restored.",
+            model_plural
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    async fn {}_restore_all_{}(&self, ctx: &Context<'_>) -> Result<i64> {{",
+            module_snake, model_plural
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
         writeln!(output, "        let n = service.restore_all().await").unwrap();
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
         writeln!(output, "        Ok(n as i64)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -832,9 +1123,22 @@ impl GraphqlGenerator {
         // Bulk permanent delete by ids
         writeln!(output, "    /// Bulk permanently-delete {} from trash by ids (atomic). Returns the number deleted.", model_plural).unwrap();
         writeln!(output, "    async fn {}_bulk_permanent_delete_{}(&self, ctx: &Context<'_>, ids: Vec<String>) -> Result<i64> {{", module_snake, model_plural).unwrap();
-        writeln!(output, "        let service = ctx.data::<Arc<{}Service>>()?;", model_name).unwrap();
-        writeln!(output, "        let n = service.bulk_permanent_delete(ids).await").unwrap();
-        writeln!(output, "            .map_err(|e| Error::new(e.to_string()))?;").unwrap();
+        writeln!(
+            output,
+            "        let service = ctx.data::<Arc<{}Service>>()?;",
+            model_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        let n = service.bulk_permanent_delete(ids).await"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            .map_err(|e| Error::new(e.to_string()))?;"
+        )
+        .unwrap();
         writeln!(output, "        Ok(n as i64)").unwrap();
         writeln!(output, "    }}").unwrap();
 
@@ -849,7 +1153,11 @@ impl GraphqlGenerator {
 
         writeln!(output, "//! GraphQL resolvers").unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+        writeln!(
+            output,
+            "//! Generated by metaphor-schema. Do not edit manually."
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "pub mod server;").unwrap();
@@ -911,12 +1219,29 @@ impl GraphqlGenerator {
         let mutation_root = format!("{}{}Mutation", pascal_name, root_suffix);
 
         // Header
-        writeln!(output, "//! GraphQL schema composition for {} module", pascal_name).unwrap();
+        writeln!(
+            output,
+            "//! GraphQL schema composition for {} module",
+            pascal_name
+        )
+        .unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+        writeln!(
+            output,
+            "//! Generated by metaphor-schema. Do not edit manually."
+        )
+        .unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Provides both standalone `build_schema()` and composable `inject_services()`").unwrap();
-        writeln!(output, "//! methods. Use `inject_services()` to compose module GraphQL services into").unwrap();
+        writeln!(
+            output,
+            "//! Provides both standalone `build_schema()` and composable `inject_services()`"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "//! methods. Use `inject_services()` to compose module GraphQL services into"
+        )
+        .unwrap();
         writeln!(output, "//! a shared app-level schema.").unwrap();
         writeln!(output).unwrap();
 
@@ -958,7 +1283,9 @@ impl GraphqlGenerator {
                 writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
                 write!(output, "pub struct {}QueryGroup{}(", pascal_name, gi + 1).unwrap();
                 for (i, model) in chunk.iter().enumerate() {
-                    if i > 0 { write!(output, ", ").unwrap(); }
+                    if i > 0 {
+                        write!(output, ", ").unwrap();
+                    }
                     if i > 0 && i % 5 == 0 {
                         writeln!(output).unwrap();
                         write!(output, "    ").unwrap();
@@ -974,7 +1301,9 @@ impl GraphqlGenerator {
             writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
             write!(output, "pub struct {}(", query_root).unwrap();
             for gi in 0..chunks.len() {
-                if gi > 0 { write!(output, ", ").unwrap(); }
+                if gi > 0 {
+                    write!(output, ", ").unwrap();
+                }
                 write!(output, "{}QueryGroup{}", pascal_name, gi + 1).unwrap();
             }
             writeln!(output, ");").unwrap();
@@ -985,7 +1314,9 @@ impl GraphqlGenerator {
                 writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
                 write!(output, "pub struct {}MutationGroup{}(", pascal_name, gi + 1).unwrap();
                 for (i, model) in chunk.iter().enumerate() {
-                    if i > 0 { write!(output, ", ").unwrap(); }
+                    if i > 0 {
+                        write!(output, ", ").unwrap();
+                    }
                     if i > 0 && i % 5 == 0 {
                         writeln!(output).unwrap();
                         write!(output, "    ").unwrap();
@@ -997,11 +1328,18 @@ impl GraphqlGenerator {
             }
 
             // Top-level Mutation composing sub-groups
-            writeln!(output, "/// Merged Mutation root for {} module", pascal_name).unwrap();
+            writeln!(
+                output,
+                "/// Merged Mutation root for {} module",
+                pascal_name
+            )
+            .unwrap();
             writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
             write!(output, "pub struct {}(", mutation_root).unwrap();
             for gi in 0..chunks.len() {
-                if gi > 0 { write!(output, ", ").unwrap(); }
+                if gi > 0 {
+                    write!(output, ", ").unwrap();
+                }
                 write!(output, "{}MutationGroup{}", pascal_name, gi + 1).unwrap();
             }
             writeln!(output, ");").unwrap();
@@ -1012,17 +1350,26 @@ impl GraphqlGenerator {
             writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
             write!(output, "pub struct {}(", query_root).unwrap();
             for (i, model) in models.iter().enumerate() {
-                if i > 0 { write!(output, ", ").unwrap(); }
+                if i > 0 {
+                    write!(output, ", ").unwrap();
+                }
                 write!(output, "{}Query", model.name).unwrap();
             }
             writeln!(output, ");").unwrap();
             writeln!(output).unwrap();
 
-            writeln!(output, "/// Merged Mutation root for {} module", pascal_name).unwrap();
+            writeln!(
+                output,
+                "/// Merged Mutation root for {} module",
+                pascal_name
+            )
+            .unwrap();
             writeln!(output, "#[derive(MergedObject, Default)]").unwrap();
             write!(output, "pub struct {}(", mutation_root).unwrap();
             for (i, model) in models.iter().enumerate() {
-                if i > 0 { write!(output, ", ").unwrap(); }
+                if i > 0 {
+                    write!(output, ", ").unwrap();
+                }
                 write!(output, "{}Mutation", model.name).unwrap();
             }
             writeln!(output, ");").unwrap();
@@ -1030,9 +1377,18 @@ impl GraphqlGenerator {
         }
 
         // inject_services function
-        writeln!(output, "/// Inject all {} services into a schema builder", pascal_name).unwrap();
+        writeln!(
+            output,
+            "/// Inject all {} services into a schema builder",
+            pascal_name
+        )
+        .unwrap();
         writeln!(output, "///").unwrap();
-        writeln!(output, "/// Use this for app-level composition where multiple modules share one schema.").unwrap();
+        writeln!(
+            output,
+            "/// Use this for app-level composition where multiple modules share one schema."
+        )
+        .unwrap();
         writeln!(output, "pub fn inject_services<Q: ObjectType + 'static, M: ObjectType + 'static, S: SubscriptionType + 'static>(").unwrap();
         writeln!(output, "    builder: SchemaBuilder<Q, M, S>,").unwrap();
         writeln!(output, "    module: &crate::{}Module,", pascal_name).unwrap();
@@ -1053,11 +1409,24 @@ impl GraphqlGenerator {
         writeln!(output).unwrap();
 
         // build_schema function (standalone)
-        writeln!(output, "/// Build the GraphQL schema for {} module (standalone)", pascal_name).unwrap();
-        writeln!(output, "pub fn build_schema(module: &crate::{}Module) -> Schema<{}, {}, EmptySubscription> {{",
-            pascal_name, query_root, mutation_root).unwrap();
-        writeln!(output, "    let builder = Schema::build({}::default(), {}::default(), EmptySubscription);",
-            query_root, mutation_root).unwrap();
+        writeln!(
+            output,
+            "/// Build the GraphQL schema for {} module (standalone)",
+            pascal_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "pub fn build_schema(module: &crate::{}Module) -> Schema<{}, {}, EmptySubscription> {{",
+            pascal_name, query_root, mutation_root
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    let builder = Schema::build({}::default(), {}::default(), EmptySubscription);",
+            query_root, mutation_root
+        )
+        .unwrap();
         writeln!(output, "    inject_services(builder, module).finish()").unwrap();
         writeln!(output, "}}").unwrap();
 
@@ -1093,10 +1462,7 @@ impl Generator for GraphqlGenerator {
 
         // Generate server.rs
         let server = self.generate_server_rs(schema)?;
-        output.add_file(
-            PathBuf::from("src/presentation/graphql/server.rs"),
-            server,
-        );
+        output.add_file(PathBuf::from("src/presentation/graphql/server.rs"), server);
 
         Ok(output)
     }

@@ -5,13 +5,13 @@
 
 use std::fs;
 
+use super::type_mapping::TypeMapper;
+use super::DomainGenerationResult;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefinition, FieldType};
 use crate::webgen::ast::HookSchema;
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case, to_snake_case};
-use super::type_mapping::TypeMapper;
-use super::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case, to_snake_case};
 
 /// Generator for Zod entity schemas
 pub struct EntitySchemaGenerator {
@@ -22,7 +22,10 @@ pub struct EntitySchemaGenerator {
 impl EntitySchemaGenerator {
     /// Create a new entity schema generator
     pub fn new(config: Config, type_mapper: TypeMapper) -> Self {
-        Self { config, type_mapper }
+        Self {
+            config,
+            type_mapper,
+        }
     }
 
     /// Generate schema file for a single entity
@@ -35,8 +38,11 @@ impl EntitySchemaGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let entity_dir = self.config.output_dir
-            .join(&self.config.module).join("domain")
+        let entity_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("domain")
             .join("entity");
 
         if !self.config.dry_run {
@@ -119,7 +125,7 @@ const ipSchema = z.string().refine(
         };
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Validation Schemas
  *
  * Zod schemas for validating {entity_pascal} data.
@@ -257,7 +263,11 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             entity_camel = entity_camel,
             module = self.config.module,
             ip_schema = ip_schema,
-            enum_schemas = if enum_schemas.is_empty() { String::new() } else { format!("\n{}", enum_schemas) },
+            enum_schemas = if enum_schemas.is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", enum_schemas)
+            },
             base_fields = base_fields,
             create_fields = create_fields,
             update_fields = update_fields,
@@ -280,7 +290,9 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             if self.entity_uses_enum(entity, &enum_def.name) {
                 seen_enums.insert(enum_def.name.clone());
 
-                let variants: Vec<String> = enum_def.variants.iter()
+                let variants: Vec<String> = enum_def
+                    .variants
+                    .iter()
                     .map(|v| format!("'{}'", v.name))
                     .collect();
 
@@ -288,7 +300,7 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
                 // colliding with the standalone enum file (`{name}.ts`) at the
                 // barrel. Only the zod schema is exported (used by filters).
                 schemas.push(format!(
-r#"
+                    r#"
 /**
  * {name} enum values (local — canonical export lives in ./{name})
  */
@@ -309,33 +321,37 @@ const {name_camel}Schema = z.enum({name}Values);
     /// Check if entity uses a specific enum
     fn entity_uses_enum(&self, entity: &EntityDefinition, enum_name: &str) -> bool {
         entity.fields.iter().any(|f| {
-            matches!(&f.type_name, FieldType::Enum(name) if name == enum_name) ||
-            matches!(&f.type_name, FieldType::Custom(name) if name == enum_name) ||
-            matches!(&f.type_name, FieldType::Array(inner) if {
-                matches!(inner.as_ref(), FieldType::Enum(name) if name == enum_name) ||
-                matches!(inner.as_ref(), FieldType::Custom(name) if name == enum_name)
-            })
+            matches!(&f.type_name, FieldType::Enum(name) if name == enum_name)
+                || matches!(&f.type_name, FieldType::Custom(name) if name == enum_name)
+                || matches!(&f.type_name, FieldType::Array(inner) if {
+                    matches!(inner.as_ref(), FieldType::Enum(name) if name == enum_name) ||
+                    matches!(inner.as_ref(), FieldType::Custom(name) if name == enum_name)
+                })
         })
     }
 
     /// Check if entity has any IP address fields
     fn entity_uses_ip(&self, entity: &EntityDefinition) -> bool {
         entity.fields.iter().any(|f| {
-            matches!(&f.type_name, FieldType::Ip) ||
-            matches!(&f.type_name, FieldType::Optional(inner) if {
-                matches!(inner.as_ref(), FieldType::Ip)
-            }) ||
-            matches!(&f.type_name, FieldType::Array(inner) if {
-                matches!(inner.as_ref(), FieldType::Ip) ||
-                matches!(inner.as_ref(), FieldType::Optional(opt_inner) if {
-                    matches!(opt_inner.as_ref(), FieldType::Ip)
+            matches!(&f.type_name, FieldType::Ip)
+                || matches!(&f.type_name, FieldType::Optional(inner) if {
+                    matches!(inner.as_ref(), FieldType::Ip)
                 })
-            })
+                || matches!(&f.type_name, FieldType::Array(inner) if {
+                    matches!(inner.as_ref(), FieldType::Ip) ||
+                    matches!(inner.as_ref(), FieldType::Optional(opt_inner) if {
+                        matches!(opt_inner.as_ref(), FieldType::Ip)
+                    })
+                })
         })
     }
 
     /// Generate base field schemas (all fields)
-    fn generate_base_field_schemas(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_base_field_schemas(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let mut fields = Vec::new();
 
         for field in &entity.fields {
@@ -353,7 +369,11 @@ const {name_camel}Schema = z.enum({name}Values);
     }
 
     /// Generate create field schemas (exclude auto-generated)
-    fn generate_create_field_schemas(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_create_field_schemas(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let mut fields = Vec::new();
 
         for field in &entity.fields {
@@ -370,7 +390,11 @@ const {name_camel}Schema = z.enum({name}Values);
     }
 
     /// Generate update field schemas (all optional except those that shouldn't be)
-    fn generate_update_field_schemas(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_update_field_schemas(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let mut fields = Vec::new();
 
         for field in &entity.fields {
@@ -389,7 +413,11 @@ const {name_camel}Schema = z.enum({name}Values);
     }
 
     /// Generate filter field schemas for query parameters
-    fn generate_filter_field_schemas(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_filter_field_schemas(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let mut fields = Vec::new();
 
         for field in &entity.fields {
@@ -399,7 +427,10 @@ const {name_camel}Schema = z.enum({name}Values);
             }
 
             // Skip sensitive fields
-            if field.name.contains("password") || field.name.contains("hash") || field.name.contains("token") {
+            if field.name.contains("password")
+                || field.name.contains("hash")
+                || field.name.contains("token")
+            {
                 continue;
             }
 
@@ -412,7 +443,11 @@ const {name_camel}Schema = z.enum({name}Values);
 
     /// Generate filter schema for a specific field
     #[allow(clippy::only_used_in_recursion)]
-    fn generate_filter_schema_for_field(&self, field: &FieldDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_filter_schema_for_field(
+        &self,
+        field: &FieldDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         match &field.type_name {
             FieldType::String | FieldType::Email | FieldType::Url | FieldType::Phone | FieldType::Ip => {
                 "z.string().optional()".to_string()
@@ -483,12 +518,12 @@ const {name_camel}Schema = z.enum({name}Values);
     /// Check if field is a timestamp field
     fn is_timestamp_field(&self, field: &FieldDefinition) -> bool {
         let name = field.name.to_lowercase();
-        name == "created_at" ||
-        name == "createdat" ||
-        name == "updated_at" ||
-        name == "updatedat" ||
-        name == "deleted_at" ||
-        name == "deletedat"
+        name == "created_at"
+            || name == "createdat"
+            || name == "updated_at"
+            || name == "updatedat"
+            || name == "deleted_at"
+            || name == "deletedat"
     }
 
     /// Extract additional validations from hook schema
@@ -499,7 +534,7 @@ const {name_camel}Schema = z.enum({name}Values);
         // For now, generate a placeholder for custom validations
         // This can be enhanced to actually parse hook validations
         format!(
-r#"
+            r#"
 // ============================================================================
 // Business Rule Validations (from hooks)
 // ============================================================================

@@ -103,8 +103,7 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     // protected, stateless, ...) and only some of them are model-scoped, so
     // searching for known-bad names is strictly less noisy than parsing
     // every reference and trying to filter.
-    let mut forbidden: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut forbidden: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for model in &resolved.schema.models {
         if !model_skips_target(model, GenerationTarget::Handler) {
             continue;
@@ -150,7 +149,11 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
             if !root.exists() {
                 continue;
             }
-            for entry in WalkDir::new(&root).follow_links(false).into_iter().flatten() {
+            for entry in WalkDir::new(&root)
+                .follow_links(false)
+                .into_iter()
+                .flatten()
+            {
                 let path = entry.path();
                 if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("rs") {
                     continue;
@@ -205,10 +208,7 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         };
         println!("  {}:{} [{}]", f.file.bold(), f.line, owner_tag);
         println!("    {}", f.snippet.dimmed());
-        println!(
-            "    → model `{}` opts out of handler generation",
-            f.model
-        );
+        println!("    → model `{}` opts out of handler generation", f.model);
     }
 
     let user_owned_drift = findings.iter().filter(|f| f.owned_by_user).count();
@@ -249,8 +249,8 @@ struct Finding {
 pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob =
-            Glob::new(pattern).with_context(|| format!("Invalid glob in user_owned: {}", pattern))?;
+        let glob = Glob::new(pattern)
+            .with_context(|| format!("Invalid glob in user_owned: {}", pattern))?;
         builder.add(glob);
     }
     builder.build().context("compile user_owned glob set")

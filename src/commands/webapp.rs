@@ -19,7 +19,9 @@ use colored::Colorize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::commands::kotlin::{discover_external_modules, read_index_module_name, resolve_schema_dir};
+use crate::commands::kotlin::{
+    discover_external_modules, read_index_module_name, resolve_schema_dir,
+};
 use crate::commands::workspace::Workspace;
 use crate::webgen::{Config, Generator};
 
@@ -64,7 +66,9 @@ pub fn run(
         "missing <MODULE>: pass a module name, or use `--output <app-name>` inside a \
          Metaphor workspace to auto-resolve the app's modules.",
     )?;
-    generate_module(module, target, entity, output, schema_dir, alias, with_grpc, false, dry_run, force)
+    generate_module(
+        module, target, entity, output, schema_dir, alias, with_grpc, false, dry_run, force,
+    )
 }
 
 /// Workspace "app" mode: resolve the app output dir, the primary module, and
@@ -91,22 +95,19 @@ fn run_for_app(
     // Primary module: explicit arg, or auto-detect from CWD project.
     let primary: String = match module.filter(|s| !s.is_empty()) {
         Some(m) => m.to_string(),
-        None => ws
-            .project_for_cwd(cwd)
-            .map(|p| p.name.clone())
-            .context(
-                "no <MODULE> given and CWD is not inside a workspace project. Run from a \
+        None => ws.project_for_cwd(cwd).map(|p| p.name.clone()).context(
+            "no <MODULE> given and CWD is not inside a workspace project. Run from a \
                  module dir (e.g. apps/bersihir-service) or pass the module name explicitly.",
-            )?,
+        )?,
     };
 
     let primary_schema = resolve_schema_dir(cwd, Path::new("libs/modules"), &primary, Some(ws))
         .with_context(|| format!("could not locate schema for module '{}'", primary))?;
-    let primary_module =
-        read_index_module_name(&primary_schema).unwrap_or_else(|| primary.clone());
+    let primary_module = read_index_module_name(&primary_schema).unwrap_or_else(|| primary.clone());
 
     // Plan: primary + transitive deps (schema external_imports + metaphor.yaml depends_on).
-    let mut planned: Vec<(String, PathBuf)> = vec![(primary_module.clone(), primary_schema.clone())];
+    let mut planned: Vec<(String, PathBuf)> =
+        vec![(primary_module.clone(), primary_schema.clone())];
     let mut seen: BTreeSet<String> = BTreeSet::new();
     seen.insert(primary_module.clone());
     seen.insert(primary.clone());
@@ -204,15 +205,16 @@ fn generate_module(
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
-    println!(
-        "{}",
-        format!("  • module: {}", module).bright_cyan()
-    );
+    println!("{}", format!("  • module: {}", module).bright_cyan());
 
     // Build config. An empty/`"all"` target keeps the engine's own default
     // expansion; otherwise the requested comma-separated targets are used.
     let mut config = Config::new(module);
-    let effective_target = if target.trim().is_empty() { DEFAULT_TARGETS } else { target };
+    let effective_target = if target.trim().is_empty() {
+        DEFAULT_TARGETS
+    } else {
+        target
+    };
     if effective_target != "all" {
         config = config.with_targets_str(effective_target);
     }

@@ -83,7 +83,9 @@ impl ContractsGenerator {
         result.enum_count = enums.len();
 
         let find_hook = |entity_name: &str| -> Option<&HookSchema> {
-            hooks.iter().find(|h| h.model.eq_ignore_ascii_case(entity_name))
+            hooks
+                .iter()
+                .find(|h| h.model.eq_ignore_ascii_case(entity_name))
         };
 
         for entity in entities {
@@ -92,7 +94,10 @@ impl ContractsGenerator {
             // Entity types (+ enums used by the entity) — pure.
             self.merge(&mut result, self.entity_gen.generate(entity, enums)?);
             // Zod schemas + inferred DTOs — imports only `zod`.
-            self.merge(&mut result, self.schema_gen.generate(entity, enums, hook_schema)?);
+            self.merge(
+                &mut result,
+                self.schema_gen.generate(entity, enums, hook_schema)?,
+            );
             // Repository PORT interface — imports only the entity's own schema types.
             self.merge(&mut result, self.repository_gen.generate(entity)?);
             // Service PORT — pure interface + injectable accessor (no @tanstack).
@@ -224,7 +229,10 @@ user_owned:
     }
 
     fn module_dir(&self) -> PathBuf {
-        self.config.output_dir.join(&self.config.module).join("domain")
+        self.config
+            .output_dir
+            .join(&self.config.module)
+            .join("domain")
     }
 
     fn write_index(&self, path: PathBuf, content: String, result: &mut DomainGenerationResult) {

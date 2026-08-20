@@ -59,7 +59,8 @@ fn strip_yaml_comments(content: &str) -> String {
 
         // If we haven't found YAML content yet, check if this line is a YAML field
         if !found_yaml_content
-            && (is_yaml_field || (!trimmed.starts_with('#') && !trimmed.is_empty())) {
+            && (is_yaml_field || (!trimmed.starts_with('#') && !trimmed.is_empty()))
+        {
             found_yaml_content = true;
         }
 
@@ -106,13 +107,22 @@ pub fn is_hook_index_file(content: &str) -> bool {
 
     // Index files have 'module:' or 'imports:' at the top level
     // and do NOT have required 'name:' field
-    let has_module = processed_content.lines().any(|l| l.trim().starts_with("module:"));
-    let has_imports = processed_content.lines().any(|l| l.trim().starts_with("imports:"));
+    let has_module = processed_content
+        .lines()
+        .any(|l| l.trim().starts_with("module:"));
+    let has_imports = processed_content
+        .lines()
+        .any(|l| l.trim().starts_with("imports:"));
     let has_events = processed_content.lines().any(|l| l.trim() == "events:");
-    let has_scheduled_jobs = processed_content.lines().any(|l| l.trim() == "scheduled_jobs:");
+    let has_scheduled_jobs = processed_content
+        .lines()
+        .any(|l| l.trim() == "scheduled_jobs:");
 
-    (has_module || has_imports || has_events || has_scheduled_jobs) &&
-        !processed_content.lines().take(10).any(|l| l.trim().starts_with("name:"))
+    (has_module || has_imports || has_events || has_scheduled_jobs)
+        && !processed_content
+            .lines()
+            .take(10)
+            .any(|l| l.trim().starts_with("name:"))
 }
 
 /// Parse a hook YAML file that could be either standard hook or index
@@ -170,7 +180,11 @@ fn parse_list_format_state_machine(states_map: &serde_yaml::Mapping) -> Option<Y
     let values = parse_list_format_states(states_map);
     let transitions = parse_list_format_transitions(states_map);
 
-    Some(YamlStateMachine { field, values, transitions })
+    Some(YamlStateMachine {
+        field,
+        values,
+        transitions,
+    })
 }
 
 /// Convert `states.values:` sequence into `IndexMap<name, YamlState>`.
@@ -189,13 +203,28 @@ fn parse_list_format_states(states_map: &serde_yaml::Mapping) -> IndexMap<String
             Some(m) => m,
             None => continue,
         };
-        let name = match vm.get(&Value::String("name".into())).and_then(|v| v.as_str()) {
+        let name = match vm
+            .get(&Value::String("name".into()))
+            .and_then(|v| v.as_str())
+        {
             Some(n) => n.to_string(),
-            None => continue,   // `name:` is required — skip malformed entries
+            None => continue, // `name:` is required — skip malformed entries
         };
-        let initial = vm.get(&Value::String("initial".into())).and_then(|v| v.as_bool());
-        let final_state = vm.get(&Value::String("final".into())).and_then(|v| v.as_bool());
-        values.insert(name, YamlState::Full { initial, final_state, on_enter: vec![], on_exit: vec![] });
+        let initial = vm
+            .get(&Value::String("initial".into()))
+            .and_then(|v| v.as_bool());
+        let final_state = vm
+            .get(&Value::String("final".into()))
+            .and_then(|v| v.as_bool());
+        values.insert(
+            name,
+            YamlState::Full {
+                initial,
+                final_state,
+                on_enter: vec![],
+                on_exit: vec![],
+            },
+        );
     }
 
     values
@@ -203,7 +232,9 @@ fn parse_list_format_states(states_map: &serde_yaml::Mapping) -> IndexMap<String
 
 /// Convert `states.transitions:` sequence into `IndexMap<name, YamlTransition>`.
 /// Entries missing a `to:` field are skipped.
-fn parse_list_format_transitions(states_map: &serde_yaml::Mapping) -> IndexMap<String, YamlTransition> {
+fn parse_list_format_transitions(
+    states_map: &serde_yaml::Mapping,
+) -> IndexMap<String, YamlTransition> {
     use serde_yaml::Value;
 
     let mut transitions = IndexMap::new();
@@ -219,26 +250,45 @@ fn parse_list_format_transitions(states_map: &serde_yaml::Mapping) -> IndexMap<S
         };
         let to = match tm.get(&Value::String("to".into())).and_then(|v| v.as_str()) {
             Some(t) => t.to_string(),
-            None => continue,   // `to:` is required — skip malformed entries
+            None => continue, // `to:` is required — skip malformed entries
         };
         // Use `name:` as key when present; fall back to `event:` (common in bersihir hooks)
-        let key = tm.get(&Value::String("name".into()))
+        let key = tm
+            .get(&Value::String("name".into()))
             .or_else(|| tm.get(&Value::String("event".into())))
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_else(|| format!("to_{}", to));
-        let from_val = tm.get(&Value::String("from".into())).cloned()
+        let from_val = tm
+            .get(&Value::String("from".into()))
+            .cloned()
             .unwrap_or(Value::String("*".to_string()));
         let from = if let Some(seq) = from_val.as_sequence() {
-            YamlStateList::Multiple(seq.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            YamlStateList::Multiple(
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+            )
         } else {
             YamlStateList::Single(from_val.as_str().unwrap_or("*").to_string())
         };
         let roles = match tm.get(&Value::String("roles".into())) {
-            Some(Value::Sequence(seq)) => seq.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            Some(Value::Sequence(seq)) => seq
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
             _ => vec![],
         };
-        transitions.insert(key, YamlTransition { from, to, roles, condition: None, message: None });
+        transitions.insert(
+            key,
+            YamlTransition {
+                from,
+                to,
+                roles,
+                condition: None,
+                message: None,
+            },
+        );
     }
 
     transitions
@@ -321,15 +371,18 @@ fn parse_hook_yaml_list_format(content: &str) -> Option<YamlHookSchema> {
                         .and_then(|v| v.as_str())
                         .map(String::from);
 
-                    rules.insert(name.to_string(), YamlRule {
-                        when,
-                        condition,
-                        message,
-                        code,
-                        severity,
-                        enforcement,
-                        justification,
-                    });
+                    rules.insert(
+                        name.to_string(),
+                        YamlRule {
+                            when,
+                            condition,
+                            message,
+                            code,
+                            severity,
+                            enforcement,
+                            justification,
+                        },
+                    );
                 }
             }
         }
@@ -381,7 +434,9 @@ pub fn is_model_index_file(content: &str) -> bool {
     // Index files have 'module:', 'shared_types:', 'imports:', or 'config:'
     // and do NOT have 'models:' section at the top level
     let has_module = content.lines().any(|l| l.trim().starts_with("module:"));
-    let has_shared_types = content.lines().any(|l| l.trim().starts_with("shared_types:"));
+    let has_shared_types = content
+        .lines()
+        .any(|l| l.trim().starts_with("shared_types:"));
     let has_imports = content.lines().any(|l| l.trim().starts_with("imports:"));
     let has_config = content.lines().any(|l| l.trim() == "config:");
     let has_models = content.lines().any(|l| l.trim().starts_with("models:"));

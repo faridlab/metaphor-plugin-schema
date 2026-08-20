@@ -81,7 +81,11 @@ impl SafetyAnalysis {
         analysis
     }
 
-    fn classify_table_change(analysis: &mut SafetyAnalysis, table_name: &str, change: &TableChange) {
+    fn classify_table_change(
+        analysis: &mut SafetyAnalysis,
+        table_name: &str,
+        change: &TableChange,
+    ) {
         // Added columns
         for col in &change.columns_added {
             if col.nullable || col.default.is_some() {
@@ -188,10 +192,7 @@ impl SafetyAnalysis {
         }
 
         if !self.review_required.is_empty() {
-            lines.push(format!(
-                "  Review required: {}",
-                self.review_required.len()
-            ));
+            lines.push(format!("  Review required: {}", self.review_required.len()));
             for op in &self.review_required {
                 lines.push(format!("    ~ {}", op));
             }

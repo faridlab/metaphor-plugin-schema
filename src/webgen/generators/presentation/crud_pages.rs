@@ -8,8 +8,8 @@ use std::fs;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case, to_snake_case};
 use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case, to_snake_case};
 
 /// Generator for CRUD page components
 pub struct CrudPagesGenerator {
@@ -31,7 +31,9 @@ impl CrudPagesGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let pages_dir = self.config.output_dir
+        let pages_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("pages")
             .join(&self.config.module);
@@ -63,7 +65,7 @@ impl CrudPagesGenerator {
         // Additional imports for soft delete
         let soft_delete_imports = if has_soft_delete {
             format!(
-r#"  use{entity_pascal}TrashList,
+                r#"  use{entity_pascal}TrashList,
   use{entity_pascal}Restore,
   use{entity_pascal}PermanentDelete,"#,
                 entity_pascal = entity_pascal,
@@ -97,7 +99,7 @@ import { DangerZone, DeleteDialog } from '@webapp/presentation/components/detail
         };
 
         let mut content = format!(
-r#"/**
+            r#"/**
  * {entity_pascal} CRUD Pages
  *
  * List, Create, Edit, and Detail pages for {entity_pascal} entity.{trash_note}
@@ -267,10 +269,14 @@ export function {entity_pascal}ListPage() {{
             soft_delete_icons = soft_delete_icons,
             reusable_hooks_imports = reusable_hooks_imports,
             reusable_components_imports = reusable_components_imports,
-            trash_note = if has_soft_delete { "\n * Includes Trash page for soft-deleted entities." } else { "" },
+            trash_note = if has_soft_delete {
+                "\n * Includes Trash page for soft-deleted entities."
+            } else {
+                ""
+            },
             trash_menu_item = if has_soft_delete {
                 format!(
-r#"
+                    r#"
             moreMenuItems={{[
               {{
                 label: 'Trash',
@@ -803,10 +809,12 @@ export function {entity_pascal}TrashDetailPage() {{
         }
 
         // Add custom section
-        content.push_str(r#"
+        content.push_str(
+            r#"
 // <<< CUSTOM: Add custom page components here
 // END CUSTOM
-"#);
+"#,
+        );
 
         content
     }

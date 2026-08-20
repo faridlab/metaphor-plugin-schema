@@ -5,11 +5,11 @@
 //! - Application services
 //! - DTOs and mappers
 
-mod usecase;
 mod app_service;
+mod usecase;
 
-pub use usecase::UseCaseGenerator;
 pub use app_service::AppServiceGenerator;
+pub use usecase::UseCaseGenerator;
 
 use std::fs;
 
@@ -48,7 +48,9 @@ impl ApplicationGenerator {
 
         // Find hook for entity by name matching
         let find_hook = |entity_name: &str| -> Option<&HookSchema> {
-            hooks.iter().find(|h| h.model.eq_ignore_ascii_case(entity_name))
+            hooks
+                .iter()
+                .find(|h| h.model.eq_ignore_ascii_case(entity_name))
         };
 
         // Generate for each entity
@@ -82,8 +84,11 @@ impl ApplicationGenerator {
         entities: &[EntityDefinition],
         result: &mut DomainGenerationResult,
     ) -> Result<()> {
-        let base_dir = self.config.output_dir
-            .join(&self.config.module).join("application");
+        let base_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("application");
 
         if !self.config.dry_run {
             fs::create_dir_all(&base_dir).ok();
@@ -130,8 +135,11 @@ impl ApplicationGenerator {
 
     /// Collect export statements for existing mapper files in the mappers/ directory
     fn collect_mapper_exports(&self) -> Vec<String> {
-        let mappers_dir = self.config.output_dir
-            .join(&self.config.module).join("application")
+        let mappers_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("application")
             .join("mappers");
 
         let mut exports = Vec::new();
@@ -143,7 +151,8 @@ impl ApplicationGenerator {
                     .filter_map(|entry| {
                         let path = entry.path();
                         if path.extension().and_then(|e| e.to_str()) == Some("ts")
-                            && !path.file_name()
+                            && !path
+                                .file_name()
                                 .and_then(|f| f.to_str())
                                 .map(|f| f.starts_with("index"))
                                 .unwrap_or(false)

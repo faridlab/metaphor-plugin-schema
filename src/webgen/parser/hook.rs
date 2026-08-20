@@ -1,21 +1,19 @@
 //! Hook YAML parser for .hook.yaml files
 
-use std::fs;
-use std::path::Path;
-use crate::webgen::ast::state_machine::{
-    HookSchema, StateMachine, StateDefinition, TransitionDefinition,
-    ValidationRule, PermissionSet, PermissionRule, Trigger, TriggerType,
-    TriggerAction, ComputedField,
-    RawHookSchema, RawStates, RawValidationRule,
-    RawPermissionSet, RawPermission, RawTriggers, RawTriggerActions,
-};
 use crate::parser::yaml_parser::{
-    parse_hook_yaml_flexible, YamlHookParseResult,
-    YamlHookSchema, YamlStateMachine, YamlState, YamlStateList, YamlAction,
-    YamlPermissionAction,
+    parse_hook_yaml_flexible, YamlAction, YamlHookParseResult, YamlHookSchema,
+    YamlPermissionAction, YamlState, YamlStateList, YamlStateMachine,
+};
+use crate::webgen::ast::state_machine::{
+    ComputedField, HookSchema, PermissionRule, PermissionSet, RawHookSchema, RawPermission,
+    RawPermissionSet, RawStates, RawTriggerActions, RawTriggers, RawValidationRule,
+    StateDefinition, StateMachine, TransitionDefinition, Trigger, TriggerAction, TriggerType,
+    ValidationRule,
 };
 use crate::webgen::{Error, Result};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 /// Parser for hook.yaml files
 pub struct HookParser;
@@ -82,42 +80,89 @@ impl HookParser {
     /// webgen's `HookSchema`. Used for the list/sequence authoring form.
     fn from_canonical(hook: YamlHookSchema, path: &Path) -> HookSchema {
         let name = if hook.name.is_empty() {
-            path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string()
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string()
         } else {
             hook.name
         };
-        let model = if hook.model.is_empty() { name.clone() } else { hook.model };
+        let model = if hook.model.is_empty() {
+            name.clone()
+        } else {
+            hook.model
+        };
 
         let state_machine = hook.states.map(Self::convert_canonical_state_machine);
 
-        let rules = hook.rules.into_iter().map(|(rname, r)| ValidationRule {
-            name: rname,
-            when: r.when,
-            condition: r.condition,
-            message: r.message,
-            code: r.code,
-            severity: r.severity,
-        }).collect();
-
-        let permissions = hook.permissions.into_iter().map(|(role, p)| {
-            (role, PermissionSet {
-                allow: p.allow.into_iter().map(Self::convert_canonical_permission).collect(),
-                deny: p.deny.into_iter().map(Self::convert_canonical_permission).collect(),
+        let rules = hook
+            .rules
+            .into_iter()
+            .map(|(rname, r)| ValidationRule {
+                name: rname,
+                when: r.when,
+                condition: r.condition,
+                message: r.message,
+                code: r.code,
+                severity: r.severity,
             })
-        }).collect();
-
-        let triggers = hook.triggers.into_iter().map(|(tname, t)| Trigger {
-            trigger_type: Self::infer_trigger_type(&tname),
-            actions: t.actions.iter().map(|a| Self::parse_action_string(&Self::yaml_action_name(a))).collect(),
-            condition: t.condition,
-            name: tname,
-        }).collect();
-
-        let computed_fields = hook.computed.into_iter()
-            .map(|(cname, expr)| ComputedField { name: cname, expression: expr })
             .collect();
 
-        HookSchema { name, model, state_machine, rules, permissions, triggers, computed_fields }
+        let permissions = hook
+            .permissions
+            .into_iter()
+            .map(|(role, p)| {
+                (
+                    role,
+                    PermissionSet {
+                        allow: p
+                            .allow
+                            .into_iter()
+                            .map(Self::convert_canonical_permission)
+                            .collect(),
+                        deny: p
+                            .deny
+                            .into_iter()
+                            .map(Self::convert_canonical_permission)
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
+
+        let triggers = hook
+            .triggers
+            .into_iter()
+            .map(|(tname, t)| Trigger {
+                trigger_type: Self::infer_trigger_type(&tname),
+                actions: t
+                    .actions
+                    .iter()
+                    .map(|a| Self::parse_action_string(&Self::yaml_action_name(a)))
+                    .collect(),
+                condition: t.condition,
+                name: tname,
+            })
+            .collect();
+
+        let computed_fields = hook
+            .computed
+            .into_iter()
+            .map(|(cname, expr)| ComputedField {
+                name: cname,
+                expression: expr,
+            })
+            .collect();
+
+        HookSchema {
+            name,
+            model,
+            state_machine,
+            rules,
+            permissions,
+            triggers,
+            computed_fields,
+        }
     }
 
     fn convert_canonical_state_machine(sm: YamlStateMachine) -> StateMachine {
@@ -125,36 +170,52 @@ impl HookParser {
         for (sname, sval) in sm.values {
             let (is_initial, is_final, on_enter, on_exit) = match sval {
                 YamlState::Simple(_) => (false, false, Vec::new(), Vec::new()),
-                YamlState::Full { initial, final_state, on_enter, on_exit } => (
+                YamlState::Full {
+                    initial,
+                    final_state,
+                    on_enter,
+                    on_exit,
+                } => (
                     initial.unwrap_or(false),
                     final_state.unwrap_or(false),
                     on_enter.iter().map(Self::yaml_action_name).collect(),
                     on_exit.iter().map(Self::yaml_action_name).collect(),
                 ),
             };
-            states.insert(sname.clone(), StateDefinition {
-                name: sname,
-                is_initial,
-                is_final,
-                on_enter,
-                on_exit,
-            });
+            states.insert(
+                sname.clone(),
+                StateDefinition {
+                    name: sname,
+                    is_initial,
+                    is_final,
+                    on_enter,
+                    on_exit,
+                },
+            );
         }
 
-        let transitions = sm.transitions.into_iter().map(|(tname, t)| TransitionDefinition {
-            name: tname,
-            from_state: match t.from {
-                YamlStateList::Single(s) => s,
-                YamlStateList::Multiple(v) => v.join(","),
-            },
-            to_state: t.to,
-            roles: t.roles,
-            condition: t.condition,
-            message: t.message,
-            on_transition: Vec::new(),
-        }).collect();
+        let transitions = sm
+            .transitions
+            .into_iter()
+            .map(|(tname, t)| TransitionDefinition {
+                name: tname,
+                from_state: match t.from {
+                    YamlStateList::Single(s) => s,
+                    YamlStateList::Multiple(v) => v.join(","),
+                },
+                to_state: t.to,
+                roles: t.roles,
+                condition: t.condition,
+                message: t.message,
+                on_transition: Vec::new(),
+            })
+            .collect();
 
-        StateMachine { state_field: sm.field, states, transitions }
+        StateMachine {
+            state_field: sm.field,
+            states,
+            transitions,
+        }
     }
 
     fn convert_canonical_permission(p: YamlPermissionAction) -> PermissionRule {
@@ -165,7 +226,12 @@ impl HookParser {
                 only: None,
                 except: None,
             },
-            YamlPermissionAction::Full { action, only, except, condition } => PermissionRule {
+            YamlPermissionAction::Full {
+                action,
+                only,
+                except,
+                condition,
+            } => PermissionRule {
                 action,
                 condition,
                 only,
@@ -190,13 +256,16 @@ impl HookParser {
 
         // Parse states
         for (name, value) in raw.values {
-            states.insert(name.clone(), StateDefinition {
-                name: name.clone(),
-                is_initial: value.initial,
-                is_final: value.r#final,
-                on_enter: value.on_enter.unwrap_or_default(),
-                on_exit: value.on_exit.unwrap_or_default(),
-            });
+            states.insert(
+                name.clone(),
+                StateDefinition {
+                    name: name.clone(),
+                    is_initial: value.initial,
+                    is_final: value.r#final,
+                    on_enter: value.on_enter.unwrap_or_default(),
+                    on_exit: value.on_exit.unwrap_or_default(),
+                },
+            );
         }
 
         // Parse transitions
@@ -222,27 +291,49 @@ impl HookParser {
     }
 
     /// Parse validation rules
-    fn parse_validation_rules(rules: &Option<HashMap<String, RawValidationRule>>) -> Vec<ValidationRule> {
-        rules.as_ref()
-            .map(|map| map.iter().map(|(name, r)| ValidationRule {
-                name: name.clone(),
-                when: r.when.clone(),
-                condition: r.condition.clone(),
-                message: r.message.clone(),
-                code: r.code.clone(),
-                severity: r.severity.clone(),
-            }).collect())
+    fn parse_validation_rules(
+        rules: &Option<HashMap<String, RawValidationRule>>,
+    ) -> Vec<ValidationRule> {
+        rules
+            .as_ref()
+            .map(|map| {
+                map.iter()
+                    .map(|(name, r)| ValidationRule {
+                        name: name.clone(),
+                        when: r.when.clone(),
+                        condition: r.condition.clone(),
+                        message: r.message.clone(),
+                        code: r.code.clone(),
+                        severity: r.severity.clone(),
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     /// Parse permissions
-    fn parse_permissions(permissions: &Option<HashMap<String, RawPermissionSet>>) -> HashMap<String, PermissionSet> {
-        permissions.as_ref()
-            .map(|map| map.iter().map(|(role, set)| {
-                let allow = set.allow.iter().map(|p| RawPermission::clone(p).into()).collect();
-                let deny = set.deny.iter().map(|p| RawPermission::clone(p).into()).collect();
-                (role.clone(), PermissionSet { allow, deny })
-            }).collect())
+    fn parse_permissions(
+        permissions: &Option<HashMap<String, RawPermissionSet>>,
+    ) -> HashMap<String, PermissionSet> {
+        permissions
+            .as_ref()
+            .map(|map| {
+                map.iter()
+                    .map(|(role, set)| {
+                        let allow = set
+                            .allow
+                            .iter()
+                            .map(|p| RawPermission::clone(p).into())
+                            .collect();
+                        let deny = set
+                            .deny
+                            .iter()
+                            .map(|p| RawPermission::clone(p).into())
+                            .collect();
+                        (role.clone(), PermissionSet { allow, deny })
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -295,8 +386,14 @@ impl HookParser {
     }
 
     /// Parse trigger actions from raw trigger actions
-    fn parse_trigger_actions(trigger_type: TriggerType, raw: &RawTriggerActions, name: &str) -> Trigger {
-        let actions = raw.actions.iter()
+    fn parse_trigger_actions(
+        trigger_type: TriggerType,
+        raw: &RawTriggerActions,
+        name: &str,
+    ) -> Trigger {
+        let actions = raw
+            .actions
+            .iter()
             .map(|a| Self::parse_action_string(&a.name()))
             .collect();
 
@@ -322,7 +419,9 @@ impl HookParser {
             // Format: "function(...)"
             let action_type = action_str[..paren_pos].trim().to_string();
             let params_str = if action_str.ends_with(')') {
-                action_str[paren_pos + 1..action_str.len() - 1].trim().to_string()
+                action_str[paren_pos + 1..action_str.len() - 1]
+                    .trim()
+                    .to_string()
             } else {
                 String::new()
             };
@@ -353,11 +452,16 @@ impl HookParser {
 
     /// Parse computed fields
     fn parse_computed_fields(computed: &Option<HashMap<String, String>>) -> Vec<ComputedField> {
-        computed.as_ref()
-            .map(|map| map.iter().map(|(name, expr)| ComputedField {
-                name: name.clone(),
-                expression: expr.clone(),
-            }).collect())
+        computed
+            .as_ref()
+            .map(|map| {
+                map.iter()
+                    .map(|(name, expr)| ComputedField {
+                        name: name.clone(),
+                        expression: expr.clone(),
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }

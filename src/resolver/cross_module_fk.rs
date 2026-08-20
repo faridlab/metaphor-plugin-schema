@@ -57,7 +57,10 @@ pub type EntityRegistry = HashMap<String, HashSet<String>>;
 ///   skipping them would let a phantom on a shared type slip through.
 ///
 /// Intra-module refs (`Entity.id`, two parts) are skipped — the single-module validator owns those.
-pub fn collect_cross_module_fk_refs(module_name: &str, schema: &ModuleSchema) -> Vec<CrossModuleFkRef> {
+pub fn collect_cross_module_fk_refs(
+    module_name: &str,
+    schema: &ModuleSchema,
+) -> Vec<CrossModuleFkRef> {
     let mut refs = Vec::new();
 
     // 1. Direct model fields (parsed AST attributes).
@@ -124,7 +127,10 @@ fn foreign_key_target_of(attr: &str) -> Option<String> {
 ///
 /// Returns one error string per reference whose target module is unknown or whose target entity does
 /// not exist in that module. An empty result means every cross-module FK resolves.
-pub fn validate_cross_module_fks(registry: &EntityRegistry, refs: &[CrossModuleFkRef]) -> Vec<String> {
+pub fn validate_cross_module_fks(
+    registry: &EntityRegistry,
+    refs: &[CrossModuleFkRef],
+) -> Vec<String> {
     let mut errors = Vec::new();
     for r in refs {
         match registry.get(&r.target_module) {
@@ -175,8 +181,16 @@ mod tests {
         let refs = vec![fk("sapiens", "corpus", "Organization")];
         let errs = validate_cross_module_fks(&reg, &refs);
         assert_eq!(errs.len(), 1);
-        assert!(errs[0].contains("has no entity 'Organization'"), "got: {}", errs[0]);
-        assert!(errs[0].contains("phantom"), "should name it a phantom: {}", errs[0]);
+        assert!(
+            errs[0].contains("has no entity 'Organization'"),
+            "got: {}",
+            errs[0]
+        );
+        assert!(
+            errs[0].contains("phantom"),
+            "should name it a phantom: {}",
+            errs[0]
+        );
     }
 
     #[test]
@@ -232,9 +246,15 @@ mod tests {
         let refs = collect_cross_module_fk_refs("selling", &schema);
         // Both shared-type FKs are collected.
         assert_eq!(refs.len(), 2, "shared-type FKs must be collected: {refs:?}");
-        assert!(refs.iter().any(|r| r.target_module == "sapiens" && r.target_entity == "User"));
-        assert!(refs.iter().any(|r| r.target_module == "ghost" && r.target_entity == "Reviewer"));
-        assert!(refs.iter().all(|r| r.from_model.contains("shared type Actors")));
+        assert!(refs
+            .iter()
+            .any(|r| r.target_module == "sapiens" && r.target_entity == "User"));
+        assert!(refs
+            .iter()
+            .any(|r| r.target_module == "ghost" && r.target_entity == "Reviewer"));
+        assert!(refs
+            .iter()
+            .all(|r| r.from_model.contains("shared type Actors")));
 
         // The phantom one fails validation; the sapiens one resolves.
         let reg = registry(&[("sapiens", &["User"])]);

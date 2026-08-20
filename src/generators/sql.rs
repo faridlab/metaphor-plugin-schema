@@ -4,7 +4,10 @@
 //! Supports both single-file and split-by-model output.
 
 use super::{GenerateError, GeneratedOutput, Generator};
-use crate::ast::{CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, PrimitiveType, RelationType, TypeRef};
+use crate::ast::{
+    CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, PrimitiveType,
+    RelationType, TypeRef,
+};
 use crate::resolver::ResolvedSchema;
 use crate::utils::{pluralize, to_snake_case};
 use std::fmt::Write;
@@ -16,8 +19,7 @@ use std::path::PathBuf;
 
 /// Default JSONB value for audit metadata fields.
 /// Contains all audit tracking fields initialized to null.
-const AUDIT_METADATA_DEFAULT_JSON: &str =
-    r#"'{"created_at":null,"updated_at":null,"deleted_at":null,"created_by":null,"updated_by":null,"deleted_by":null}'::jsonb"#;
+const AUDIT_METADATA_DEFAULT_JSON: &str = r#"'{"created_at":null,"updated_at":null,"deleted_at":null,"created_by":null,"updated_by":null,"deleted_by":null}'::jsonb"#;
 
 /// Postgres *reserved* words (the ones that cannot be identifiers at all,
 /// Appendix C) that plausibly collide with snake_case field names. A field
@@ -27,18 +29,101 @@ const AUDIT_METADATA_DEFAULT_JSON: &str =
 /// Quote exactly these, never everything, so regenerated migrations stay
 /// byte-identical for every module whose fields are not reserved words.
 const PG_RESERVED_IDENTIFIERS: &[&str] = &[
-    "all", "and", "any", "array", "as", "asc", "authorization", "binary", "both", "case",
-    "cast", "check", "collate", "column", "concurrently", "constraint", "create", "cross",
-    "current_catalog", "current_date", "current_role", "current_schema", "current_time",
-    "current_timestamp", "current_user", "default", "deferrable", "desc", "distinct", "do",
-    "else", "end", "except", "false", "fetch", "for", "foreign", "freeze", "from", "full",
-    "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect", "into",
-    "is", "isnull", "join", "lateral", "leading", "left", "like", "limit", "localtime",
-    "localtimestamp", "natural", "not", "notnull", "null", "offset", "on", "only", "or",
-    "order", "outer", "overlaps", "placing", "primary", "references", "returning", "right",
-    "select", "session_user", "similar", "some", "symmetric", "table", "then", "to",
-    "trailing", "true", "union", "unique", "user", "using", "variadic", "verbose", "when",
-    "where", "window", "with",
+    "all",
+    "and",
+    "any",
+    "array",
+    "as",
+    "asc",
+    "authorization",
+    "binary",
+    "both",
+    "case",
+    "cast",
+    "check",
+    "collate",
+    "column",
+    "concurrently",
+    "constraint",
+    "create",
+    "cross",
+    "current_catalog",
+    "current_date",
+    "current_role",
+    "current_schema",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "default",
+    "deferrable",
+    "desc",
+    "distinct",
+    "do",
+    "else",
+    "end",
+    "except",
+    "false",
+    "fetch",
+    "for",
+    "foreign",
+    "freeze",
+    "from",
+    "full",
+    "grant",
+    "group",
+    "having",
+    "ilike",
+    "in",
+    "initially",
+    "inner",
+    "intersect",
+    "into",
+    "is",
+    "isnull",
+    "join",
+    "lateral",
+    "leading",
+    "left",
+    "like",
+    "limit",
+    "localtime",
+    "localtimestamp",
+    "natural",
+    "not",
+    "notnull",
+    "null",
+    "offset",
+    "on",
+    "only",
+    "or",
+    "order",
+    "outer",
+    "overlaps",
+    "placing",
+    "primary",
+    "references",
+    "returning",
+    "right",
+    "select",
+    "session_user",
+    "similar",
+    "some",
+    "symmetric",
+    "table",
+    "then",
+    "to",
+    "trailing",
+    "true",
+    "union",
+    "unique",
+    "user",
+    "using",
+    "variadic",
+    "verbose",
+    "when",
+    "where",
+    "window",
+    "with",
 ];
 
 /// Quote a column identifier iff it is a Postgres reserved word.
@@ -152,16 +237,36 @@ pub fn company_rls_sql(
     let mut up = String::new();
     writeln!(up, "ALTER TABLE {} ENABLE ROW LEVEL SECURITY;", table_ref).unwrap();
     writeln!(up, "ALTER TABLE {} FORCE  ROW LEVEL SECURITY;", table_ref).unwrap();
-    writeln!(up, "DROP POLICY IF EXISTS {} ON {};", policy_name, table_ref).unwrap();
+    writeln!(
+        up,
+        "DROP POLICY IF EXISTS {} ON {};",
+        policy_name, table_ref
+    )
+    .unwrap();
     writeln!(up, "CREATE POLICY {} ON {}", policy_name, table_ref).unwrap();
     writeln!(up, "    FOR ALL").unwrap();
     writeln!(up, "    USING      ({predicate})").unwrap();
     writeln!(up, "    WITH CHECK ({predicate});").unwrap();
 
     let mut down = String::new();
-    writeln!(down, "DROP POLICY IF EXISTS {} ON {};", policy_name, table_ref).unwrap();
-    writeln!(down, "ALTER TABLE {} NO FORCE ROW LEVEL SECURITY;", table_ref).unwrap();
-    writeln!(down, "ALTER TABLE {} DISABLE ROW LEVEL SECURITY;", table_ref).unwrap();
+    writeln!(
+        down,
+        "DROP POLICY IF EXISTS {} ON {};",
+        policy_name, table_ref
+    )
+    .unwrap();
+    writeln!(
+        down,
+        "ALTER TABLE {} NO FORCE ROW LEVEL SECURITY;",
+        table_ref
+    )
+    .unwrap();
+    writeln!(
+        down,
+        "ALTER TABLE {} DISABLE ROW LEVEL SECURITY;",
+        table_ref
+    )
+    .unwrap();
     (up, down)
 }
 
@@ -176,10 +281,26 @@ pub fn company_rls_sql(
 /// once per migration, before any `shared_tree` policy.
 pub fn company_subtree_helper_sql() -> (String, String) {
     let mut up = String::new();
-    writeln!(up, "-- Company subtree helper (ADR-0014 shared_tree fence).").unwrap();
-    writeln!(up, "-- Root-inclusive closure over organization.companies(parent_company_id);").unwrap();
-    writeln!(up, "-- company_subtree(NULL) returns no rows (fail-closed).").unwrap();
-    writeln!(up, "CREATE OR REPLACE FUNCTION organization.company_subtree(root uuid)").unwrap();
+    writeln!(
+        up,
+        "-- Company subtree helper (ADR-0014 shared_tree fence)."
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- Root-inclusive closure over organization.companies(parent_company_id);"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- company_subtree(NULL) returns no rows (fail-closed)."
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "CREATE OR REPLACE FUNCTION organization.company_subtree(root uuid)"
+    )
+    .unwrap();
     writeln!(up, "RETURNS TABLE (company_id uuid)").unwrap();
     writeln!(up, "LANGUAGE sql").unwrap();
     writeln!(up, "STABLE").unwrap();
@@ -278,13 +399,16 @@ impl SqlGenerator {
 
         // Create implicit indexes for unique fields, but skip if an explicit
         // unique index already covers the same single field (avoids duplicates)
-        let explicit_unique_fields: std::collections::HashSet<&str> = model.indexes.iter()
+        let explicit_unique_fields: std::collections::HashSet<&str> = model
+            .indexes
+            .iter()
             .filter(|idx| matches!(idx.index_type, IndexType::Unique) && idx.fields.len() == 1)
             .map(|idx| idx.fields[0].as_str())
             .collect();
 
         for field in &model.fields {
-            if field.is_unique() && !field.is_primary_key()
+            if field.is_unique()
+                && !field.is_primary_key()
                 && !explicit_unique_fields.contains(field.name.as_str())
             {
                 writeln!(output).unwrap();
@@ -416,7 +540,10 @@ impl SqlGenerator {
                  -- via `set_config('app.company_id', <uuid>, true)`; an unset var sees zero rows.\n\n"
             ),
         );
-        down.insert_str(0, &format!("-- Reverse the company RLS fence for {qualified}\n"));
+        down.insert_str(
+            0,
+            &format!("-- Reverse the company RLS fence for {qualified}\n"),
+        );
         Some((up, down))
     }
 
@@ -454,7 +581,9 @@ impl SqlGenerator {
             if let Some(default) = field.default_value() {
                 let default_sql = self.default_to_sql(default, &field.type_ref);
                 constraints.push(format!("DEFAULT {}", default_sql));
-            } else if field.has_attribute("id") && matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::Uuid)) {
+            } else if field.has_attribute("id")
+                && matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::Uuid))
+            {
                 constraints.push("DEFAULT gen_random_uuid()".to_string());
             }
         }
@@ -488,7 +617,12 @@ impl SqlGenerator {
             format!(" {}", constraints.join(" "))
         };
 
-        Ok(format!("    {} {}{}", quote_ident(&field.name), sql_type, constraint_str))
+        Ok(format!(
+            "    {} {}{}",
+            quote_ident(&field.name),
+            sql_type,
+            constraint_str
+        ))
     }
 
     /// Generate JSONB CHECK constraint for type validation
@@ -504,7 +638,10 @@ impl SqlGenerator {
 
         // Generate checks for required fields
         for (name, field_schema) in obj {
-            let optional = field_schema.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
+            let optional = field_schema
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             if !optional {
                 // Required field must be present
@@ -521,7 +658,12 @@ impl SqlGenerator {
 
     /// Generate audit metadata triggers for automatic timestamp management
     /// Creates triggers that automatically set created_at and updated_at in the metadata JSONB field
-    fn generate_audit_triggers(&self, output: &mut String, model: &Model, field: &Field) -> Result<(), GenerateError> {
+    fn generate_audit_triggers(
+        &self,
+        output: &mut String,
+        model: &Model,
+        field: &Field,
+    ) -> Result<(), GenerateError> {
         let field_name = &field.name;
         // Table reference is schema-qualified; the trigger function is qualified
         // into the table's schema so two same-named tables in different schemas
@@ -533,20 +675,54 @@ impl SqlGenerator {
         let insert_trigger_name = format!("{}_insert_audit", bare);
         let update_trigger_name = format!("{}_update_audit", bare);
 
-        writeln!(output, "-- Triggers for automatic {} timestamp management", field_name).unwrap();
-        writeln!(output, "-- Automatically sets created_at on INSERT and updated_at on UPDATE").unwrap();
+        writeln!(
+            output,
+            "-- Triggers for automatic {} timestamp management",
+            field_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "-- Automatically sets created_at on INSERT and updated_at on UPDATE"
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Create trigger function for INSERT (sets created_at)
-        writeln!(output, "-- Function to set {}->'created_at' on INSERT", field_name).unwrap();
-        writeln!(output, "CREATE OR REPLACE FUNCTION {}() RETURNS trigger AS $$", trigger_func_name).unwrap();
+        writeln!(
+            output,
+            "-- Function to set {}->'created_at' on INSERT",
+            field_name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "CREATE OR REPLACE FUNCTION {}() RETURNS trigger AS $$",
+            trigger_func_name
+        )
+        .unwrap();
         writeln!(output, "BEGIN").unwrap();
         writeln!(output, "    IF TG_OP = 'INSERT' THEN").unwrap();
         let q = quote_ident(field_name);
-        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{created_at}}', to_jsonb(NOW()));", q, q).unwrap();
-        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));", q, q).unwrap();
+        writeln!(
+            output,
+            "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{created_at}}', to_jsonb(NOW()));",
+            q, q
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));",
+            q, q
+        )
+        .unwrap();
         writeln!(output, "    ELSIF TG_OP = 'UPDATE' THEN").unwrap();
-        writeln!(output, "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));", q, q).unwrap();
+        writeln!(
+            output,
+            "        NEW.{} = jsonb_set(NEW.{}::jsonb, '{{updated_at}}', to_jsonb(NOW()));",
+            q, q
+        )
+        .unwrap();
         writeln!(output, "    END IF;").unwrap();
         writeln!(output, "    RETURN NEW;").unwrap();
         writeln!(output, "END;").unwrap();
@@ -555,21 +731,57 @@ impl SqlGenerator {
 
         // Create INSERT trigger
         writeln!(output, "-- Trigger to set timestamps on INSERT",).unwrap();
-        writeln!(output, "DROP TRIGGER IF EXISTS {} ON {};", insert_trigger_name, qualified_table).unwrap();
-        writeln!(output, "CREATE TRIGGER {} BEFORE INSERT ON {}", insert_trigger_name, qualified_table).unwrap();
-        writeln!(output, "    FOR EACH ROW EXECUTE FUNCTION {}();", trigger_func_name).unwrap();
+        writeln!(
+            output,
+            "DROP TRIGGER IF EXISTS {} ON {};",
+            insert_trigger_name, qualified_table
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "CREATE TRIGGER {} BEFORE INSERT ON {}",
+            insert_trigger_name, qualified_table
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    FOR EACH ROW EXECUTE FUNCTION {}();",
+            trigger_func_name
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Create UPDATE trigger
         writeln!(output, "-- Trigger to set updated_at on UPDATE",).unwrap();
-        writeln!(output, "DROP TRIGGER IF EXISTS {} ON {};", update_trigger_name, qualified_table).unwrap();
-        writeln!(output, "CREATE TRIGGER {} BEFORE UPDATE ON {}", update_trigger_name, qualified_table).unwrap();
-        writeln!(output, "    FOR EACH ROW EXECUTE FUNCTION {}();", trigger_func_name).unwrap();
+        writeln!(
+            output,
+            "DROP TRIGGER IF EXISTS {} ON {};",
+            update_trigger_name, qualified_table
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "CREATE TRIGGER {} BEFORE UPDATE ON {}",
+            update_trigger_name, qualified_table
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    FOR EACH ROW EXECUTE FUNCTION {}();",
+            trigger_func_name
+        )
+        .unwrap();
 
         Ok(())
     }
 
-    fn generate_index(&self, table_name: &str, qualified_table: &str, index: &Index, model: &Model) -> Result<String, GenerateError> {
+    fn generate_index(
+        &self,
+        table_name: &str,
+        qualified_table: &str,
+        index: &Index,
+        model: &Model,
+    ) -> Result<String, GenerateError> {
         // Index *name* derives from the bare table name (Postgres scopes the
         // index to the table's schema); the `ON` target is schema-qualified.
         // Index FIELDS may be SQL expressions (e.g. a JSONB sub-key like
@@ -601,16 +813,20 @@ impl SqlGenerator {
 
         // Resolve index fields: check each field exists as a real column,
         // or rewrite as JSONB expression if it's a sub-key of a JSONB field
-        let resolved_fields: Vec<String> = index.fields.iter().map(|field_name| {
-            self.resolve_index_field(field_name, model)
-        }).collect();
+        let resolved_fields: Vec<String> = index
+            .fields
+            .iter()
+            .map(|field_name| self.resolve_index_field(field_name, model))
+            .collect();
 
         // Extract optional WHERE clause for partial indexes.
         // Audit-metadata sub-keys (e.g. `deleted_at`) referenced bare in the
         // clause must be rewritten to their JSONB expression form, since they
         // aren't real columns when the model stores audit data in an
         // `@audit_metadata` JSONB field.
-        let where_clause = index.attributes.iter()
+        let where_clause = index
+            .attributes
+            .iter()
             .find(|a| a.name == "where")
             .and_then(|a| a.get_string_arg())
             .map(|w| format!(" WHERE {}", self.resolve_where_clause(w, model)))
@@ -646,13 +862,21 @@ impl SqlGenerator {
 
         // Known sub-keys of audit_metadata JSONB fields
         const AUDIT_METADATA_KEYS: &[&str] = &[
-            "created_at", "updated_at", "deleted_at",
-            "created_by", "updated_by", "deleted_by",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "created_by",
+            "updated_by",
+            "deleted_by",
         ];
 
         // Check if the field is a sub-key of an audit_metadata JSONB field
         if AUDIT_METADATA_KEYS.contains(&field_name) {
-            if let Some(jsonb_field) = model.fields.iter().find(|f| f.has_attribute("audit_metadata")) {
+            if let Some(jsonb_field) = model
+                .fields
+                .iter()
+                .find(|f| f.has_attribute("audit_metadata"))
+            {
                 return format!("(({}->>'{}'))", jsonb_field.name, field_name);
             }
         }
@@ -700,15 +924,24 @@ impl SqlGenerator {
     /// model that declares `deleted_at` as a real column is left untouched.
     fn resolve_where_clause(&self, where_clause: &str, model: &Model) -> String {
         const AUDIT_METADATA_KEYS: &[&str] = &[
-            "created_at", "updated_at", "deleted_at",
-            "created_by", "updated_by", "deleted_by",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "created_by",
+            "updated_by",
+            "deleted_by",
         ];
 
-        let Some(jsonb_field) = model.fields.iter().find(|f| f.has_attribute("audit_metadata")) else {
+        let Some(jsonb_field) = model
+            .fields
+            .iter()
+            .find(|f| f.has_attribute("audit_metadata"))
+        else {
             return where_clause.to_string();
         };
 
-        let keys_to_rewrite: Vec<&str> = AUDIT_METADATA_KEYS.iter()
+        let keys_to_rewrite: Vec<&str> = AUDIT_METADATA_KEYS
+            .iter()
             .copied()
             .filter(|key| !model.fields.iter().any(|f| f.name == *key))
             .collect();
@@ -771,7 +1004,12 @@ impl SqlGenerator {
         writeln!(output, "-- Create {} enum type", type_name).unwrap();
         writeln!(output, "DO $$").unwrap();
         writeln!(output, "BEGIN").unwrap();
-        writeln!(output, "    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{}') THEN", type_name).unwrap();
+        writeln!(
+            output,
+            "    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{}') THEN",
+            type_name
+        )
+        .unwrap();
         write!(output, "        CREATE TYPE {} AS ENUM (", type_name).unwrap();
 
         let variants: Vec<String> = enum_def
@@ -788,7 +1026,11 @@ impl SqlGenerator {
         Ok(output)
     }
 
-    fn generate_foreign_keys(&self, model: &Model, schema: &ResolvedSchema) -> Result<String, GenerateError> {
+    fn generate_foreign_keys(
+        &self,
+        model: &Model,
+        schema: &ResolvedSchema,
+    ) -> Result<String, GenerateError> {
         let mut output = String::new();
         let table_name = model.collection_name();
         let qualified_table = model.qualified_table_name();
@@ -868,7 +1110,8 @@ impl SqlGenerator {
                 output,
                 "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}){};",
                 qualified_table, constraint_name, fk_column, target_name, references, actions_sql
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         Ok(output)
@@ -910,11 +1153,18 @@ impl SqlGenerator {
                 continue;
             }
 
-            writeln!(output, "-- Join table for {} <-> {}", source_model, get_relation_target_table(&relation.target, &schema.schema)).unwrap();
+            writeln!(
+                output,
+                "-- Join table for {} <-> {}",
+                source_model,
+                get_relation_target_table(&relation.target, &schema.schema)
+            )
+            .unwrap();
             writeln!(output, "CREATE TABLE IF NOT EXISTS {} (", table_name).unwrap();
 
             // Determine foreign key column names
-            let source_fk = relation.join_foreign_key()
+            let source_fk = relation
+                .join_foreign_key()
                 .unwrap_or_else(|| format!("{}_id", to_snake_case(&source_model)));
 
             let target_name = get_relation_target_table(&relation.target, &schema.schema);
@@ -952,12 +1202,14 @@ impl SqlGenerator {
                 output,
                 "CREATE INDEX IF NOT EXISTS idx_{}_{} ON {} ({});",
                 table_name, source_fk, table_name, source_fk
-            ).unwrap();
+            )
+            .unwrap();
             writeln!(
                 output,
                 "CREATE INDEX IF NOT EXISTS idx_{}_{} ON {} ({});",
                 table_name, target_fk, table_name, target_fk
-            ).unwrap();
+            )
+            .unwrap();
             writeln!(output).unwrap();
         }
 
@@ -1076,7 +1328,11 @@ impl SqlGenerator {
     /// Timestamps are deterministic (fixed base + 1s offset per migration) so
     /// regenerating produces stable file names; hand-authored migrations
     /// added later should use real wall-clock timestamps to slot in naturally.
-    fn generate_split(&self, output: &mut GeneratedOutput, schema: &ResolvedSchema) -> Result<(), GenerateError> {
+    fn generate_split(
+        &self,
+        output: &mut GeneratedOutput,
+        schema: &ResolvedSchema,
+    ) -> Result<(), GenerateError> {
         let module_name = to_snake_case(&schema.schema.name);
         let mut counter: usize = 0;
 
@@ -1100,16 +1356,27 @@ impl SqlGenerator {
                 writeln!(down, "DROP TYPE IF EXISTS {} CASCADE;", type_name).unwrap();
             }
 
-            output.add_file(PathBuf::from(format!("migrations/{}_create_enums.up.sql", ts)), up);
-            output.add_file(PathBuf::from(format!("migrations/{}_create_enums.down.sql", ts)), down);
+            output.add_file(
+                PathBuf::from(format!("migrations/{}_create_enums.up.sql", ts)),
+                up,
+            );
+            output.add_file(
+                PathBuf::from(format!("migrations/{}_create_enums.down.sql", ts)),
+                down,
+            );
         }
 
         // 2. Topologically sort models, detecting cycle back-edges to defer
         let (order, deferred) = Self::topo_sort_models(&schema.schema.models, schema);
-        let mut deferred_by_model: std::collections::HashMap<usize, std::collections::HashSet<usize>> =
-            std::collections::HashMap::new();
+        let mut deferred_by_model: std::collections::HashMap<
+            usize,
+            std::collections::HashSet<usize>,
+        > = std::collections::HashMap::new();
         for &(model_idx, rel_idx) in &deferred {
-            deferred_by_model.entry(model_idx).or_default().insert(rel_idx);
+            deferred_by_model
+                .entry(model_idx)
+                .or_default()
+                .insert(rel_idx);
         }
 
         // Set of enum names known to the schema — used below to identify
@@ -1144,8 +1411,7 @@ impl SqlGenerator {
             writeln!(up, "-- Migration: Create {} table", model.collection_name()).unwrap();
             writeln!(up, "-- Generated by metaphor-schema").unwrap();
             writeln!(up).unwrap();
-            let mut seen_enums: std::collections::HashSet<&str> =
-                std::collections::HashSet::new();
+            let mut seen_enums: std::collections::HashSet<&str> = std::collections::HashSet::new();
             for field in &model.fields {
                 if let Some(enum_name) = extract_custom_type_name(&field.type_ref) {
                     if let Some(enum_def) = enum_by_name.get(enum_name) {
@@ -1168,13 +1434,22 @@ impl SqlGenerator {
             )?;
             if !inline_fks.is_empty() {
                 writeln!(up).unwrap();
-                writeln!(up, "-- Inline foreign key constraints (forward + self refs)").unwrap();
+                writeln!(
+                    up,
+                    "-- Inline foreign key constraints (forward + self refs)"
+                )
+                .unwrap();
                 up.push_str(&inline_fks);
             }
 
             let mut down = String::new();
             writeln!(down, "-- Down: drop {} table", model.qualified_table_name()).unwrap();
-            writeln!(down, "DROP TABLE IF EXISTS {} CASCADE;", model.qualified_table_name()).unwrap();
+            writeln!(
+                down,
+                "DROP TABLE IF EXISTS {} CASCADE;",
+                model.qualified_table_name()
+            )
+            .unwrap();
             // Trigger functions are co-located with the table; CASCADE on the
             // table doesn't drop them, so undo them explicitly.
             for field in &model.fields {
@@ -1183,16 +1458,23 @@ impl SqlGenerator {
                         down,
                         "DROP FUNCTION IF EXISTS {}() CASCADE;",
                         model.audit_function_name()
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
             }
 
             output.add_file(
-                PathBuf::from(format!("migrations/{}_create_{}_table.up.sql", ts, model_snake)),
+                PathBuf::from(format!(
+                    "migrations/{}_create_{}_table.up.sql",
+                    ts, model_snake
+                )),
                 up,
             );
             output.add_file(
-                PathBuf::from(format!("migrations/{}_create_{}_table.down.sql", ts, model_snake)),
+                PathBuf::from(format!(
+                    "migrations/{}_create_{}_table.down.sql",
+                    ts, model_snake
+                )),
                 down,
             );
         }
@@ -1247,10 +1529,20 @@ impl SqlGenerator {
             counter += 1;
             let mut up = String::new();
             let mut down = String::new();
-            writeln!(up, "-- Deferred foreign keys for {} module (cycle back-edges)", module_name).unwrap();
+            writeln!(
+                up,
+                "-- Deferred foreign keys for {} module (cycle back-edges)",
+                module_name
+            )
+            .unwrap();
             writeln!(up, "-- Generated by metaphor-schema").unwrap();
             writeln!(up).unwrap();
-            writeln!(down, "-- Down: drop deferred foreign keys for {} module", module_name).unwrap();
+            writeln!(
+                down,
+                "-- Down: drop deferred foreign keys for {} module",
+                module_name
+            )
+            .unwrap();
 
             for &(model_idx, rel_idx) in &deferred {
                 let model = &schema.schema.models[model_idx];
@@ -1263,16 +1555,23 @@ impl SqlGenerator {
                         down,
                         "ALTER TABLE {} DROP CONSTRAINT IF EXISTS {};",
                         qualified_table, constraint_name
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
             }
 
             output.add_file(
-                PathBuf::from(format!("migrations/{}_add_deferred_foreign_keys.up.sql", ts)),
+                PathBuf::from(format!(
+                    "migrations/{}_add_deferred_foreign_keys.up.sql",
+                    ts
+                )),
                 up,
             );
             output.add_file(
-                PathBuf::from(format!("migrations/{}_add_deferred_foreign_keys.down.sql", ts)),
+                PathBuf::from(format!(
+                    "migrations/{}_add_deferred_foreign_keys.down.sql",
+                    ts
+                )),
                 down,
             );
         }
@@ -1304,12 +1603,30 @@ impl SqlGenerator {
         if !rls.is_empty() && emit_rls {
             let ts = Self::timestamp_for(counter);
             let mut up = String::new();
-            writeln!(up, "-- Company RLS fence for {} module (ADR-0008)", module_name).unwrap();
-            writeln!(up, "-- Generated by metaphor-schema. Requires the app to connect as a").unwrap();
-            writeln!(up, "-- non-superuser role; migrations/seeders run as the owner and bypass.").unwrap();
+            writeln!(
+                up,
+                "-- Company RLS fence for {} module (ADR-0008)",
+                module_name
+            )
+            .unwrap();
+            writeln!(
+                up,
+                "-- Generated by metaphor-schema. Requires the app to connect as a"
+            )
+            .unwrap();
+            writeln!(
+                up,
+                "-- non-superuser role; migrations/seeders run as the owner and bypass."
+            )
+            .unwrap();
             writeln!(up).unwrap();
             let mut down = String::new();
-            writeln!(down, "-- Down: remove the company RLS fence for {} module", module_name).unwrap();
+            writeln!(
+                down,
+                "-- Down: remove the company RLS fence for {} module",
+                module_name
+            )
+            .unwrap();
             writeln!(down).unwrap();
             // `shared_tree` policies read organization.company_subtree — ship the helper in the
             // same migration, before any policy that depends on it (exactly once).
@@ -1357,41 +1674,48 @@ impl SqlGenerator {
         schema: &ResolvedSchema,
     ) -> (Vec<usize>, Vec<(usize, usize)>) {
         let n = models.len();
-        let name_to_idx: std::collections::HashMap<&str, usize> = models.iter().enumerate()
-            .map(|(i, m)| (m.name.as_str(), i)).collect();
+        let name_to_idx: std::collections::HashMap<&str, usize> = models
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.name.as_str(), i))
+            .collect();
 
         // edges[i] = (target_model_idx, relation_idx) for in-module FKs.
         // Self-loops are excluded (handled inline in the model's own file).
-        let edges: Vec<Vec<(usize, usize)>> = models.iter().enumerate().map(|(i, m)| {
-            let mut out = Vec::new();
-            for (rel_idx, rel) in m.relations.iter().enumerate() {
-                if rel.relation_type == RelationType::ManyToMany {
-                    continue;
-                }
-                if rel.relation_type == RelationType::Many {
-                    continue;
-                }
-                if !rel.has_database_fk() {
-                    continue;
-                }
-                let target_name = match &rel.target {
-                    TypeRef::Custom(name) => Some(name.as_str()),
-                    TypeRef::Optional(inner) => match inner.as_ref() {
+        let edges: Vec<Vec<(usize, usize)>> = models
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let mut out = Vec::new();
+                for (rel_idx, rel) in m.relations.iter().enumerate() {
+                    if rel.relation_type == RelationType::ManyToMany {
+                        continue;
+                    }
+                    if rel.relation_type == RelationType::Many {
+                        continue;
+                    }
+                    if !rel.has_database_fk() {
+                        continue;
+                    }
+                    let target_name = match &rel.target {
                         TypeRef::Custom(name) => Some(name.as_str()),
+                        TypeRef::Optional(inner) => match inner.as_ref() {
+                            TypeRef::Custom(name) => Some(name.as_str()),
+                            _ => None,
+                        },
                         _ => None,
-                    },
-                    _ => None,
-                };
-                if let Some(name) = target_name {
-                    if let Some(&j) = name_to_idx.get(name) {
-                        if j != i {
-                            out.push((j, rel_idx));
+                    };
+                    if let Some(name) = target_name {
+                        if let Some(&j) = name_to_idx.get(name) {
+                            if j != i {
+                                out.push((j, rel_idx));
+                            }
                         }
                     }
                 }
-            }
-            out
-        }).collect();
+                out
+            })
+            .collect();
 
         let _ = schema; // reserved for future cross-module checks
 
@@ -1535,7 +1859,11 @@ impl SqlGenerator {
     }
 
     /// Generate single migration file (legacy mode)
-    fn generate_single(&self, output: &mut GeneratedOutput, schema: &ResolvedSchema) -> Result<(), GenerateError> {
+    fn generate_single(
+        &self,
+        output: &mut GeneratedOutput,
+        schema: &ResolvedSchema,
+    ) -> Result<(), GenerateError> {
         let version = self.version.clone().unwrap_or_else(|| {
             // Use fixed version to avoid duplicate files
             "001".to_string()
@@ -1571,16 +1899,12 @@ impl SqlGenerator {
             writeln!(migration, "{}", join_tables_sql).unwrap();
         }
 
-        let path = PathBuf::from(format!(
-            "migrations/{}_create_tables.up.sql",
-            version
-        ));
+        let path = PathBuf::from(format!("migrations/{}_create_tables.up.sql", version));
 
         output.add_file(path, migration);
 
         Ok(())
     }
-
 }
 
 /// Strip the leading `-- Migration: ... / -- Generated by metaphor-schema /
@@ -1628,7 +1952,10 @@ fn extract_custom_type_name(type_ref: &TypeRef) -> Option<&str> {
 ///
 /// Cross-module (`ModuleRef`) targets are intentionally left bare and resolve via
 /// the runtime/migration search path — see [`resolve_relation_target_table`] for why.
-fn get_relation_target_table_qualified(type_ref: &TypeRef, schema: &crate::ast::ModuleSchema) -> String {
+fn get_relation_target_table_qualified(
+    type_ref: &TypeRef,
+    schema: &crate::ast::ModuleSchema,
+) -> String {
     resolve_relation_target_table(type_ref, schema, true)
 }
 
@@ -1650,9 +1977,17 @@ fn resolve_relation_target_table(
     match type_ref {
         TypeRef::Custom(name) => {
             // Look for the model in the schema to get its actual table name.
-            schema.models.iter()
+            schema
+                .models
+                .iter()
                 .find(|m| &m.name == name)
-                .map(|m| if qualify { m.qualified_table_name() } else { m.collection_name() })
+                .map(|m| {
+                    if qualify {
+                        m.qualified_table_name()
+                    } else {
+                        m.collection_name()
+                    }
+                })
                 .unwrap_or_else(|| to_snake_case(name) + "s")
         }
         TypeRef::Array(inner) => resolve_relation_target_table(inner, schema, qualify),
@@ -1715,10 +2050,18 @@ mod tests {
         let mut model = Model::new("SalesInvoice");
         model.schema = Some("selling".to_string());
         model.fields = vec![
-            Field { name: "id".to_string(), type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
-                attributes: vec![Attribute::new("id")], ..Default::default() },
-            Field { name: "company_id".to_string(), type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
-                attributes: vec![Attribute::new("required")], ..Default::default() },
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "company_id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("required")],
+                ..Default::default()
+            },
         ];
         model
     }
@@ -1728,22 +2071,46 @@ mod tests {
         let (up, down) = SqlGenerator::generate_rls_migration(&company_scoped_model(), None)
             .expect("a model with company_id must get an RLS policy");
         // FORCE is load-bearing: without it the table owner bypasses the policy.
-        assert!(up.contains("FORCE  ROW LEVEL SECURITY"), "must FORCE RLS:\n{up}");
-        assert!(up.contains("ENABLE ROW LEVEL SECURITY"), "must ENABLE RLS:\n{up}");
+        assert!(
+            up.contains("FORCE  ROW LEVEL SECURITY"),
+            "must FORCE RLS:\n{up}"
+        );
+        assert!(
+            up.contains("ENABLE ROW LEVEL SECURITY"),
+            "must ENABLE RLS:\n{up}"
+        );
         // NULLIF is load-bearing: an unset/empty var must yield zero rows, never a ''::uuid error.
         assert!(
             up.contains("NULLIF(current_setting('app.company_id', true), '')::uuid"),
             "fence must NULLIF-guard the session var (fail-closed):\n{up}"
         );
         // FOR ALL + WITH CHECK also blocks write-forgery.
-        assert!(up.contains("FOR ALL"), "policy must cover all commands:\n{up}");
-        assert!(up.contains("WITH CHECK (company_id ="), "policy must guard writes too:\n{up}");
+        assert!(
+            up.contains("FOR ALL"),
+            "policy must cover all commands:\n{up}"
+        );
+        assert!(
+            up.contains("WITH CHECK (company_id ="),
+            "policy must guard writes too:\n{up}"
+        );
         // Qualified table + a per-table policy name derived from the collection.
-        assert!(up.contains("selling.sales_invoices"), "must target the qualified table:\n{up}");
-        assert!(up.contains("sales_invoices_company_isolation"), "policy name from collection:\n{up}");
+        assert!(
+            up.contains("selling.sales_invoices"),
+            "must target the qualified table:\n{up}"
+        );
+        assert!(
+            up.contains("sales_invoices_company_isolation"),
+            "policy name from collection:\n{up}"
+        );
         // The down migration cleanly reverses it.
-        assert!(down.contains("DROP POLICY IF EXISTS sales_invoices_company_isolation"), "down drops policy:\n{down}");
-        assert!(down.contains("DISABLE ROW LEVEL SECURITY"), "down disables RLS:\n{down}");
+        assert!(
+            down.contains("DROP POLICY IF EXISTS sales_invoices_company_isolation"),
+            "down drops policy:\n{down}"
+        );
+        assert!(
+            down.contains("DISABLE ROW LEVEL SECURITY"),
+            "down disables RLS:\n{down}"
+        );
     }
 
     #[test]
@@ -1762,7 +2129,10 @@ mod tests {
             .find(|p| p.to_string_lossy().ends_with("_enable_company_rls.up.sql"))
             .expect("a company-scoped module must get an enable_company_rls migration");
         let sql = &output.files[rls_up];
-        assert!(sql.contains("FORCE  ROW LEVEL SECURITY"), "must FORCE RLS:\n{sql}");
+        assert!(
+            sql.contains("FORCE  ROW LEVEL SECURITY"),
+            "must FORCE RLS:\n{sql}"
+        );
         assert!(
             sql.contains("NULLIF(current_setting('app.company_id', true), '')::uuid"),
             "fail-closed fence expression must be present:\n{sql}"
@@ -1772,7 +2142,10 @@ mod tests {
         let table_up = output
             .files
             .keys()
-            .find(|p| p.to_string_lossy().ends_with("_create_sales_invoice_table.up.sql"))
+            .find(|p| {
+                p.to_string_lossy()
+                    .ends_with("_create_sales_invoice_table.up.sql")
+            })
             .expect("create-table migration");
         assert!(
             rls_up.to_string_lossy() > table_up.to_string_lossy(),
@@ -1784,9 +2157,13 @@ mod tests {
     fn rls_migration_skips_global_and_unscoped_models() {
         // @global opts a company_id-bearing table OUT of fencing — no policy.
         let mut global = company_scoped_model();
-        global.fields.iter_mut()
-            .find(|f| f.name == "company_id").unwrap()
-            .attributes.push(Attribute::new("global"));
+        global
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "company_id")
+            .unwrap()
+            .attributes
+            .push(Attribute::new("global"));
         assert!(
             SqlGenerator::generate_rls_migration(&global, None).is_none(),
             "@global must unfence — no RLS policy emitted"
@@ -1806,7 +2183,8 @@ mod tests {
     fn rls_undeclared_fence_matches_strict_byte_for_byte() {
         let model = company_scoped_model();
         let legacy = SqlGenerator::generate_rls_migration(&model, None).unwrap();
-        let strict = SqlGenerator::generate_rls_migration(&model, Some(&CompanyFence::Strict)).unwrap();
+        let strict =
+            SqlGenerator::generate_rls_migration(&model, Some(&CompanyFence::Strict)).unwrap();
         assert_eq!(legacy.0, strict.0, "undeclared must equal strict (up)");
         assert_eq!(legacy.1, strict.1, "undeclared must equal strict (down)");
     }
@@ -1846,7 +2224,9 @@ mod tests {
             .expect("shared_tree module must still get its RLS migration");
         let sql = &output.files[rls_up];
         assert!(
-            sql.matches("CREATE OR REPLACE FUNCTION organization.company_subtree").count() == 1,
+            sql.matches("CREATE OR REPLACE FUNCTION organization.company_subtree")
+                .count()
+                == 1,
             "helper must appear exactly once:\n{sql}"
         );
         assert!(
@@ -1856,12 +2236,18 @@ mod tests {
         // Helper precedes the policy that depends on it.
         let helper_at = sql.find("CREATE OR REPLACE FUNCTION").expect("helper");
         let policy_at = sql.find("CREATE POLICY").expect("policy");
-        assert!(helper_at < policy_at, "helper must be created before the policy");
+        assert!(
+            helper_at < policy_at,
+            "helper must be created before the policy"
+        );
 
         let rls_down = output
             .files
             .keys()
-            .find(|p| p.to_string_lossy().ends_with("_enable_company_rls.down.sql"))
+            .find(|p| {
+                p.to_string_lossy()
+                    .ends_with("_enable_company_rls.down.sql")
+            })
             .expect("down migration");
         assert!(
             output.files[rls_down]
@@ -1894,7 +2280,8 @@ mod tests {
             .attributes
             .push(Attribute::new("global"));
         assert!(
-            SqlGenerator::generate_rls_migration(&global, Some(&CompanyFence::SharedBlank)).is_none(),
+            SqlGenerator::generate_rls_migration(&global, Some(&CompanyFence::SharedBlank))
+                .is_none(),
             "@global must unfence even under a declared fence"
         );
     }
@@ -1906,8 +2293,12 @@ mod tests {
         let output = generator.generate(&schema).unwrap();
 
         // Each migration is a paired .up.sql / .down.sql at the same timestamp.
-        assert!(output.files.contains_key(&PathBuf::from("migrations/20260426220000_create_user_table.up.sql")));
-        assert!(output.files.contains_key(&PathBuf::from("migrations/20260426220000_create_user_table.down.sql")));
+        assert!(output.files.contains_key(&PathBuf::from(
+            "migrations/20260426220000_create_user_table.up.sql"
+        )));
+        assert!(output.files.contains_key(&PathBuf::from(
+            "migrations/20260426220000_create_user_table.down.sql"
+        )));
     }
 
     #[test]
@@ -1917,7 +2308,9 @@ mod tests {
         let output = generator.generate(&schema).unwrap();
 
         // Should create single migration file directly in migrations/
-        assert!(output.files.contains_key(&PathBuf::from("migrations/001_create_tables.up.sql")));
+        assert!(output
+            .files
+            .contains_key(&PathBuf::from("migrations/001_create_tables.up.sql")));
     }
 
     #[test]
@@ -1926,7 +2319,12 @@ mod tests {
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&schema).unwrap();
 
-        let content = output.files.get(&PathBuf::from("migrations/20260426220000_create_user_table.up.sql")).unwrap();
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_user_table.up.sql",
+            ))
+            .unwrap();
 
         assert!(content.contains("CREATE TABLE IF NOT EXISTS users"));
         assert!(content.contains("id UUID"));
@@ -1940,7 +2338,12 @@ mod tests {
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&schema).unwrap();
 
-        let content = output.files.get(&PathBuf::from("migrations/20260426220000_create_user_table.up.sql")).unwrap();
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_user_table.up.sql",
+            ))
+            .unwrap();
 
         assert!(content.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email"));
     }
@@ -1974,21 +2377,33 @@ mod tests {
 
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&resolved).unwrap();
-        let content = output.files
-            .get(&PathBuf::from("migrations/20260426220000_create_account_table.up.sql"))
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_account_table.up.sql",
+            ))
             .unwrap();
 
         assert!(
-            content.contains("idx_accounts_metadata_created_at ON accounts ((metadata->>'created_at'))"),
-            "expected created_at expression index, got:\n{}", content
+            content.contains(
+                "idx_accounts_metadata_created_at ON accounts ((metadata->>'created_at'))"
+            ),
+            "expected created_at expression index, got:\n{}",
+            content
         );
         assert!(
-            content.contains("idx_accounts_metadata_updated_at ON accounts ((metadata->>'updated_at'))"),
-            "expected updated_at expression index, got:\n{}", content
+            content.contains(
+                "idx_accounts_metadata_updated_at ON accounts ((metadata->>'updated_at'))"
+            ),
+            "expected updated_at expression index, got:\n{}",
+            content
         );
         assert!(
-            content.contains("idx_accounts_metadata_deleted_at ON accounts ((metadata->>'deleted_at'))"),
-            "expected deleted_at expression index (regression check), got:\n{}", content
+            content.contains(
+                "idx_accounts_metadata_deleted_at ON accounts ((metadata->>'deleted_at'))"
+            ),
+            "expected deleted_at expression index (regression check), got:\n{}",
+            content
         );
     }
 
@@ -2022,10 +2437,8 @@ mod tests {
         model.indexes.push(Index {
             fields: vec!["account_number".to_string()],
             index_type: IndexType::Unique,
-            attributes: vec![
-                Attribute::new("where")
-                    .with_arg(AttributeValue::String("deleted_at IS NULL".to_string())),
-            ],
+            attributes: vec![Attribute::new("where")
+                .with_arg(AttributeValue::String("deleted_at IS NULL".to_string()))],
             ..Default::default()
         });
 
@@ -2035,8 +2448,11 @@ mod tests {
 
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&resolved).unwrap();
-        let content = output.files
-            .get(&PathBuf::from("migrations/20260426220000_create_account_table.up.sql"))
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_account_table.up.sql",
+            ))
             .unwrap();
 
         assert!(
@@ -2079,12 +2495,9 @@ mod tests {
         model.indexes.push(Index {
             fields: vec!["label".to_string()],
             index_type: IndexType::Index,
-            attributes: vec![
-                Attribute::new("where")
-                    .with_arg(AttributeValue::String(
-                        "deleted_at IS NULL AND label != 'deleted_at'".to_string(),
-                    )),
-            ],
+            attributes: vec![Attribute::new("where").with_arg(AttributeValue::String(
+                "deleted_at IS NULL AND label != 'deleted_at'".to_string(),
+            ))],
             ..Default::default()
         });
 
@@ -2094,14 +2507,25 @@ mod tests {
 
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&resolved).unwrap();
-        let content = output.files
-            .get(&PathBuf::from("migrations/20260426220000_create_job_table.up.sql"))
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_job_table.up.sql",
+            ))
             .unwrap();
 
         // Bare identifier rewritten:
-        assert!(content.contains("(metadata->>'deleted_at') IS NULL"), "got:\n{}", content);
+        assert!(
+            content.contains("(metadata->>'deleted_at') IS NULL"),
+            "got:\n{}",
+            content
+        );
         // String literal preserved verbatim:
-        assert!(content.contains("label != 'deleted_at'"), "got:\n{}", content);
+        assert!(
+            content.contains("label != 'deleted_at'"),
+            "got:\n{}",
+            content
+        );
     }
 
     /// If the model declares `deleted_at` as a real column, that column
@@ -2139,10 +2563,8 @@ mod tests {
         model.indexes.push(Index {
             fields: vec!["name".to_string()],
             index_type: IndexType::Unique,
-            attributes: vec![
-                Attribute::new("where")
-                    .with_arg(AttributeValue::String("deleted_at IS NULL".to_string())),
-            ],
+            attributes: vec![Attribute::new("where")
+                .with_arg(AttributeValue::String("deleted_at IS NULL".to_string()))],
             ..Default::default()
         });
 
@@ -2152,8 +2574,11 @@ mod tests {
 
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&resolved).unwrap();
-        let content = output.files
-            .get(&PathBuf::from("migrations/20260426220000_create_legacy_table.up.sql"))
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_legacy_table.up.sql",
+            ))
             .unwrap();
 
         assert!(
@@ -2176,7 +2601,12 @@ mod tests {
 
         // Each up file has a paired down file at the same timestamp; the
         // down drops the table with CASCADE so dependent FKs come along.
-        let content = output.files.get(&PathBuf::from("migrations/20260426220000_create_user_table.down.sql")).unwrap();
+        let content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_user_table.down.sql",
+            ))
+            .unwrap();
         assert!(content.contains("DROP TABLE IF EXISTS users CASCADE"));
     }
 
@@ -2232,17 +2662,44 @@ mod tests {
         // (User has no FK; Post depends on User), User is created first
         // and Post second — so Post's file gets the FK inline, paired
         // with a down that drops the constraint via DROP TABLE CASCADE.
-        let fk_content = output.files
-            .get(&PathBuf::from("migrations/20260426220001_create_post_table.up.sql"))
-            .unwrap_or_else(|| panic!("expected post table at index 1, got files: {:?}", output.files.keys().collect::<Vec<_>>()));
-        assert!(fk_content.contains("ALTER TABLE posts ADD CONSTRAINT fk_posts_author_id"), "got:\n{}", fk_content);
-        assert!(fk_content.contains("FOREIGN KEY (author_id) REFERENCES users"), "got:\n{}", fk_content);
-        assert!(fk_content.contains("ON DELETE CASCADE"), "got:\n{}", fk_content);
-        assert!(fk_content.contains("ON UPDATE CASCADE"), "got:\n{}", fk_content);
+        let fk_content = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220001_create_post_table.up.sql",
+            ))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected post table at index 1, got files: {:?}",
+                    output.files.keys().collect::<Vec<_>>()
+                )
+            });
+        assert!(
+            fk_content.contains("ALTER TABLE posts ADD CONSTRAINT fk_posts_author_id"),
+            "got:\n{}",
+            fk_content
+        );
+        assert!(
+            fk_content.contains("FOREIGN KEY (author_id) REFERENCES users"),
+            "got:\n{}",
+            fk_content
+        );
+        assert!(
+            fk_content.contains("ON DELETE CASCADE"),
+            "got:\n{}",
+            fk_content
+        );
+        assert!(
+            fk_content.contains("ON UPDATE CASCADE"),
+            "got:\n{}",
+            fk_content
+        );
 
         // No global add_foreign_keys file should exist.
         assert!(
-            !output.files.keys().any(|p| p.to_string_lossy().contains("add_foreign_keys")),
+            !output
+                .files
+                .keys()
+                .any(|p| p.to_string_lossy().contains("add_foreign_keys")),
             "expected no global add_foreign_keys file when there are no FK cycles, got files: {:?}",
             output.files.keys().collect::<Vec<_>>()
         );
@@ -2273,7 +2730,10 @@ mod tests {
         // Cross-module relation: author lives in the `sapiens` module.
         post_model.relations.push(crate::ast::Relation {
             name: "author".to_string(),
-            target: TypeRef::ModuleRef { module: "sapiens".to_string(), name: "User".to_string() },
+            target: TypeRef::ModuleRef {
+                module: "sapiens".to_string(),
+                name: "User".to_string(),
+            },
             relation_type: RelationType::One,
             attributes: vec![],
             ..Default::default()
@@ -2342,7 +2802,9 @@ mod tests {
         let output = generator.generate(&resolved).unwrap();
 
         // Verify a join tables file was created
-        let join_key = output.files.keys()
+        let join_key = output
+            .files
+            .keys()
             .find(|k| {
                 let s = k.to_string_lossy();
                 s.contains("create_join_tables") && s.ends_with(".up.sql")
@@ -2394,23 +2856,35 @@ mod tests {
             m
         };
         let mut schema = ModuleSchema::new("test");
-        schema.models.push(mk("Quotation", "Contract", "contract_id"));
-        schema.models.push(mk("Contract", "Quotation", "quotation_id"));
+        schema
+            .models
+            .push(mk("Quotation", "Contract", "contract_id"));
+        schema
+            .models
+            .push(mk("Contract", "Quotation", "quotation_id"));
         let resolved = ResolvedSchema { schema };
 
         let generator = SqlGenerator::new().with_split(true);
         let output = generator.generate(&resolved).unwrap();
 
         // Exactly one of the two FKs should land in the deferred file.
-        let deferred_key = output.files.keys()
+        let deferred_key = output
+            .files
+            .keys()
             .find(|k| {
                 let s = k.to_string_lossy();
                 s.contains("add_deferred_foreign_keys") && s.ends_with(".up.sql")
             })
             .expect("expected a deferred FK migration when models form a cycle");
         let deferred = output.files.get(deferred_key).unwrap();
-        let inline_count = output.files.iter()
-            .filter(|(k, _)| k.to_string_lossy().contains("create_") && k.to_string_lossy().ends_with(".up.sql") && !k.to_string_lossy().contains("deferred"))
+        let inline_count = output
+            .files
+            .iter()
+            .filter(|(k, _)| {
+                k.to_string_lossy().contains("create_")
+                    && k.to_string_lossy().ends_with(".up.sql")
+                    && !k.to_string_lossy().contains("deferred")
+            })
             .filter(|(_, v)| v.contains("ADD CONSTRAINT fk_"))
             .count();
 
@@ -2428,7 +2902,9 @@ mod tests {
         );
 
         // The deferred file must have a paired .down.sql with matching DROP CONSTRAINTs.
-        let deferred_down_key = output.files.keys()
+        let deferred_down_key = output
+            .files
+            .keys()
             .find(|k| {
                 let s = k.to_string_lossy();
                 s.contains("add_deferred_foreign_keys") && s.ends_with(".down.sql")
@@ -2468,7 +2944,8 @@ mod tests {
             relation_type: RelationType::ManyToMany,
             attributes: vec![
                 Attribute::new("many_to_many"),
-                Attribute::new("join_table").with_arg(AttributeValue::String("user_roles".to_string())),
+                Attribute::new("join_table")
+                    .with_arg(AttributeValue::String("user_roles".to_string())),
             ],
             ..Default::default()
         });
@@ -2483,7 +2960,9 @@ mod tests {
         let output = generator.generate(&resolved).unwrap();
 
         // Find the join tables file
-        let join_key = output.files.keys()
+        let join_key = output
+            .files
+            .keys()
             .find(|k| {
                 let s = k.to_string_lossy();
                 s.contains("create_join_tables") && s.ends_with(".up.sql")
@@ -2501,11 +2980,20 @@ mod tests {
         m.collection = Some("sapiens_notification_preferences".to_string());
         // Unscoped: bare.
         assert_eq!(m.qualified_table_name(), "sapiens_notification_preferences");
-        assert_eq!(m.audit_function_name(), "sapiens_notification_preferences_audit_timestamp");
+        assert_eq!(
+            m.audit_function_name(),
+            "sapiens_notification_preferences_audit_timestamp"
+        );
         // Scoped: qualified.
         m.schema = Some("sapiens".to_string());
-        assert_eq!(m.qualified_table_name(), "sapiens.sapiens_notification_preferences");
-        assert_eq!(m.audit_function_name(), "sapiens.sapiens_notification_preferences_audit_timestamp");
+        assert_eq!(
+            m.qualified_table_name(),
+            "sapiens.sapiens_notification_preferences"
+        );
+        assert_eq!(
+            m.audit_function_name(),
+            "sapiens.sapiens_notification_preferences_audit_timestamp"
+        );
         // Empty schema string is treated as unset.
         m.schema = Some(String::new());
         assert_eq!(m.qualified_table_name(), "sapiens_notification_preferences");
@@ -2517,27 +3005,75 @@ mod tests {
         model.schema = Some("sapiens".to_string());
         let mut schema = ModuleSchema::new("test");
         schema.models.push(model);
-        let output = SqlGenerator::new().with_split(true)
-            .generate(&ResolvedSchema { schema }).unwrap();
+        let output = SqlGenerator::new()
+            .with_split(true)
+            .generate(&ResolvedSchema { schema })
+            .unwrap();
 
-        let up = output.files.get(&PathBuf::from("migrations/20260426220000_create_user_table.up.sql")).unwrap();
-        assert!(up.contains("CREATE SCHEMA IF NOT EXISTS sapiens;"), "got:\n{}", up);
-        assert!(up.contains("CREATE TABLE IF NOT EXISTS sapiens.users ("), "got:\n{}", up);
+        let up = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_user_table.up.sql",
+            ))
+            .unwrap();
+        assert!(
+            up.contains("CREATE SCHEMA IF NOT EXISTS sapiens;"),
+            "got:\n{}",
+            up
+        );
+        assert!(
+            up.contains("CREATE TABLE IF NOT EXISTS sapiens.users ("),
+            "got:\n{}",
+            up
+        );
         // Implicit unique index: bare name, qualified ON target.
-        assert!(up.contains("idx_users_email ON sapiens.users"), "got:\n{}", up);
-        assert!(!up.contains("ON users ("), "index ON target should be qualified, got:\n{}", up);
+        assert!(
+            up.contains("idx_users_email ON sapiens.users"),
+            "got:\n{}",
+            up
+        );
+        assert!(
+            !up.contains("ON users ("),
+            "index ON target should be qualified, got:\n{}",
+            up
+        );
 
-        let down = output.files.get(&PathBuf::from("migrations/20260426220000_create_user_table.down.sql")).unwrap();
-        assert!(down.contains("DROP TABLE IF EXISTS sapiens.users CASCADE"), "got:\n{}", down);
+        let down = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_user_table.down.sql",
+            ))
+            .unwrap();
+        assert!(
+            down.contains("DROP TABLE IF EXISTS sapiens.users CASCADE"),
+            "got:\n{}",
+            down
+        );
     }
 
     #[test]
     fn test_unscoped_table_unchanged_regression() {
         let schema = create_test_schema(); // User, no schema
-        let output = SqlGenerator::new().with_split(true).generate(&schema).unwrap();
-        let up = output.files.get(&PathBuf::from("migrations/20260426220000_create_user_table.up.sql")).unwrap();
-        assert!(!up.contains("CREATE SCHEMA"), "unscoped model must not emit CREATE SCHEMA, got:\n{}", up);
-        assert!(up.contains("CREATE TABLE IF NOT EXISTS users ("), "got:\n{}", up);
+        let output = SqlGenerator::new()
+            .with_split(true)
+            .generate(&schema)
+            .unwrap();
+        let up = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_user_table.up.sql",
+            ))
+            .unwrap();
+        assert!(
+            !up.contains("CREATE SCHEMA"),
+            "unscoped model must not emit CREATE SCHEMA, got:\n{}",
+            up
+        );
+        assert!(
+            up.contains("CREATE TABLE IF NOT EXISTS users ("),
+            "got:\n{}",
+            up
+        );
         assert!(up.contains("idx_users_email ON users"), "got:\n{}", up);
     }
 
@@ -2561,18 +3097,46 @@ mod tests {
         ];
         let mut schema = ModuleSchema::new("test");
         schema.models.push(model);
-        let output = SqlGenerator::new().with_split(true)
-            .generate(&ResolvedSchema { schema }).unwrap();
+        let output = SqlGenerator::new()
+            .with_split(true)
+            .generate(&ResolvedSchema { schema })
+            .unwrap();
 
-        let up = output.files.get(&PathBuf::from("migrations/20260426220000_create_doc_table.up.sql")).unwrap();
+        let up = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_doc_table.up.sql",
+            ))
+            .unwrap();
         // Function lives in the table's schema (no public collision).
-        assert!(up.contains("CREATE OR REPLACE FUNCTION sapiens.docs_audit_timestamp()"), "got:\n{}", up);
-        assert!(up.contains("EXECUTE FUNCTION sapiens.docs_audit_timestamp()"), "got:\n{}", up);
+        assert!(
+            up.contains("CREATE OR REPLACE FUNCTION sapiens.docs_audit_timestamp()"),
+            "got:\n{}",
+            up
+        );
+        assert!(
+            up.contains("EXECUTE FUNCTION sapiens.docs_audit_timestamp()"),
+            "got:\n{}",
+            up
+        );
         // Trigger names stay bare; trigger ON target is qualified.
-        assert!(up.contains("CREATE TRIGGER docs_insert_audit BEFORE INSERT ON sapiens.docs"), "got:\n{}", up);
+        assert!(
+            up.contains("CREATE TRIGGER docs_insert_audit BEFORE INSERT ON sapiens.docs"),
+            "got:\n{}",
+            up
+        );
 
-        let down = output.files.get(&PathBuf::from("migrations/20260426220000_create_doc_table.down.sql")).unwrap();
-        assert!(down.contains("DROP FUNCTION IF EXISTS sapiens.docs_audit_timestamp() CASCADE"), "got:\n{}", down);
+        let down = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220000_create_doc_table.down.sql",
+            ))
+            .unwrap();
+        assert!(
+            down.contains("DROP FUNCTION IF EXISTS sapiens.docs_audit_timestamp() CASCADE"),
+            "got:\n{}",
+            down
+        );
     }
 
     #[test]
@@ -2581,10 +3145,18 @@ mod tests {
         // qualified to identity.users, while the owning ALTER TABLE stays bare.
         let mut post = Model::new("Post");
         post.fields = vec![
-            Field { name: "id".to_string(), type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
-                    attributes: vec![Attribute::new("id")], ..Default::default() },
-            Field { name: "author_id".to_string(), type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
-                    attributes: vec![], ..Default::default() },
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "author_id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![],
+                ..Default::default()
+            },
         ];
         post.relations.push(crate::ast::Relation {
             name: "author".to_string(),
@@ -2599,13 +3171,26 @@ mod tests {
         let mut schema = ModuleSchema::new("test");
         schema.models.push(post);
         schema.models.push(user);
-        let output = SqlGenerator::new().with_split(true)
-            .generate(&ResolvedSchema { schema }).unwrap();
-
-        let fk = output.files
-            .get(&PathBuf::from("migrations/20260426220001_create_post_table.up.sql"))
+        let output = SqlGenerator::new()
+            .with_split(true)
+            .generate(&ResolvedSchema { schema })
             .unwrap();
-        assert!(fk.contains("ALTER TABLE posts ADD CONSTRAINT fk_posts_author_id"), "got:\n{}", fk);
-        assert!(fk.contains("REFERENCES identity.users"), "FK target must be schema-qualified, got:\n{}", fk);
+
+        let fk = output
+            .files
+            .get(&PathBuf::from(
+                "migrations/20260426220001_create_post_table.up.sql",
+            ))
+            .unwrap();
+        assert!(
+            fk.contains("ALTER TABLE posts ADD CONSTRAINT fk_posts_author_id"),
+            "got:\n{}",
+            fk
+        );
+        assert!(
+            fk.contains("REFERENCES identity.users"),
+            "FK target must be schema-qualified, got:\n{}",
+            fk
+        );
     }
 }

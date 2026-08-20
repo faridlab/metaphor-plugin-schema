@@ -34,7 +34,10 @@ pub fn to_snake_case(name: &str) -> String {
                 // 2. Previous char is digit (e.g., "OAuth2T" -> "oauth2_t")
                 // 3. This is the start of a new word after acronym (e.g., "HTTPRequest" -> "http_request")
                 //    detected when prev is uppercase AND next is lowercase
-                if prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_is_lower) {
+                if prev.is_lowercase()
+                    || prev.is_ascii_digit()
+                    || (prev.is_uppercase() && next_is_lower)
+                {
                     result.push('_');
                 }
             }
@@ -84,9 +87,18 @@ pub fn to_pascal_case(name: &str) -> String {
 /// assert_eq!(pluralize("status"), "statuses");
 /// ```
 pub fn pluralize(word: &str) -> String {
-    if word.ends_with('y') && !word.ends_with("ey") && !word.ends_with("ay") && !word.ends_with("oy") && !word.ends_with("uy") {
+    if word.ends_with('y')
+        && !word.ends_with("ey")
+        && !word.ends_with("ay")
+        && !word.ends_with("oy")
+        && !word.ends_with("uy")
+    {
         format!("{}ies", &word[..word.len() - 1])
-    } else if word.ends_with('s') || word.ends_with('x') || word.ends_with("ch") || word.ends_with("sh") {
+    } else if word.ends_with('s')
+        || word.ends_with('x')
+        || word.ends_with("ch")
+        || word.ends_with("sh")
+    {
         format!("{}es", word)
     } else {
         format!("{}s", word)
@@ -107,11 +119,10 @@ pub fn pluralize(word: &str) -> String {
 pub fn escape_rust_keyword(name: &str) -> String {
     const RUST_KEYWORDS: &[&str] = &[
         "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-        "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-        "trait", "true", "type", "unsafe", "use", "where", "while", "abstract", "become",
-        "box", "do", "final", "macro", "override", "priv", "try", "typeof", "unsized",
-        "virtual", "yield",
+        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+        "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
+        "true", "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do",
+        "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
     ];
 
     if RUST_KEYWORDS.contains(&name) {

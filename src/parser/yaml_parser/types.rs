@@ -45,7 +45,6 @@ pub struct YamlModelSchema {
     // ==========================================================================
     // DDD & AUTHORIZATION EXTENSIONS
     // ==========================================================================
-
     /// DDD Entity definitions (enhanced models with behavior)
     #[serde(default)]
     pub entities: IndexMap<String, YamlEntity>,
@@ -217,9 +216,21 @@ impl YamlLifecycle {
     pub fn into_lifecycle(self) -> Result<Lifecycle, String> {
         let (shape_str, sticky, latched, display_labels, driver, state_machine) = match self {
             Self::Shape(s) => (s, None, None, Default::default(), None, None),
-            Self::Full { shape, sticky, latched, display_labels, driver, state_machine } => {
-                (shape, sticky, latched, display_labels, driver, state_machine)
-            }
+            Self::Full {
+                shape,
+                sticky,
+                latched,
+                display_labels,
+                driver,
+                state_machine,
+            } => (
+                shape,
+                sticky,
+                latched,
+                display_labels,
+                driver,
+                state_machine,
+            ),
         };
         let shape = LifecycleShape::from_name(&shape_str).ok_or_else(|| {
             format!(

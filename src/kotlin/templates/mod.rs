@@ -710,7 +710,6 @@ class {{entity_name}}Validator : BaseEntityValidator<{{entity_name}}FormData>() 
 }
 "#;
 
-
 /// Common pagination types template
 pub const PAGINATION_TEMPLATE: &str = r#"package {{base_package}}.infrastructure.pagination
 
@@ -1359,4 +1358,3 @@ fun {{module_pascal}}NavConfig.Companion.fromDeepLink(uri: String): {{module_pas
     }
 }
 "#;
-

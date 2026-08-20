@@ -1,10 +1,13 @@
 //! Model YAML parser for .model.yaml files
 
-use std::fs;
-use std::path::Path;
-use crate::webgen::ast::entity::{ModelSchema, EntityDefinition, FieldDefinition, FieldType, RelationDefinition, RelationType, EnumDefinition, EnumVariant, FieldAttribute, IndexDefinition, IndexType};
+use crate::webgen::ast::entity::{
+    EntityDefinition, EnumDefinition, EnumVariant, FieldAttribute, FieldDefinition, FieldType,
+    IndexDefinition, IndexType, ModelSchema, RelationDefinition, RelationType,
+};
 use crate::webgen::{Error, Result};
 use serde_yaml::Value;
+use std::fs;
+use std::path::Path;
 
 /// Parser for model.yaml files
 pub struct ModelParser;
@@ -20,10 +23,16 @@ impl ModelParser {
 
     /// Parse model schema from YAML content
     pub fn parse_content(content: &str, path: &Path) -> Result<ModelSchema> {
-        let root: Value = serde_yaml::from_str(content)
-            .map_err(|e| Error::Parse(format!("Failed to parse YAML from {}: {}", path.display(), e)))?;
+        let root: Value = serde_yaml::from_str(content).map_err(|e| {
+            Error::Parse(format!(
+                "Failed to parse YAML from {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
-        let mapping = root.as_mapping()
+        let mapping = root
+            .as_mapping()
             .ok_or_else(|| Error::Parse("Root must be a mapping".to_string()))?;
 
         // Parse models
@@ -45,58 +54,58 @@ impl ModelParser {
 
     /// Parse models section
     fn parse_models(value: &Value, path: &Path) -> Result<Vec<EntityDefinition>> {
-        let sequence = value.as_sequence()
+        let sequence = value
+            .as_sequence()
             .ok_or_else(|| Error::Parse("Models must be a sequence".to_string()))?;
 
-        sequence.iter()
+        sequence
+            .iter()
             .map(|v| Self::parse_entity_from_value(v, path))
             .collect()
     }
 
     /// Parse enums section
     fn parse_enums(value: &Value) -> Result<Vec<EnumDefinition>> {
-        let sequence = value.as_sequence()
+        let sequence = value
+            .as_sequence()
             .ok_or_else(|| Error::Parse("Enums must be a sequence".to_string()))?;
 
-        sequence.iter()
-            .map(Self::parse_enum_from_value)
-            .collect()
+        sequence.iter().map(Self::parse_enum_from_value).collect()
     }
 
     /// Parse a single entity from YAML value
     fn parse_entity_from_value(value: &Value, path: &Path) -> Result<EntityDefinition> {
-        let mapping = value.as_mapping()
+        let mapping = value
+            .as_mapping()
             .ok_or_else(|| Error::Parse("Entity must be a mapping".to_string()))?;
 
-        let name = mapping.get(Value::String("name".to_string()))
+        let name = mapping
+            .get(Value::String("name".to_string()))
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Parse("Entity missing name".to_string()))?
             .to_string();
 
-        let collection = mapping.get(Value::String("collection".to_string()))
+        let collection = mapping
+            .get(Value::String("collection".to_string()))
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Parse("Entity missing collection".to_string()))?
             .to_string();
 
-        let fields = Self::parse_fields(
-            mapping.get(Value::String("fields".to_string())),
-            path
-        )?;
-        let relations = Self::parse_relations(
-            mapping.get(Value::String("relations".to_string())),
-            &fields
-        )?;
-        let indexes = Self::parse_indexes(
-            mapping.get(Value::String("indexes".to_string()))
-        );
+        let fields = Self::parse_fields(mapping.get(Value::String("fields".to_string())), path)?;
+        let relations =
+            Self::parse_relations(mapping.get(Value::String("relations".to_string())), &fields)?;
+        let indexes = Self::parse_indexes(mapping.get(Value::String("indexes".to_string())));
 
         // Soft-delete: explicit `soft_delete: true`, OR (Backbone convention) the
         // entity carries audit `metadata` / a `deleted_at` field — which means the
         // backend exposes the trash endpoints (list_deleted/restore/empty_trash).
-        let soft_delete = mapping.get(Value::String("soft_delete".to_string()))
+        let soft_delete = mapping
+            .get(Value::String("soft_delete".to_string()))
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
-            || fields.iter().any(|f| f.name == "metadata" || f.name == "deleted_at");
+            || fields
+                .iter()
+                .any(|f| f.name == "metadata" || f.name == "deleted_at");
 
         Ok(EntityDefinition {
             name,
@@ -110,18 +119,22 @@ impl ModelParser {
 
     /// Parse a single enum from YAML value
     fn parse_enum_from_value(value: &Value) -> Result<EnumDefinition> {
-        let mapping = value.as_mapping()
+        let mapping = value
+            .as_mapping()
             .ok_or_else(|| Error::Parse("Enum must be a mapping".to_string()))?;
 
-        let name = mapping.get(Value::String("name".to_string()))
+        let name = mapping
+            .get(Value::String("name".to_string()))
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Parse("Enum missing name".to_string()))?
             .to_string();
 
-        let variants_value = mapping.get(Value::String("variants".to_string()))
+        let variants_value = mapping
+            .get(Value::String("variants".to_string()))
             .ok_or_else(|| Error::Parse("Enum missing variants".to_string()))?;
 
-        let variants = variants_value.as_sequence()
+        let variants = variants_value
+            .as_sequence()
             .ok_or_else(|| Error::Parse("Enum variants must be a sequence".to_string()))?
             .iter()
             .map(Self::parse_enum_variant_from_value)
@@ -140,20 +153,24 @@ impl ModelParser {
             });
         }
 
-        let mapping = value.as_mapping()
+        let mapping = value
+            .as_mapping()
             .ok_or_else(|| Error::Parse("Enum variant must be a string or mapping".to_string()))?;
 
-        let name = mapping.get(Value::String("name".to_string()))
+        let name = mapping
+            .get(Value::String("name".to_string()))
             .or_else(|| mapping.get(Value::String("variant".to_string())))
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Parse("Enum variant missing name".to_string()))?
             .to_string();
 
-        let description = mapping.get(Value::String("description".to_string()))
+        let description = mapping
+            .get(Value::String("description".to_string()))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let is_default = mapping.get(Value::String("default".to_string()))
+        let is_default = mapping
+            .get(Value::String("default".to_string()))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -169,12 +186,16 @@ impl ModelParser {
         let mut fields = Vec::new();
 
         if let Some(value) = fields_value {
-            let mapping = value.as_mapping()
+            let mapping = value
+                .as_mapping()
                 .ok_or_else(|| Error::Parse("Fields must be a mapping".to_string()))?;
 
             for (key, value) in mapping {
-                let name = key.as_str()
-                    .ok_or_else(|| Error::Parse(format!("Invalid field name in {}", path.display())))?
+                let name = key
+                    .as_str()
+                    .ok_or_else(|| {
+                        Error::Parse(format!("Invalid field name in {}", path.display()))
+                    })?
                     .to_string();
 
                 // Support both formats:
@@ -195,14 +216,31 @@ impl ModelParser {
                     }
                     // Full format - value is a mapping with type, attributes, description, etc.
                     _ => {
-                        let field_map = value.as_mapping()
-                            .ok_or_else(|| Error::Parse(format!("Field '{}' must be a mapping or string in {}", name, path.display())))?;
+                        let field_map = value.as_mapping().ok_or_else(|| {
+                            Error::Parse(format!(
+                                "Field '{}' must be a mapping or string in {}",
+                                name,
+                                path.display()
+                            ))
+                        })?;
 
-                        let type_value = field_map.get(Value::String("type".to_string()))
-                            .ok_or_else(|| Error::Parse(format!("Field '{}' missing type in {}", name, path.display())))?;
+                        let type_value = field_map
+                            .get(Value::String("type".to_string()))
+                            .ok_or_else(|| {
+                                Error::Parse(format!(
+                                    "Field '{}' missing type in {}",
+                                    name,
+                                    path.display()
+                                ))
+                            })?;
 
-                        let type_str = type_value.as_str()
-                            .ok_or_else(|| Error::Parse(format!("Field '{}' type must be a string in {}", name, path.display())))?;
+                        let type_str = type_value.as_str().ok_or_else(|| {
+                            Error::Parse(format!(
+                                "Field '{}' type must be a string in {}",
+                                name,
+                                path.display()
+                            ))
+                        })?;
 
                         let (type_name, optional) = Self::parse_type_string(type_str);
                         let attributes = Self::parse_field_attributes(field_map)?;
@@ -285,7 +323,9 @@ impl ModelParser {
     fn parse_field_attributes(field_map: &serde_yaml::Mapping) -> Result<Vec<FieldAttribute>> {
         let mut attributes = Vec::new();
 
-        if let Some(attrs_value) = field_map.get(serde_yaml::Value::String("attributes".to_string())) {
+        if let Some(attrs_value) =
+            field_map.get(serde_yaml::Value::String("attributes".to_string()))
+        {
             if let Some(attrs) = attrs_value.as_sequence() {
                 for attr in attrs {
                     if let Some(attr_str) = attr.as_str() {
@@ -365,14 +405,16 @@ impl ModelParser {
 
     /// Parse field description
     fn parse_field_description(field_map: &serde_yaml::Mapping) -> Option<String> {
-        field_map.get(serde_yaml::Value::String("description".to_string()))
+        field_map
+            .get(serde_yaml::Value::String("description".to_string()))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
 
     /// Parse field default value from attributes
     fn parse_field_default(attributes: &[FieldAttribute]) -> Option<String> {
-        attributes.iter()
+        attributes
+            .iter()
             .find(|a| a.name == "default")
             .and_then(|a| a.first_arg().cloned())
     }
@@ -385,26 +427,32 @@ impl ModelParser {
         let mut relations = Vec::new();
 
         if let Some(value) = relations_value {
-            let mapping = value.as_mapping()
+            let mapping = value
+                .as_mapping()
                 .ok_or_else(|| Error::Parse("Relations must be a mapping".to_string()))?;
 
             for (key, value) in mapping {
-                let name = key.as_str()
+                let name = key
+                    .as_str()
                     .ok_or_else(|| Error::Parse("Invalid relation name".to_string()))?
                     .to_string();
 
-                let rel_map = value.as_mapping()
-                    .ok_or_else(|| Error::Parse(format!("Relation '{}' must be a mapping", name)))?;
+                let rel_map = value.as_mapping().ok_or_else(|| {
+                    Error::Parse(format!("Relation '{}' must be a mapping", name))
+                })?;
 
-                let type_value = rel_map.get(Value::String("type".to_string()))
+                let type_value = rel_map
+                    .get(Value::String("type".to_string()))
                     .ok_or_else(|| Error::Parse(format!("Relation '{}' missing type", name)))?;
 
-                let type_str = type_value.as_str()
-                    .ok_or_else(|| Error::Parse(format!("Relation '{}' type must be a string", name)))?;
+                let type_str = type_value.as_str().ok_or_else(|| {
+                    Error::Parse(format!("Relation '{}' type must be a string", name))
+                })?;
 
                 let (target_entity, relation_type) = Self::parse_relation_type(type_str)?;
 
-                let attributes = rel_map.get(Value::String("attributes".to_string()))
+                let attributes = rel_map
+                    .get(Value::String("attributes".to_string()))
                     .and_then(|v| v.as_sequence())
                     .map(|seq| {
                         seq.iter()
@@ -446,18 +494,25 @@ impl ModelParser {
     fn parse_indexes(indexes_value: Option<&Value>) -> Vec<IndexDefinition> {
         if let Some(value) = indexes_value {
             if let Some(sequence) = value.as_sequence() {
-                return sequence.iter().filter_map(|idx| {
-                    let mapping = idx.as_mapping()?;
-                    let index_type_value = mapping.get(Value::String("type".to_string()))?;
-                    let index_type = match index_type_value.as_str() {
-                        Some("unique") => IndexType::Unique,
-                        _ => IndexType::Index,
-                    };
-                    let fields_value = mapping.get(Value::String("fields".to_string()))?;
-                    let fields = fields_value.as_sequence()?.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+                return sequence
+                    .iter()
+                    .filter_map(|idx| {
+                        let mapping = idx.as_mapping()?;
+                        let index_type_value = mapping.get(Value::String("type".to_string()))?;
+                        let index_type = match index_type_value.as_str() {
+                            Some("unique") => IndexType::Unique,
+                            _ => IndexType::Index,
+                        };
+                        let fields_value = mapping.get(Value::String("fields".to_string()))?;
+                        let fields = fields_value
+                            .as_sequence()?
+                            .iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect();
 
-                    Some(IndexDefinition { index_type, fields })
-                }).collect();
+                        Some(IndexDefinition { index_type, fields })
+                    })
+                    .collect();
             }
         }
         Vec::new()

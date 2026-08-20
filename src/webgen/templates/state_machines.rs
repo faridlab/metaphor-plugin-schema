@@ -1,6 +1,6 @@
 //! State Machine UI templates for generating React components
 
-use crate::webgen::ast::state_machine::{HookSchema};
+use crate::webgen::ast::state_machine::HookSchema;
 use crate::webgen::parser::to_pascal_case;
 use std::collections::HashMap;
 
@@ -23,31 +23,41 @@ impl StateMachineTemplates {
         let model_pascal = to_pascal_case(&clean_model);
         let model_snake = crate::webgen::parser::to_snake_case(&clean_model);
 
-        let state_configs = Self::generate_state_configs(&schema.state_machine.as_ref().unwrap().states);
+        let state_configs =
+            Self::generate_state_configs(&schema.state_machine.as_ref().unwrap().states);
 
-        let mut result = String::from(r#"import { Chip } from '@/components/ui';
+        let mut result = String::from(
+            r#"import { Chip } from '@/components/ui';
 
 /**
- * State badge component for "#);
+ * State badge component for "#,
+        );
         result.push_str(&model_pascal);
-        result.push_str(r#"
+        result.push_str(
+            r#"
  *
- * Generated from hook schema: "#);
+ * Generated from hook schema: "#,
+        );
         result.push_str(&schema.name);
-        result.push_str(r#"
+        result.push_str(
+            r#"
  */
-export interface "#);
+export interface "#,
+        );
         result.push_str(&model_snake);
-        result.push_str(r#"StateBadgeProps {
+        result.push_str(
+            r#"StateBadgeProps {
   state: string;
   label?: string;
 }
 
-export function "#);
+export function "#,
+        );
         result.push_str(&model_pascal);
         result.push_str(r#"StateBadge({ state, label }: "#);
         result.push_str(&model_snake);
-        result.push_str(r#"StateBadgeProps) {
+        result.push_str(
+            r#"StateBadgeProps) {
   const stateConfig = getStateConfig(state);
 
   return (
@@ -68,21 +78,26 @@ interface StateConfig {
 
 function getStateConfig(state: string): StateConfig {
   const configs: Record<string, StateConfig> = {
-"#);
+"#,
+        );
         result.push_str(&state_configs);
-        result.push_str(r#"  };
+        result.push_str(
+            r#"  };
 
   return configs[state] || { label: state, color: 'default' };
 }
 
 // <<< CUSTOM: Add custom state configurations here
 // END CUSTOM
-"#);
+"#,
+        );
         result
     }
 
     /// Generate state configurations
-    fn generate_state_configs(states: &HashMap<String, crate::webgen::ast::state_machine::StateDefinition>) -> String {
+    fn generate_state_configs(
+        states: &HashMap<String, crate::webgen::ast::state_machine::StateDefinition>,
+    ) -> String {
         let mut configs = String::new();
 
         for (name, state) in states {
@@ -114,35 +129,46 @@ function getStateConfig(state: string): StateConfig {
 
         let transition_map = Self::generate_transition_map(schema);
 
-        let mut result = String::from(r#"import { Button } from '@/components/ui';
+        let mut result = String::from(
+            r#"import { Button } from '@/components/ui';
 import { ArrowForward } from '@/components/ui';
 
 /**
- * State transition button for "#);
+ * State transition button for "#,
+        );
         result.push_str(&model_pascal);
-        result.push_str(r#"
+        result.push_str(
+            r#"
  *
- * Generated from hook schema: "#);
+ * Generated from hook schema: "#,
+        );
         result.push_str(&schema.name);
-        result.push_str(r#"
+        result.push_str(
+            r#"
  */
-export interface "#);
+export interface "#,
+        );
         result.push_str(&model_snake);
-        result.push_str(r#"TransitionButtonsProps {
+        result.push_str(
+            r#"TransitionButtonsProps {
   currentState: string;
   onTransition?: (transition: string) => void;
   disabled?: boolean;
 }
 
-export function "#);
+export function "#,
+        );
         result.push_str(&model_pascal);
-        result.push_str(r#"TransitionButtons({
+        result.push_str(
+            r#"TransitionButtons({
   currentState,
   onTransition,
   disabled = false,
-}: "#);
+}: "#,
+        );
         result.push_str(&model_snake);
-        result.push_str(r#"TransitionButtonsProps) {
+        result.push_str(
+            r#"TransitionButtonsProps) {
   const allowedTransitions = getAllowedTransitions(currentState);
 
   if (allowedTransitions.length === 0) {
@@ -175,16 +201,19 @@ interface TransitionInfo {
 
 function getAllowedTransitions(currentState: string): TransitionInfo[] {
   const transitions: Record<string, TransitionInfo[]> = {
-"#);
+"#,
+        );
         result.push_str(&transition_map);
-        result.push_str(r#"  };
+        result.push_str(
+            r#"  };
 
   return transitions[currentState] || [];
 }
 
 // <<< CUSTOM: Add custom transition logic here
 // END CUSTOM
-"#);
+"#,
+        );
         result
     }
 
@@ -217,27 +246,36 @@ function getAllowedTransitions(currentState: string): TransitionInfo[] {
         let model_pascal = to_pascal_case(&clean_model);
         let model_snake = crate::webgen::parser::to_snake_case(&clean_model);
 
-        let mut result = String::from(r#"import { useMutation, useQueryClient } from '@tanstack/react-query';
+        let mut result = String::from(
+            r#"import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 /**
- * Hook for managing "#);
+ * Hook for managing "#,
+        );
         result.push_str(&model_pascal);
-        result.push_str(r#" state transitions
+        result.push_str(
+            r#" state transitions
  *
- * Generated from hook schema: "#);
+ * Generated from hook schema: "#,
+        );
         result.push_str(&schema.name);
-        result.push_str(r#"
+        result.push_str(
+            r#"
  */
-export function use"#);
+export function use"#,
+        );
         result.push_str(&model_pascal);
-        result.push_str(r#"StateTransitions() {
+        result.push_str(
+            r#"StateTransitions() {
   const queryClient = useQueryClient();
 
   const transitionMutation = useMutation({
     mutationFn: async ({ entityId, transition }: { entityId: string; transition: string }) => {
-      const response = await fetch(`/api/"#);
+      const response = await fetch(`/api/"#,
+        );
         result.push_str(&model_snake);
-        result.push_str(r#"/${entityId}/transition`, {
+        result.push_str(
+            r#"/${entityId}/transition`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transition }),
@@ -246,9 +284,11 @@ export function use"#);
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({
-        queryKey: ['"#);
+        queryKey: ['"#,
+        );
         result.push_str(&model_snake);
-        result.push_str(r#"', variables.entityId],
+        result.push_str(
+            r#"', variables.entityId],
       });
     },
   });
@@ -266,7 +306,8 @@ export function use"#);
 
 // <<< CUSTOM: Add custom state machine logic here
 // END CUSTOM
-"#);
+"#,
+        );
         result
     }
 
@@ -276,27 +317,34 @@ export function use"#);
         let model_pascal = to_pascal_case(&clean_model);
         let model_snake = crate::webgen::parser::to_snake_case(&clean_model);
 
-        let mut result = String::from(r#"import { Box, Typography, Divider } from '@/components/ui';
+        let mut result = String::from(
+            r#"import { Box, Typography, Divider } from '@/components/ui';
 import { Event } from '@/components/ui';
 
 /**
- * State history component for "#);
+ * State history component for "#,
+        );
         result.push_str(&model_pascal);
-        result.push_str(r#"
+        result.push_str(
+            r#"
  *
  * Displays the history of state transitions for an entity
  */
-export interface "#);
+export interface "#,
+        );
         result.push_str(&model_snake);
-        result.push_str(r#"StateHistoryProps {
+        result.push_str(
+            r#"StateHistoryProps {
   history: StateHistoryEntry[];
 }
 
-export function "#);
+export function "#,
+        );
         result.push_str(&model_pascal);
         result.push_str(r#"StateHistory({ history }: "#);
         result.push_str(&model_snake);
-        result.push_str(r#"StateHistoryProps) {
+        result.push_str(
+            r#"StateHistoryProps) {
   if (history.length === 0) {
     return (
       <Typography variant="body2" color="text.secondary">
@@ -345,7 +393,8 @@ export interface StateHistoryEntry {
 
 // <<< CUSTOM: Add custom history display logic here
 // END CUSTOM
-"#);
+"#,
+        );
         result
     }
 }

@@ -77,12 +77,8 @@ pub(super) fn execute_generate(
 
     let mut generated = run_generators(&resolved, &targets, split)?;
 
-    let output_dir = output.unwrap_or_else(|| {
-        schema_path
-            .parent()
-            .unwrap_or(&schema_path)
-            .to_path_buf()
-    });
+    let output_dir =
+        output.unwrap_or_else(|| schema_path.parent().unwrap_or(&schema_path).to_path_buf());
 
     let user_owned = load_user_owned_globs(&output_dir)?;
 

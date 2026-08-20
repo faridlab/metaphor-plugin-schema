@@ -66,8 +66,10 @@ impl<'a> ReferenceResolver<'a> {
         // Check hook model references (warn and skip instead of error)
         for hook in &self.schema.hooks {
             if !self.model_fields.contains_key(&hook.model_ref) {
-                eprintln!("  ⚠ Warning: Hook '{}' references unknown model '{}' — skipping validation",
-                    hook.name, hook.model_ref);
+                eprintln!(
+                    "  ⚠ Warning: Hook '{}' references unknown model '{}' — skipping validation",
+                    hook.name, hook.model_ref
+                );
                 continue;
             }
 

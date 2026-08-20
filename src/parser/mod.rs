@@ -29,18 +29,14 @@ pub use lexer::{Lexer, Token, TokenKind};
 pub use model_parser::ModelParser;
 pub use workflow_parser::WorkflowParser;
 pub use yaml_parser::{
-    parse_model_yaml, parse_model_yaml_str,
-    parse_hook_yaml, parse_hook_yaml_str,
-    parse_workflow_yaml, parse_workflow_yaml_str,
-    parse_hook_yaml_flexible, parse_hook_index_yaml_str,
-    parse_model_yaml_flexible, parse_model_index_yaml_str,
-    is_hook_index_file, is_model_index_file,
-    resolve_shared_types,
-    YamlWorkflowSchema, YamlHookParseResult, YamlHookIndexSchema,
-    YamlModelIndexSchema, YamlModelParseResult, YamlSharedType, YamlField,
+    is_hook_index_file, is_model_index_file, parse_hook_index_yaml_str, parse_hook_yaml,
+    parse_hook_yaml_flexible, parse_hook_yaml_str, parse_model_index_yaml_str, parse_model_yaml,
+    parse_model_yaml_flexible, parse_model_yaml_str, parse_workflow_yaml, parse_workflow_yaml_str,
+    resolve_shared_types, YamlField, YamlHookIndexSchema, YamlHookParseResult,
+    YamlModelIndexSchema, YamlModelParseResult, YamlSharedType, YamlWorkflowSchema,
 };
 
-use crate::ast::{ModelFile, HookFile, WorkflowFile};
+use crate::ast::{HookFile, ModelFile, WorkflowFile};
 use std::path::Path;
 use thiserror::Error;
 
@@ -152,7 +148,8 @@ impl ParseError {
                         line - 1,
                         lines[line - 2],
                         width = line_num_width
-                    ).ok();
+                    )
+                    .ok();
                 }
 
                 // Show error line
@@ -162,7 +159,8 @@ impl ParseError {
                     line,
                     line_content,
                     width = line_num_width
-                ).ok();
+                )
+                .ok();
 
                 // Show pointer to error position
                 let pointer_padding = " ".repeat(col.saturating_sub(1));
@@ -172,7 +170,8 @@ impl ParseError {
                     "",
                     pointer_padding,
                     width = line_num_width
-                ).ok();
+                )
+                .ok();
 
                 // Show line after if available
                 if line < lines.len() {
@@ -182,7 +181,8 @@ impl ParseError {
                         line + 1,
                         lines[line],
                         width = line_num_width
-                    ).ok();
+                    )
+                    .ok();
                 }
             }
         }
@@ -223,25 +223,33 @@ pub fn parse_hook_file(path: impl AsRef<Path>) -> Result<HookFile, ParseError> {
 
 /// Parse a model YAML file from string content
 pub fn parse_yaml_model(source: &str) -> Result<ModelFile, ParseError> {
-    let yaml_schema = parse_model_yaml_str(source)
-        .map_err(|e| ParseError::SyntaxError {
-            line: 1,
-            col: 1,
-            message: e.to_string(),
-        })?;
+    let yaml_schema = parse_model_yaml_str(source).map_err(|e| ParseError::SyntaxError {
+        line: 1,
+        col: 1,
+        message: e.to_string(),
+    })?;
 
     // Convert YAML schema to ModelFile, applying the file-level `schema:` default
     let file_schema = yaml_schema.schema.clone();
-    let models = yaml_schema.models.into_iter().map(|m| {
-        let mut model = m.into_model()?;
-        model.apply_schema_default(&file_schema);
-        Ok(model)
-    }).collect::<Result<Vec<_>, String>>().map_err(|e| ParseError::SyntaxError {
-        line: 1,
-        col: 1,
-        message: e,
-    })?;
-    let enums = yaml_schema.enums.into_iter().map(|e| e.into_enum()).collect();
+    let models = yaml_schema
+        .models
+        .into_iter()
+        .map(|m| {
+            let mut model = m.into_model()?;
+            model.apply_schema_default(&file_schema);
+            Ok(model)
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|e| ParseError::SyntaxError {
+            line: 1,
+            col: 1,
+            message: e,
+        })?;
+    let enums = yaml_schema
+        .enums
+        .into_iter()
+        .map(|e| e.into_enum())
+        .collect();
 
     Ok(ModelFile {
         path: None,
@@ -253,12 +261,11 @@ pub fn parse_yaml_model(source: &str) -> Result<ModelFile, ParseError> {
 
 /// Parse a hook YAML file from string content (entity lifecycle behaviors)
 pub fn parse_yaml_hook(source: &str) -> Result<HookFile, ParseError> {
-    let yaml_schema = parse_hook_yaml_str(source)
-        .map_err(|e| ParseError::SyntaxError {
-            line: 1,
-            col: 1,
-            message: e.to_string(),
-        })?;
+    let yaml_schema = parse_hook_yaml_str(source).map_err(|e| ParseError::SyntaxError {
+        line: 1,
+        col: 1,
+        message: e.to_string(),
+    })?;
 
     // Convert YAML schema to HookFile
     Ok(HookFile {
@@ -288,20 +295,17 @@ pub enum ModelParseResult {
 pub fn parse_yaml_hook_flexible(source: &str) -> Result<HookParseResult, ParseError> {
     use yaml_parser::YamlHookParseResult;
 
-    let result = parse_hook_yaml_flexible(source)
-        .map_err(|e| ParseError::SyntaxError {
-            line: 1,
-            col: 1,
-            message: e.to_string(),
-        })?;
+    let result = parse_hook_yaml_flexible(source).map_err(|e| ParseError::SyntaxError {
+        line: 1,
+        col: 1,
+        message: e.to_string(),
+    })?;
 
     match result {
-        YamlHookParseResult::Hook(yaml_schema) => {
-            Ok(HookParseResult::Hook(HookFile {
-                path: None,
-                hooks: vec![yaml_schema.into_hook()],
-            }))
-        }
+        YamlHookParseResult::Hook(yaml_schema) => Ok(HookParseResult::Hook(HookFile {
+            path: None,
+            hooks: vec![yaml_schema.into_hook()],
+        })),
         YamlHookParseResult::Index(index_schema) => {
             Ok(HookParseResult::Index(Box::new(index_schema)))
         }
@@ -312,27 +316,35 @@ pub fn parse_yaml_hook_flexible(source: &str) -> Result<HookParseResult, ParseEr
 pub fn parse_yaml_model_flexible(source: &str) -> Result<ModelParseResult, ParseError> {
     use yaml_parser::YamlModelParseResult;
 
-    let result = parse_model_yaml_flexible(source)
-        .map_err(|e| ParseError::SyntaxError {
-            line: 1,
-            col: 1,
-            message: e.to_string(),
-        })?;
+    let result = parse_model_yaml_flexible(source).map_err(|e| ParseError::SyntaxError {
+        line: 1,
+        col: 1,
+        message: e.to_string(),
+    })?;
 
     match result {
         YamlModelParseResult::Model(yaml_schema) => {
             let yaml_schema = *yaml_schema;
             let file_schema = yaml_schema.schema.clone();
-            let models = yaml_schema.models.into_iter().map(|m| {
-                let mut model = m.into_model()?;
-                model.apply_schema_default(&file_schema);
-                Ok(model)
-            }).collect::<Result<Vec<_>, String>>().map_err(|e| ParseError::SyntaxError {
-                line: 1,
-                col: 1,
-                message: e,
-            })?;
-            let enums = yaml_schema.enums.into_iter().map(|e| e.into_enum()).collect();
+            let models = yaml_schema
+                .models
+                .into_iter()
+                .map(|m| {
+                    let mut model = m.into_model()?;
+                    model.apply_schema_default(&file_schema);
+                    Ok(model)
+                })
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|e| ParseError::SyntaxError {
+                    line: 1,
+                    col: 1,
+                    message: e,
+                })?;
+            let enums = yaml_schema
+                .enums
+                .into_iter()
+                .map(|e| e.into_enum())
+                .collect();
 
             Ok(ModelParseResult::Model(ModelFile {
                 path: None,
@@ -341,20 +353,17 @@ pub fn parse_yaml_model_flexible(source: &str) -> Result<ModelParseResult, Parse
                 models,
             }))
         }
-        YamlModelParseResult::Index(index_schema) => {
-            Ok(ModelParseResult::Index(index_schema))
-        }
+        YamlModelParseResult::Index(index_schema) => Ok(ModelParseResult::Index(index_schema)),
     }
 }
 
 /// Parse a workflow YAML file from string content (multi-step business processes)
 pub fn parse_yaml_workflow(source: &str) -> Result<WorkflowFile, ParseError> {
-    let yaml_schema = parse_workflow_yaml_str(source)
-        .map_err(|e| ParseError::SyntaxError {
-            line: 1,
-            col: 1,
-            message: e.to_string(),
-        })?;
+    let yaml_schema = parse_workflow_yaml_str(source).map_err(|e| ParseError::SyntaxError {
+        line: 1,
+        col: 1,
+        message: e.to_string(),
+    })?;
 
     // Convert YAML schema to WorkflowFile
     Ok(WorkflowFile {
@@ -384,7 +393,9 @@ pub fn parse_workflow_file(path: impl AsRef<Path>) -> Result<WorkflowFile, Parse
 /// let expr = parse_expression_str("is_active && is_verified")?;
 /// let expr = parse_expression_str("count(items)")?;
 /// ```
-pub fn parse_expression_str(source: &str) -> Result<crate::ast::expressions::Expression, ParseError> {
+pub fn parse_expression_str(
+    source: &str,
+) -> Result<crate::ast::expressions::Expression, ParseError> {
     let lexer = Lexer::new(source);
     let mut parser = ExpressionParser::new(lexer);
     parser.parse()
@@ -407,7 +418,7 @@ impl<'a> ExpressionParser<'a> {
     }
 
     fn parse_or_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
-        use crate::ast::expressions::{Expression, BinaryOp};
+        use crate::ast::expressions::{BinaryOp, Expression};
 
         let mut left = self.parse_and_expression()?;
 
@@ -421,7 +432,7 @@ impl<'a> ExpressionParser<'a> {
     }
 
     fn parse_and_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
-        use crate::ast::expressions::{Expression, BinaryOp};
+        use crate::ast::expressions::{BinaryOp, Expression};
 
         let mut left = self.parse_comparison_expression()?;
 
@@ -434,8 +445,10 @@ impl<'a> ExpressionParser<'a> {
         Ok(left)
     }
 
-    fn parse_comparison_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
-        use crate::ast::expressions::{Expression, BinaryOp};
+    fn parse_comparison_expression(
+        &mut self,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
+        use crate::ast::expressions::{BinaryOp, Expression};
 
         let left = self.parse_additive_expression()?;
 
@@ -459,8 +472,10 @@ impl<'a> ExpressionParser<'a> {
         Ok(left)
     }
 
-    fn parse_additive_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
-        use crate::ast::expressions::{Expression, BinaryOp};
+    fn parse_additive_expression(
+        &mut self,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
+        use crate::ast::expressions::{BinaryOp, Expression};
 
         let mut left = self.parse_multiplicative_expression()?;
 
@@ -483,8 +498,10 @@ impl<'a> ExpressionParser<'a> {
         Ok(left)
     }
 
-    fn parse_multiplicative_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
-        use crate::ast::expressions::{Expression, BinaryOp};
+    fn parse_multiplicative_expression(
+        &mut self,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
+        use crate::ast::expressions::{BinaryOp, Expression};
 
         let mut left = self.parse_unary_expression()?;
 
@@ -508,7 +525,9 @@ impl<'a> ExpressionParser<'a> {
         Ok(left)
     }
 
-    fn parse_unary_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
+    fn parse_unary_expression(
+        &mut self,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
         use crate::ast::expressions::{Expression, UnaryOp};
 
         if self.check(TokenKind::Bang) {
@@ -532,8 +551,10 @@ impl<'a> ExpressionParser<'a> {
         self.parse_primary_expression()
     }
 
-    fn parse_primary_expression(&mut self) -> Result<crate::ast::expressions::Expression, ParseError> {
-        use crate::ast::expressions::{Expression, Literal, FieldRef};
+    fn parse_primary_expression(
+        &mut self,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
+        use crate::ast::expressions::{Expression, FieldRef, Literal};
 
         match self.current_kind().cloned() {
             Some(TokenKind::LParen) => {
@@ -629,7 +650,10 @@ impl<'a> ExpressionParser<'a> {
         }
     }
 
-    fn parse_ternary(&mut self, condition: crate::ast::expressions::Expression) -> Result<crate::ast::expressions::Expression, ParseError> {
+    fn parse_ternary(
+        &mut self,
+        condition: crate::ast::expressions::Expression,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
         use crate::ast::expressions::Expression;
 
         self.expect(TokenKind::Question)?;
@@ -644,7 +668,10 @@ impl<'a> ExpressionParser<'a> {
         })
     }
 
-    fn parse_function_call(&mut self, name: String) -> Result<crate::ast::expressions::Expression, ParseError> {
+    fn parse_function_call(
+        &mut self,
+        name: String,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
         use crate::ast::expressions::Expression;
 
         self.expect(TokenKind::LParen)?;
@@ -663,7 +690,10 @@ impl<'a> ExpressionParser<'a> {
         Ok(Expression::FunctionCall { name, args })
     }
 
-    fn parse_member_access(&mut self, object: crate::ast::expressions::Expression) -> Result<crate::ast::expressions::Expression, ParseError> {
+    fn parse_member_access(
+        &mut self,
+        object: crate::ast::expressions::Expression,
+    ) -> Result<crate::ast::expressions::Expression, ParseError> {
         use crate::ast::expressions::Expression;
 
         self.expect(TokenKind::Dot)?;
@@ -736,7 +766,9 @@ impl<'a> ExpressionParser<'a> {
             self.advance()?;
             Ok(())
         } else {
-            let got = self.current.as_ref()
+            let got = self
+                .current
+                .as_ref()
                 .map(|t| format!("{}", t.kind))
                 .unwrap_or_else(|| "EOF".to_string());
             Err(ParseError::unexpected_token(

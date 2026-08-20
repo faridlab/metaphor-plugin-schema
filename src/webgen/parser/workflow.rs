@@ -1,13 +1,12 @@
 //! Workflow YAML parser for .workflow.yaml files
 
-use std::fs;
-use std::path::Path;
 use crate::webgen::ast::workflow::{
-    WorkflowSchema, WorkflowTrigger, WorkflowConfig, WorkflowStep, WorkflowStepType,
-    ContextVariable,
-    RawWorkflowSchema, RawWorkflowStep,
+    ContextVariable, RawWorkflowSchema, RawWorkflowStep, WorkflowConfig, WorkflowSchema,
+    WorkflowStep, WorkflowStepType, WorkflowTrigger,
 };
 use crate::webgen::{Error, Result};
+use std::fs;
+use std::path::Path;
 
 /// Parser for workflow.yaml files
 pub struct WorkflowParser;
@@ -23,8 +22,13 @@ impl WorkflowParser {
 
     /// Parse workflow schema from YAML content
     pub fn parse_content(content: &str, path: &Path) -> Result<WorkflowSchema> {
-        let raw: RawWorkflowSchema = serde_yaml::from_str(content)
-            .map_err(|e| Error::Parse(format!("Failed to parse YAML from {}: {}", path.display(), e)))?;
+        let raw: RawWorkflowSchema = serde_yaml::from_str(content).map_err(|e| {
+            Error::Parse(format!(
+                "Failed to parse YAML from {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         let trigger = WorkflowTrigger {
             event: raw.trigger.event,
@@ -43,7 +47,9 @@ impl WorkflowParser {
             }
         };
 
-        let context = raw.context.unwrap_or_default()
+        let context = raw
+            .context
+            .unwrap_or_default()
             .into_iter()
             .map(|(name, value)| {
                 let default_value = value.and_then(|v| v.as_str().map(|s| s.to_string()));
@@ -56,13 +62,13 @@ impl WorkflowParser {
             })
             .collect();
 
-        let steps = raw.steps.into_iter()
+        let steps = raw
+            .steps
+            .into_iter()
             .map(Self::parse_workflow_step)
             .collect::<Result<Vec<_>>>()?;
 
-        let compensation = raw.compensation.into_iter()
-            .map(|c| c.into())
-            .collect();
+        let compensation = raw.compensation.into_iter().map(|c| c.into()).collect();
 
         Ok(WorkflowSchema {
             name: raw.name,
@@ -93,7 +99,9 @@ impl WorkflowParser {
         let on_event = raw.on_event.map(Into::into);
         let on_timeout = raw.on_timeout.map(Into::into);
 
-        let conditions = raw.conditions.map(|c| c.into_iter().map(Into::into).collect());
+        let conditions = raw
+            .conditions
+            .map(|c| c.into_iter().map(Into::into).collect());
 
         Ok(WorkflowStep {
             name: raw.name,

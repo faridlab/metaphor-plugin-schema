@@ -1,6 +1,6 @@
 //! Enhanced templates for field-aware code generation
 
-use crate::webgen::ast::entity::{EntityDefinition, FieldDefinition, FieldType, EnumDefinition};
+use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefinition, FieldType};
 
 /// Enhanced template generator for field-aware forms
 pub struct FormTemplates;
@@ -74,9 +74,7 @@ impl FormTemplates {
                 // Recursively handle optional types
                 Self::optional_field(field, inner, enums)
             }
-            FieldType::Array(inner) => {
-                Self::array_field(field_path, &label, inner, enums)
-            }
+            FieldType::Array(inner) => Self::array_field(field_path, &label, inner, enums),
             FieldType::Enum(type_name) => {
                 if let Some(enum_def) = enums.iter().find(|e| &e.name == type_name) {
                     Self::select_field(field_path, &label, enum_def, is_optional)
@@ -90,25 +88,24 @@ impl FormTemplates {
 
     /// Check if field is an email field
     fn is_email_field(field: &FieldDefinition) -> bool {
-        field.name.contains("email") ||
-        field.attributes.iter().any(|a| a.name == "email")
+        field.name.contains("email") || field.attributes.iter().any(|a| a.name == "email")
     }
 
     /// Check if field is a URL field
     fn is_url_field(field: &FieldDefinition) -> bool {
-        field.name.contains("url") ||
-        field.name.contains("website") ||
-        field.name.contains("link") ||
-        field.attributes.iter().any(|a| a.name == "url")
+        field.name.contains("url")
+            || field.name.contains("website")
+            || field.name.contains("link")
+            || field.attributes.iter().any(|a| a.name == "url")
     }
 
     /// Check if field should be multiline
     fn is_multiline(field: &FieldDefinition) -> bool {
-        matches!(field.type_name, FieldType::Text) ||
-        field.name.contains("description") ||
-        field.name.contains("content") ||
-        field.name.contains("body") ||
-        field.attributes.iter().any(|a| a.name == "multiline")
+        matches!(field.type_name, FieldType::Text)
+            || field.name.contains("description")
+            || field.name.contains("content")
+            || field.name.contains("body")
+            || field.attributes.iter().any(|a| a.name == "multiline")
     }
 
     /// Get a user-friendly label for a field
@@ -118,15 +115,14 @@ impl FormTemplates {
         }
 
         // Convert snake_case to Title Case
-        field.name
+        field
+            .name
             .split('_')
             .map(|s| {
                 let mut chars = s.chars();
                 match chars.next() {
                     None => String::new(),
-                    Some(first) => {
-                        first.to_uppercase().collect::<String>() + chars.as_str()
-                    }
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                 }
             })
             .collect::<Vec<_>>()
@@ -136,89 +132,130 @@ impl FormTemplates {
     /// Generate a TextField component
     fn text_field(name: &str, label: &str, input_type: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let mut result = String::from(r#"        <TextField
-          label=""#);
+        let mut result = String::from(
+            r#"        <TextField
+          label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
-          type=""#);
+        result.push_str(
+            r#""
+          type=""#,
+        );
         result.push_str(input_type);
-        result.push_str(r#""
-          {...register('"#);
+        result.push_str(
+            r#""
+          {...register('"#,
+        );
         result.push_str(name);
         result.push_str("'})");
-        result.push_str(r#"}
-          error={!!errors."#);
+        result.push_str(
+            r#"}
+          error={!!errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"}
-          helperText={errors."#);
+        result.push_str(
+            r#"}
+          helperText={errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"?.message}
+        result.push_str(
+            r#"?.message}
           fullWidth
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate a TextArea field
     fn textarea_field(name: &str, label: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let mut result = String::from(r#"        <TextField
-          label=""#);
+        let mut result = String::from(
+            r#"        <TextField
+          label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
-          {...register('"#);
+        result.push_str(
+            r#""
+          {...register('"#,
+        );
         result.push_str(name);
         result.push_str("'})");
-        result.push_str(r#"}
-          error={!!errors."#);
+        result.push_str(
+            r#"}
+          error={!!errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"}
-          helperText={errors."#);
+        result.push_str(
+            r#"}
+          helperText={errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"?.message}
+        result.push_str(
+            r#"?.message}
           multiline
           rows={4}
           fullWidth
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate a number field
     fn number_field(name: &str, label: &str, number_type: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let step = if number_type == "integer" { "1" } else { "0.01" };
-        let mut result = String::from(r#"        <TextField
-          label=""#);
+        let step = if number_type == "integer" {
+            "1"
+        } else {
+            "0.01"
+        };
+        let mut result = String::from(
+            r#"        <TextField
+          label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
+        result.push_str(
+            r#""
           type="number"
-          inputProps={{ step: ""#);
+          inputProps={{ step: ""#,
+        );
         result.push_str(step);
-        result.push_str(r#" }}
-          {...register('"#);
+        result.push_str(
+            r#" }}
+          {...register('"#,
+        );
         result.push_str(name);
-        result.push_str(r#"', { valueAsNumber: true })}
-          error={!!errors."#);
+        result.push_str(
+            r#"', { valueAsNumber: true })}
+          error={!!errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"}
-          helperText={errors."#);
+        result.push_str(
+            r#"}
+          helperText={errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"?.message}
+        result.push_str(
+            r#"?.message}
           fullWidth
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate a switch field for booleans
     fn switch_field(name: &str, label: &str) -> String {
-        let mut result = String::from(r#"        <FormControlLabel
+        let mut result = String::from(
+            r#"        <FormControlLabel
           control={
             <Controller
-              name=""#);
+              name=""#,
+        );
         result.push_str(name);
-        result.push_str(r#""
+        result.push_str(
+            r#""
               control={control}
               render={({ field }) => (
                 <Switch
@@ -228,27 +265,35 @@ impl FormTemplates {
               )}
             />
           }
-          label=""#);
+          label=""#,
+        );
         result.push_str(label);
-        result.push_str(r#"
-        />"#);
+        result.push_str(
+            r#"
+        />"#,
+        );
         result
     }
 
     /// Generate a date-time picker
     fn date_time_field(name: &str, label: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let mut result = String::from(r#"        <Controller
-          name=""#);
+        let mut result = String::from(
+            r#"        <Controller
+          name=""#,
+        );
         result.push_str(name);
-        result.push_str(r#""
+        result.push_str(
+            r#""
           control={control}
           render={({ field, fieldState: { error } }) => (
             <DateTimePicker
-              label=""#);
+              label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
+        result.push_str(
+            r#""
               value={field.value}
               onChange={(newValue) => field.onChange(newValue)}
               slotProps={{ textField: {{
@@ -258,24 +303,30 @@ impl FormTemplates {
               }} }}
             />
           )}
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate a date picker
     fn date_field(name: &str, label: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let mut result = String::from(r#"        <Controller
-          name=""#);
+        let mut result = String::from(
+            r#"        <Controller
+          name=""#,
+        );
         result.push_str(name);
-        result.push_str(r#""
+        result.push_str(
+            r#""
           control={control}
           render={({ field, fieldState: { error } }) => (
             <DatePicker
-              label=""#);
+              label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
+        result.push_str(
+            r#""
               value={field.value}
               onChange={(newValue) => field.onChange(newValue)}
               slotProps={{ textField: {{
@@ -285,24 +336,30 @@ impl FormTemplates {
               }} }}
             />
           )}
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate a time picker
     fn time_field(name: &str, label: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let mut result = String::from(r#"        <Controller
-          name=""#);
+        let mut result = String::from(
+            r#"        <Controller
+          name=""#,
+        );
         result.push_str(name);
-        result.push_str(r#""
+        result.push_str(
+            r#""
           control={control}
           render={({ field, fieldState: { error } }) => (
             <TimePicker
-              label=""#);
+              label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
+        result.push_str(
+            r#""
               value={field.value}
               onChange={(newValue) => field.onChange(newValue)}
               slotProps={{ textField: {{
@@ -312,17 +369,23 @@ impl FormTemplates {
               }} }}
             />
           )}
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate a select field for enums
     fn select_field(name: &str, label: &str, enum_def: &EnumDefinition, optional: bool) -> String {
-        let options = enum_def.variants.iter()
+        let options = enum_def
+            .variants
+            .iter()
             .map(|v| {
                 let value = &v.name;
                 let display = v.description.as_ref().unwrap_or(value);
-                format!(r#"                <MenuItem value="{}">{}</MenuItem>"#, value, display)
+                format!(
+                    r#"                <MenuItem value="{}">{}</MenuItem>"#,
+                    value, display
+                )
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -330,69 +393,99 @@ impl FormTemplates {
         let optional_mark = if optional { "" } else { " *" };
         let mut result = String::from(r#"        <FormControl fullWidth error={!!errors."#);
         result.push_str(name);
-        result.push_str(r#"}>
-          <InputLabel id=""#);
+        result.push_str(
+            r#"}>
+          <InputLabel id=""#,
+        );
         result.push_str(name);
         result.push_str(r#"-label">"#);
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#"</InputLabel>
+        result.push_str(
+            r#"</InputLabel>
           <Select
-            labelId=""#);
+            labelId=""#,
+        );
         result.push_str(name);
-        result.push_str(r#"-label"
-            label=""#);
+        result.push_str(
+            r#"-label"
+            label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
-            {...register('"#);
+        result.push_str(
+            r#""
+            {...register('"#,
+        );
         result.push_str(name);
         result.push_str("'})}");
-        result.push_str(r#"
+        result.push_str(
+            r#"
           >
-"#);
+"#,
+        );
         result.push_str(&options);
-        result.push_str(r#"
+        result.push_str(
+            r#"
           </Select>
-          {errors."#);
+          {errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#" && (
-            <FormHelperText error>{errors."#);
+        result.push_str(
+            r#" && (
+            <FormHelperText error>{errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"?.message}</FormHelperText>
+        result.push_str(
+            r#"?.message}</FormHelperText>
           )}
-        </FormControl>"#);
+        </FormControl>"#,
+        );
         result
     }
 
     /// Generate a JSON editor field
     fn json_field(name: &str, label: &str, optional: bool) -> String {
         let optional_mark = if optional { "" } else { " *" };
-        let mut result = String::from(r#"        <TextField
-          label=""#);
+        let mut result = String::from(
+            r#"        <TextField
+          label=""#,
+        );
         result.push_str(label);
         result.push_str(optional_mark);
-        result.push_str(r#""
-          {...register('"#);
+        result.push_str(
+            r#""
+          {...register('"#,
+        );
         result.push_str(name);
         result.push_str("'})");
-        result.push_str(r#"}
-          error={!!errors."#);
+        result.push_str(
+            r#"}
+          error={!!errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"}
-          helperText={errors."#);
+        result.push_str(
+            r#"}
+          helperText={errors."#,
+        );
         result.push_str(name);
-        result.push_str(r#"?.message || "JSON format"}
+        result.push_str(
+            r#"?.message || "JSON format"}
           multiline
           rows={3}
           placeholder='{"key": "value"}'
           fullWidth
-        />"#);
+        />"#,
+        );
         result
     }
 
     /// Generate field for optional wrapper types
-    fn optional_field(field: &FieldDefinition, inner: &FieldType, enums: &[EnumDefinition]) -> String {
+    fn optional_field(
+        field: &FieldDefinition,
+        inner: &FieldType,
+        enums: &[EnumDefinition],
+    ) -> String {
         // Create a temporary field without the optional wrapper
         let temp_field = FieldDefinition {
             name: field.name.clone(),
@@ -409,13 +502,18 @@ impl FormTemplates {
     fn array_field(name: &str, label: &str, inner: &FieldType, enums: &[EnumDefinition]) -> String {
         match inner {
             FieldType::String | FieldType::Text => {
-                let mut result = String::from(r#"        <ArrayField
-          name=""#);
+                let mut result = String::from(
+                    r#"        <ArrayField
+          name=""#,
+                );
                 result.push_str(name);
-                result.push_str(r#""}
-          label=""#);
+                result.push_str(
+                    r#""}
+          label=""#,
+                );
                 result.push_str(label);
-                result.push_str(r#"
+                result.push_str(
+                    r#"
           renderField={(index, fieldName) => (
             <TextField
               {...register(fieldName)}
@@ -423,39 +521,52 @@ impl FormTemplates {
               fullWidth
             />
           )}
-        />"#);
+        />"#,
+                );
                 result
             }
             FieldType::Custom(type_name) | FieldType::Enum(type_name) => {
                 if let Some(enum_def) = enums.iter().find(|e| e.name == *type_name) {
                     Self::array_select_field(name, label, enum_def)
                 } else {
-                    let mut result = String::from(r#"        <TextField
-          label=""#);
+                    let mut result = String::from(
+                        r#"        <TextField
+          label=""#,
+                    );
                     result.push_str(label);
-                    result.push_str(r#""
-          {...register('"#);
+                    result.push_str(
+                        r#""
+          {...register('"#,
+                    );
                     result.push_str(name);
                     result.push_str(r#"'"})}"#);
-                    result.push_str(r#"
+                    result.push_str(
+                        r#"
           helperText="Array field (comma-separated values)"
           fullWidth
-        />"#);
+        />"#,
+                    );
                     result
                 }
             }
             _ => {
-                let mut result = String::from(r#"        <TextField
-          label=""#);
+                let mut result = String::from(
+                    r#"        <TextField
+          label=""#,
+                );
                 result.push_str(label);
-                result.push_str(r#""
-          {...register('"#);
+                result.push_str(
+                    r#""
+          {...register('"#,
+                );
                 result.push_str(name);
                 result.push_str(r#"'"})}"#);
-                result.push_str(r#"
+                result.push_str(
+                    r#"
           helperText="Array field"
           fullWidth
-        />"#);
+        />"#,
+                );
                 result
             }
         }
@@ -463,9 +574,12 @@ impl FormTemplates {
 
     /// Generate a select field for array of enums
     fn array_select_field(name: &str, label: &str, enum_def: &EnumDefinition) -> String {
-        let options = enum_def.variants.iter()
+        let options = enum_def
+            .variants
+            .iter()
             .map(|v| {
-                format!(r#"                <MenuItem value="{}">{}</MenuItem>"#,
+                format!(
+                    r#"                <MenuItem value="{}">{}</MenuItem>"#,
                     v.name,
                     v.description.as_ref().unwrap_or(&v.name)
                 )
@@ -473,32 +587,44 @@ impl FormTemplates {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let mut result = String::from(r#"        <FormControl fullWidth>
-          <InputLabel id=""#);
+        let mut result = String::from(
+            r#"        <FormControl fullWidth>
+          <InputLabel id=""#,
+        );
         result.push_str(name);
         result.push_str(r#"-label">"#);
         result.push_str(label);
-        result.push_str(r#"</InputLabel>
+        result.push_str(
+            r#"</InputLabel>
           <Select
-            labelId=""#);
+            labelId=""#,
+        );
         result.push_str(name);
-        result.push_str(r#"-label"
-            label=""#);
+        result.push_str(
+            r#"-label"
+            label=""#,
+        );
         result.push_str(label);
-        result.push_str(r#""}
+        result.push_str(
+            r#""}
             multiple
-            {...register('"#);
+            {...register('"#,
+        );
         result.push_str(name);
         result.push_str(r#"'"})}"#);
-        result.push_str(r#"
+        result.push_str(
+            r#"
             renderValue={(selected) => (selected as string[]).join(', ')}
           >
-"#);
+"#,
+        );
         result.push_str(&options);
-        result.push_str(r#"
+        result.push_str(
+            r#"
           </Select>
           <FormHelperText>Multiple selection</FormHelperText>
-        </FormControl>"#);
+        </FormControl>"#,
+        );
         result
     }
 
@@ -539,13 +665,9 @@ impl FormTemplates {
         };
 
         let indent = "  ";
-        format!("{}{}: {}{}{}{},",
-            indent,
-            name,
-            base_type,
-            validations,
-            optional_suffix,
-            default_suffix
+        format!(
+            "{}{}: {}{}{}{},",
+            indent, name, base_type, validations, optional_suffix, default_suffix
         )
     }
 
@@ -600,9 +722,14 @@ impl FormTemplates {
     }
 
     /// Get Zod type for array inner element
-    fn zod_type_for_inner_array(field_type: &FieldType, enums: &[EnumDefinition]) -> (String, String) {
+    fn zod_type_for_inner_array(
+        field_type: &FieldType,
+        enums: &[EnumDefinition],
+    ) -> (String, String) {
         match field_type {
-            FieldType::String | FieldType::Text | FieldType::Ip => ("z.string()".to_string(), "".to_string()),
+            FieldType::String | FieldType::Text | FieldType::Ip => {
+                ("z.string()".to_string(), "".to_string())
+            }
             FieldType::Int => ("z.number()".to_string(), "".to_string()),
             FieldType::Bool => ("z.boolean()".to_string(), "".to_string()),
             FieldType::Custom(type_name) | FieldType::Enum(type_name) => {
@@ -624,8 +751,19 @@ impl FormTemplates {
             match attr.name.as_str() {
                 "min" => {
                     if let Some(arg) = attr.first_arg() {
-                        if matches!(field.type_name, FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone | FieldType::Url | FieldType::Ip) {
-                            validations.push(format!(".min({}, 'Must be at least {} characters')", arg, arg));
+                        if matches!(
+                            field.type_name,
+                            FieldType::String
+                                | FieldType::Text
+                                | FieldType::Email
+                                | FieldType::Phone
+                                | FieldType::Url
+                                | FieldType::Ip
+                        ) {
+                            validations.push(format!(
+                                ".min({}, 'Must be at least {} characters')",
+                                arg, arg
+                            ));
                         } else {
                             validations.push(format!(".min({}, 'Must be at least {}')", arg, arg));
                         }
@@ -633,8 +771,19 @@ impl FormTemplates {
                 }
                 "max" => {
                     if let Some(arg) = attr.first_arg() {
-                        if matches!(field.type_name, FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone | FieldType::Url | FieldType::Ip) {
-                            validations.push(format!(".max({}, 'Must be at most {} characters')", arg, arg));
+                        if matches!(
+                            field.type_name,
+                            FieldType::String
+                                | FieldType::Text
+                                | FieldType::Email
+                                | FieldType::Phone
+                                | FieldType::Url
+                                | FieldType::Ip
+                        ) {
+                            validations.push(format!(
+                                ".max({}, 'Must be at most {} characters')",
+                                arg, arg
+                            ));
                         } else {
                             validations.push(format!(".max({}, 'Must be at most {}')", arg, arg));
                         }
@@ -668,7 +817,11 @@ pub struct TableTemplates;
 
 impl TableTemplates {
     /// Generate table columns for an entity
-    pub fn generate_table_columns(entity: &EntityDefinition, module: &str, entity_snake: &str) -> String {
+    pub fn generate_table_columns(
+        entity: &EntityDefinition,
+        module: &str,
+        entity_snake: &str,
+    ) -> String {
         let mut columns = Vec::new();
 
         // Add ID column first
@@ -681,7 +834,10 @@ impl TableTemplates {
             }
 
             // Skip sensitive fields
-            if field.name.contains("password") || field.name.contains("hash") || field.name.contains("token") {
+            if field.name.contains("password")
+                || field.name.contains("hash")
+                || field.name.contains("token")
+            {
                 continue;
             }
 
@@ -703,7 +859,8 @@ impl TableTemplates {
 
     /// Generate column definition
     fn column_def(field: &str, header: &str, width: u32) -> String {
-        format!(r#"    {{
+        format!(
+            r#"    {{
       field: '{}',
       headerName: '{}',
       width: {},
@@ -715,7 +872,8 @@ impl TableTemplates {
 
     /// Generate actions column definition
     fn actions_column_def(module: &str, entity_snake: &str) -> String {
-        format!(r#"    {{
+        format!(
+            r#"    {{
       field: 'actions',
       headerName: 'Actions',
       width: 120,
@@ -736,7 +894,9 @@ impl TableTemplates {
           </IconButton>
         </TableCell>
       ),
-    }}"#, module, entity_snake, module, entity_snake)
+    }}"#,
+            module, entity_snake, module, entity_snake
+        )
     }
 
     /// Get appropriate column width for field type (returns number for MUI DataGrid)
@@ -760,7 +920,10 @@ impl TableTemplates {
                 continue;
             }
 
-            if field.name.contains("password") || field.name.contains("hash") || field.name.contains("token") {
+            if field.name.contains("password")
+                || field.name.contains("hash")
+                || field.name.contains("token")
+            {
                 continue;
             }
 
@@ -779,19 +942,22 @@ impl TableTemplates {
     fn row_cell_renderer(field: &FieldDefinition) -> String {
         match &field.type_name {
             FieldType::Bool => {
-                format!(r#"// Boolean: {}
+                format!(
+                    r#"// Boolean: {}
       row.{} ? <Chip label="Yes" color="success" size="small" /> : <Chip label="No" color="default" size="small" />"#,
                     field.name, field.name
                 )
             }
             FieldType::DateTime => {
-                format!(r#"// DateTime: {}
+                format!(
+                    r#"// DateTime: {}
       row.{} ? new Date(row.{}).toLocaleString() : '-'"#,
                     field.name, field.name, field.name
                 )
             }
             FieldType::Date => {
-                format!(r#"// Date: {}
+                format!(
+                    r#"// Date: {}
       row.{} ? new Date(row.{}).toLocaleDateString() : '-'"#,
                     field.name, field.name, field.name
                 )
@@ -800,8 +966,10 @@ impl TableTemplates {
                 // String concatenation to avoid format! escaping with JSX template literals
                 let mut result = String::from("// Email: ");
                 result.push_str(&field.name);
-                result.push_str(r#"
-      <Link href={`mailto:${row."#);
+                result.push_str(
+                    r#"
+      <Link href={`mailto:${row."#,
+                );
                 result.push_str(&field.name);
                 result.push_str(r#"}`}>{row."#);
                 result.push_str(&field.name);
@@ -812,32 +980,41 @@ impl TableTemplates {
                 // String concatenation to avoid format! escaping with JSX
                 let mut result = String::from("// URL: ");
                 result.push_str(&field.name);
-                result.push_str(r#"
-      <Link href={row."#);
+                result.push_str(
+                    r#"
+      <Link href={row."#,
+                );
                 result.push_str(&field.name);
-                result.push_str(r#"} target="_blank" rel="noopener">
-        {row."#);
+                result.push_str(
+                    r#"} target="_blank" rel="noopener">
+        {row."#,
+                );
                 result.push_str(&field.name);
                 result.push_str(r#"?.length > 30 ? row."#);
                 result.push_str(&field.name);
                 result.push_str(r#".substring(0, 30) + '...' : row."#);
                 result.push_str(&field.name);
-                result.push_str(r#"}
-      </Link>"#);
+                result.push_str(
+                    r#"}
+      </Link>"#,
+                );
                 result
             }
             FieldType::Enum(_type_name) | FieldType::Custom(_type_name) => {
                 // String concatenation to avoid format! escaping with JSX
                 let mut result = String::from("// Enum: ");
                 result.push_str(&field.name);
-                result.push_str(r#"
-      <Chip label={row."#);
+                result.push_str(
+                    r#"
+      <Chip label={row."#,
+                );
                 result.push_str(&field.name);
                 result.push_str(r#"} size="small" variant="outlined" />"#);
                 result
             }
             _ => {
-                format!(r#"// Text: {}
+                format!(
+                    r#"// Text: {}
       row.{}"#,
                     field.name, field.name
                 )

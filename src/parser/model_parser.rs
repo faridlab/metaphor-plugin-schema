@@ -139,7 +139,12 @@ impl<'source> ModelParser<'source> {
         let type_ref = self.parse_type_ref()?;
 
         let mut field = Field::new(name, type_ref);
-        field.span = Span::new(start_line, start_col, self.current_line(), self.current_col());
+        field.span = Span::new(
+            start_line,
+            start_col,
+            self.current_line(),
+            self.current_col(),
+        );
 
         // Parse attributes
         while self.check(TokenKind::At) {
@@ -394,7 +399,12 @@ impl<'source> ModelParser<'source> {
             fields,
             name: None,
             attributes: Vec::new(),
-            span: Span::new(start_line, start_col, self.current_line(), self.current_col()),
+            span: Span::new(
+                start_line,
+                start_col,
+                self.current_line(),
+                self.current_col(),
+            ),
         };
 
         // Parse optional attributes

@@ -4,11 +4,11 @@
 
 use std::fs;
 
+use super::DomainGenerationResult;
 use crate::webgen::ast::entity::EntityDefinition;
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case};
-use super::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case};
 
 /// Generator for specification patterns (business rules as predicates)
 pub struct SpecificationGenerator {
@@ -26,7 +26,9 @@ impl SpecificationGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let specs_dir = self.config.output_dir
+        let specs_dir = self
+            .config
+            .output_dir
             .join("domain")
             .join(&self.config.module)
             .join("specification");
@@ -54,12 +56,19 @@ impl SpecificationGenerator {
 
         // Detect if entity has common fields
         let has_status = entity.fields.iter().any(|f| f.name == "status");
-        let has_deleted_at = entity.fields.iter().any(|f| f.name == "deleted_at" || f.name == "deletedAt");
-        let has_created_at = entity.fields.iter().any(|f| f.name == "created_at" || f.name == "createdAt");
+        let has_deleted_at = entity
+            .fields
+            .iter()
+            .any(|f| f.name == "deleted_at" || f.name == "deletedAt");
+        let has_created_at = entity
+            .fields
+            .iter()
+            .any(|f| f.name == "created_at" || f.name == "createdAt");
 
         let mut status_specs = String::new();
         if has_status {
-            status_specs = format!(r#"
+            status_specs = format!(
+                r#"
 /**
  * Specification: {entity_pascal} is active
  */
@@ -88,7 +97,8 @@ export function isPending({entity_camel}: {entity_pascal}): boolean {{
 
         let mut soft_delete_specs = String::new();
         if has_deleted_at {
-            soft_delete_specs = format!(r#"
+            soft_delete_specs = format!(
+                r#"
 /**
  * Specification: {entity_pascal} is soft deleted
  */
@@ -110,7 +120,8 @@ export function isNotDeleted({entity_camel}: {entity_pascal}): boolean {{
 
         let mut date_specs = String::new();
         if has_created_at {
-            date_specs = format!(r#"
+            date_specs = format!(
+                r#"
 /**
  * Specification: {entity_pascal} was created within the last N days
  */
@@ -150,7 +161,7 @@ export function wasCreatedThisMonth({entity_camel}: {entity_pascal}): boolean {{
         }
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Specifications
  *
  * Business rules expressed as composable predicates.
@@ -444,9 +455,21 @@ export function hasFieldInRange<T, K extends keyof T>(
             status_specs = status_specs,
             soft_delete_specs = soft_delete_specs,
             date_specs = date_specs,
-            status_editable = if has_status { "specs.push(isActive);" } else { "" },
-            delete_editable = if has_deleted_at { "specs.push(isNotDeleted);" } else { "" },
-            delete_deletable = if has_deleted_at { "specs.push(isNotDeleted);" } else { "" },
+            status_editable = if has_status {
+                "specs.push(isActive);"
+            } else {
+                ""
+            },
+            delete_editable = if has_deleted_at {
+                "specs.push(isNotDeleted);"
+            } else {
+                ""
+            },
+            delete_deletable = if has_deleted_at {
+                "specs.push(isNotDeleted);"
+            } else {
+                ""
+            },
         )
     }
 }

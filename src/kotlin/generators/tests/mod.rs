@@ -1,9 +1,9 @@
 //! Test generators (3B ValidatorTest, 3B ViewModelTest, 3C ApiClientTest)
 
+use crate::ast::{Model, ModuleSchema};
 use crate::kotlin::config::GenerationTarget;
 use crate::kotlin::error::{MobileGenError, Result};
 use crate::kotlin::generators::{write_generated_file, GenerationResult, MobileGenerator};
-use crate::ast::{Model, ModuleSchema};
 use std::path::Path;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,10 +56,7 @@ fn generate_validator_test(
     let module_lower = module_name.to_lowercase();
     let entity_name = model.name.clone();
 
-    let package = format!(
-        "{}.{}.application.validators",
-        base_package, module_lower
-    );
+    let package = format!("{}.{}.application.validators", base_package, module_lower);
 
     let fields = build_field_data(generator, model);
 
@@ -81,7 +78,13 @@ fn generate_validator_test(
         module_name, entity_name
     );
 
-    write_test_file(generator, output_dir, base_package, &relative_path, &content)
+    write_test_file(
+        generator,
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,10 +101,7 @@ fn generate_viewmodel_test(
     let module_lower = module_name.to_lowercase();
     let entity_name = model.name.clone();
 
-    let package = format!(
-        "{}.{}.presentation.state",
-        base_package, module_lower
-    );
+    let package = format!("{}.{}.presentation.state", base_package, module_lower);
 
     let primary_key_field = model
         .fields
@@ -128,7 +128,13 @@ fn generate_viewmodel_test(
         module_name, entity_name
     );
 
-    write_test_file(generator, output_dir, base_package, &relative_path, &content)
+    write_test_file(
+        generator,
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,10 +151,7 @@ fn generate_api_client_test(
     let module_lower = module_name.to_lowercase();
     let entity_name = model.name.clone();
 
-    let package = format!(
-        "{}.{}.infrastructure.api",
-        base_package, module_lower
-    );
+    let package = format!("{}.{}.infrastructure.api", base_package, module_lower);
 
     let primary_key_field = model
         .fields
@@ -178,7 +181,13 @@ fn generate_api_client_test(
         module_name, entity_name
     );
 
-    write_test_file(generator, output_dir, base_package, &relative_path, &content)
+    write_test_file(
+        generator,
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,8 +230,9 @@ fn build_field_data(generator: &MobileGenerator, model: &Model) -> Vec<TestField
         .fields
         .iter()
         .map(|f| {
-            let kt_type_non_nullable =
-                generator.type_mapper.to_kotlin_type_non_nullable(&f.type_ref);
+            let kt_type_non_nullable = generator
+                .type_mapper
+                .to_kotlin_type_non_nullable(&f.type_ref);
             let is_nullable = f.type_ref.is_optional();
             TestFieldData {
                 name: generator.type_mapper.to_kotlin_property_name(&f.name),

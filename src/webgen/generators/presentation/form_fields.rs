@@ -9,8 +9,8 @@ use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefiniti
 use crate::webgen::ast::HookSchema;
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case};
 use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case};
 
 /// Generator for form field components
 pub struct FormFieldsGenerator {
@@ -33,7 +33,9 @@ impl FormFieldsGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let forms_dir = self.config.output_dir
+        let forms_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("components")
             .join("forms")
@@ -75,7 +77,7 @@ impl FormFieldsGenerator {
         let default_values = self.generate_default_values(entity, enums);
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Form Fields
  *
  * Reusable form field components for {entity_pascal} entity.
@@ -285,7 +287,8 @@ export function {entity_pascal}EditForm({{
 
     /// Generate enum imports
     fn generate_enum_imports(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
-        let used_enums: Vec<&EnumDefinition> = enums.iter()
+        let used_enums: Vec<&EnumDefinition> = enums
+            .iter()
             .filter(|e| self.entity_uses_enum(entity, &e.name))
             .collect();
 
@@ -293,7 +296,8 @@ export function {entity_pascal}EditForm({{
             return String::new();
         }
 
-        let imports: Vec<String> = used_enums.iter()
+        let imports: Vec<String> = used_enums
+            .iter()
             .map(|e| format!("  {}Values,", e.name))
             .collect();
 
@@ -308,14 +312,20 @@ export function {entity_pascal}EditForm({{
     /// Check if entity uses a specific enum
     fn entity_uses_enum(&self, entity: &EntityDefinition, enum_name: &str) -> bool {
         entity.fields.iter().any(|f| {
-            matches!(&f.type_name, FieldType::Enum(name) if name == enum_name) ||
-            matches!(&f.type_name, FieldType::Custom(name) if name == enum_name)
+            matches!(&f.type_name, FieldType::Enum(name) if name == enum_name)
+                || matches!(&f.type_name, FieldType::Custom(name) if name == enum_name)
         })
     }
 
     /// Generate form field components
-    fn generate_field_components(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
-        let fields: Vec<String> = entity.fields.iter()
+    fn generate_field_components(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
+        let fields: Vec<String> = entity
+            .fields
+            .iter()
             .filter(|f| !self.is_auto_generated_field(f))
             .map(|f| self.generate_field_component(f, enums))
             .collect();
@@ -324,24 +334,25 @@ export function {entity_pascal}EditForm({{
     }
 
     /// Generate a single field component
-    fn generate_field_component(&self, field: &FieldDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_field_component(
+        &self,
+        field: &FieldDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let field_name = &field.name;
         let label = self.field_to_label(field_name);
         let is_required = !field.optional;
 
         match &field.type_name {
-            FieldType::String | FieldType::Text => {
-                self.generate_text_field(field_name, &label, is_required, field.type_name == FieldType::Text)
-            }
-            FieldType::Email => {
-                self.generate_email_field(field_name, &label, is_required)
-            }
-            FieldType::Url => {
-                self.generate_url_field(field_name, &label, is_required)
-            }
-            FieldType::Phone => {
-                self.generate_phone_field(field_name, &label, is_required)
-            }
+            FieldType::String | FieldType::Text => self.generate_text_field(
+                field_name,
+                &label,
+                is_required,
+                field.type_name == FieldType::Text,
+            ),
+            FieldType::Email => self.generate_email_field(field_name, &label, is_required),
+            FieldType::Url => self.generate_url_field(field_name, &label, is_required),
+            FieldType::Phone => self.generate_phone_field(field_name, &label, is_required),
             FieldType::Ip => {
                 // IP address is rendered as a text field
                 self.generate_text_field(field_name, &label, is_required, false)
@@ -349,18 +360,12 @@ export function {entity_pascal}EditForm({{
             FieldType::Int | FieldType::Float | FieldType::Decimal => {
                 self.generate_number_field(field_name, &label, is_required)
             }
-            FieldType::Bool => {
-                self.generate_checkbox_field(field_name, &label)
-            }
+            FieldType::Bool => self.generate_checkbox_field(field_name, &label),
             FieldType::DateTime | FieldType::Date => {
                 self.generate_date_field(field_name, &label, is_required)
             }
-            FieldType::Time => {
-                self.generate_time_field(field_name, &label, is_required)
-            }
-            FieldType::Uuid => {
-                self.generate_text_field(field_name, &label, is_required, false)
-            }
+            FieldType::Time => self.generate_time_field(field_name, &label, is_required),
+            FieldType::Uuid => self.generate_text_field(field_name, &label, is_required, false),
             FieldType::Enum(name) | FieldType::Custom(name) => {
                 if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
                     self.generate_select_field(field_name, &label, is_required, enum_def)
@@ -368,12 +373,8 @@ export function {entity_pascal}EditForm({{
                     self.generate_text_field(field_name, &label, is_required, false)
                 }
             }
-            FieldType::Json => {
-                self.generate_json_field(field_name, &label, is_required)
-            }
-            FieldType::Array(_) => {
-                self.generate_array_field(field_name, &label)
-            }
+            FieldType::Json => self.generate_json_field(field_name, &label, is_required),
+            FieldType::Array(_) => self.generate_array_field(field_name, &label),
             FieldType::Optional(inner) => {
                 // Recursively handle optional fields
                 let inner_field = FieldDefinition {
@@ -388,13 +389,23 @@ export function {entity_pascal}EditForm({{
     }
 
     /// Generate text input field
-    fn generate_text_field(&self, name: &str, label: &str, required: bool, multiline: bool) -> String {
+    fn generate_text_field(
+        &self,
+        name: &str,
+        label: &str,
+        required: bool,
+        multiline: bool,
+    ) -> String {
         let required_asterisk = if required { " *" } else { "" };
-        let multiline_prop = if multiline { r#"multiline rows={4}"# } else { "" };
+        let multiline_prop = if multiline {
+            r#"multiline rows={4}"#
+        } else {
+            ""
+        };
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -424,7 +435,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -453,7 +464,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -483,7 +494,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -512,7 +523,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -539,7 +550,7 @@ r#"      {{/* Field */}}
     /// Generate checkbox field
     fn generate_checkbox_field(&self, name: &str, label: &str) -> String {
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -563,7 +574,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -595,7 +606,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -622,20 +633,30 @@ r#"      {{/* Field */}}
     }
 
     /// Generate select field for enums
-    fn generate_select_field(&self, name: &str, label: &str, required: bool, enum_def: &EnumDefinition) -> String {
+    fn generate_select_field(
+        &self,
+        name: &str,
+        label: &str,
+        required: bool,
+        enum_def: &EnumDefinition,
+    ) -> String {
         let required_asterisk = if required { " *" } else { "" };
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
-        let options: Vec<String> = enum_def.variants.iter()
-            .map(|v| format!(
-                "              <MenuItem value=\"{}\">{}</MenuItem>",
-                v.name,
-                self.field_to_label(&v.name)
-            ))
+        let options: Vec<String> = enum_def
+            .variants
+            .iter()
+            .map(|v| {
+                format!(
+                    "              <MenuItem value=\"{}\">{}</MenuItem>",
+                    v.name,
+                    self.field_to_label(&v.name)
+                )
+            })
             .collect();
 
         format!(
-r#"      {{/* Field */}}
+            r#"      {{/* Field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -669,7 +690,7 @@ r#"      {{/* Field */}}
         let label_value = format!(r#"{}{}"#, label, required_asterisk);
 
         format!(
-r#"      {{/* JSON field */}}
+            r#"      {{/* JSON field */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -704,7 +725,7 @@ r#"      {{/* JSON field */}}
     /// Generate array field placeholder
     fn generate_array_field(&self, name: &str, label: &str) -> String {
         format!(
-r#"      {{/* {label} (Array) */}}
+            r#"      {{/* {label} (Array) */}}
       <Controller
         name="{name}"
         control={{control}}
@@ -740,8 +761,14 @@ r#"      {{/* {label} (Array) */}}
     }
 
     /// Generate default values for form
-    fn generate_default_values(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
-        let defaults: Vec<String> = entity.fields.iter()
+    fn generate_default_values(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
+        let defaults: Vec<String> = entity
+            .fields
+            .iter()
             .filter(|f| !self.is_auto_generated_field(f))
             .map(|f| {
                 let default = self.get_default_value(f, enums);
@@ -760,8 +787,13 @@ r#"      {{/* {label} (Array) */}}
         }
 
         match &field.type_name {
-            FieldType::String | FieldType::Text | FieldType::Email |
-            FieldType::Url | FieldType::Phone | FieldType::Uuid | FieldType::Ip => "''".to_string(),
+            FieldType::String
+            | FieldType::Text
+            | FieldType::Email
+            | FieldType::Url
+            | FieldType::Phone
+            | FieldType::Uuid
+            | FieldType::Ip => "''".to_string(),
             FieldType::Int | FieldType::Float | FieldType::Decimal => "0".to_string(),
             FieldType::Bool => "false".to_string(),
             FieldType::DateTime | FieldType::Date | FieldType::Time => "''".to_string(),
@@ -797,10 +829,13 @@ r#"      {{/* {label} (Array) */}}
         }
 
         // Handle numeric values
-        if matches!(field_type, FieldType::Int | FieldType::Float | FieldType::Decimal)
-            && trimmed.parse::<f64>().is_ok() {
-                return trimmed.to_string();
-            }
+        if matches!(
+            field_type,
+            FieldType::Int | FieldType::Float | FieldType::Decimal
+        ) && trimmed.parse::<f64>().is_ok()
+        {
+            return trimmed.to_string();
+        }
 
         // Handle null
         if trimmed == "null" {
@@ -833,13 +868,13 @@ r#"      {{/* {label} (Array) */}}
     /// Check if field is auto-generated
     fn is_auto_generated_field(&self, field: &FieldDefinition) -> bool {
         let name = field.name.to_lowercase();
-        name == "id" ||
-        name == "created_at" ||
-        name == "createdat" ||
-        name == "updated_at" ||
-        name == "updatedat" ||
-        name == "deleted_at" ||
-        name == "deletedat"
+        name == "id"
+            || name == "created_at"
+            || name == "createdat"
+            || name == "updated_at"
+            || name == "updatedat"
+            || name == "deleted_at"
+            || name == "deletedat"
     }
 
     /// Convert field name to label

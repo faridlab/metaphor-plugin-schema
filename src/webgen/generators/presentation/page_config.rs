@@ -9,8 +9,10 @@ use std::path::PathBuf;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefinition};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case, to_snake_case, to_kebab_case, pluralize};
 use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::parser::{
+    pluralize, to_camel_case, to_kebab_case, to_pascal_case, to_snake_case,
+};
 
 /// Generator for page configuration files
 pub struct PageConfigGenerator {
@@ -31,7 +33,9 @@ impl PageConfigGenerator {
     ) -> Result<DomainGenerationResult> {
         let mut result = DomainGenerationResult::new();
 
-        let configs_dir = self.config.output_dir
+        let configs_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("pages")
             .join("templates")
@@ -75,7 +79,11 @@ impl PageConfigGenerator {
     }
 
     /// Generate config file content
-    fn generate_config_content(&self, entity: &EntityDefinition, existing_custom: Option<String>) -> String {
+    fn generate_config_content(
+        &self,
+        entity: &EntityDefinition,
+        existing_custom: Option<String>,
+    ) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_snake = to_snake_case(&entity.name);
         let entity_camel = to_camel_case(&entity.name);
@@ -95,7 +103,7 @@ impl PageConfigGenerator {
         // Hook imports based on soft delete support
         let trash_hooks = if has_soft_delete {
             format!(
-r#"    useTrashList: use{entity_pascal}TrashList,
+                r#"    useTrashList: use{entity_pascal}TrashList,
     useRestore: use{entity_pascal}Restore,
     usePermanentDelete: use{entity_pascal}PermanentDelete,"#,
                 entity_pascal = entity_pascal,
@@ -127,7 +135,7 @@ r#"    useTrashList: use{entity_pascal}TrashList,
         let custom_section = existing_custom.unwrap_or_default();
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Resource Page Configuration
  *
  * Configuration for {entity_pascal} entity pages using generic templates.
@@ -208,7 +216,11 @@ export default {entity_camel}Config;
             module = self.config.module,
             columns = columns,
             filters = filters,
-            filters_ref = if !filters.is_empty() { "\n    selectFilters," } else { "" },
+            filters_ref = if !filters.is_empty() {
+                "\n    selectFilters,"
+            } else {
+                ""
+            },
             display_field = display_field,
             trash_hooks = trash_hooks,
             trash_hook_imports = trash_hook_imports,
@@ -238,13 +250,25 @@ export default {entity_camel}Config;
     /// Check if field should be skipped in column generation
     fn should_skip_field(&self, field: &FieldDefinition) -> bool {
         let skip_fields = [
-            "id", "created_at", "updated_at", "deleted_at",
-            "password", "password_hash", "secret", "token",
-            "metadata", "created_by", "updated_by",
+            "id",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "password",
+            "password_hash",
+            "secret",
+            "token",
+            "metadata",
+            "created_by",
+            "updated_by",
         ];
 
         let field_lower = field.name.to_lowercase();
-        skip_fields.iter().any(|&skip| field_lower == skip || field_lower.contains("password") || field_lower.contains("secret"))
+        skip_fields.iter().any(|&skip| {
+            field_lower == skip
+                || field_lower.contains("password")
+                || field_lower.contains("secret")
+        })
     }
 
     /// Generate a single column definition
@@ -256,7 +280,7 @@ export default {entity_camel}Config;
         let render = self.generate_render_function(field);
 
         let mut column = format!(
-r#"  {{
+            r#"  {{
     id: '{field_snake}',
     label: '{label}',
     field: '{field_snake}',"#,
@@ -335,9 +359,12 @@ r#"  {{
             let field_lower = field.name.to_lowercase();
 
             // Generate filter for status/type/category fields
-            if field_lower == "status" || field_lower.ends_with("_status") ||
-               field_lower == "type" || field_lower.ends_with("_type") ||
-               field_lower == "category" {
+            if field_lower == "status"
+                || field_lower.ends_with("_status")
+                || field_lower == "type"
+                || field_lower.ends_with("_type")
+                || field_lower == "category"
+            {
                 let filter = self.generate_filter(field);
                 filters.push(filter);
             }
@@ -348,7 +375,7 @@ r#"  {{
         }
 
         format!(
-r#"
+            r#"
 const selectFilters: SelectFilterConfig[] = [
 {}
 ];
@@ -360,10 +387,13 @@ const selectFilters: SelectFilterConfig[] = [
     /// Generate a single filter definition
     fn generate_filter(&self, field: &FieldDefinition) -> String {
         let field_snake = to_snake_case(&field.name);
-        let label = format!("Filter by {}", self.generate_label(&field.name).to_lowercase());
+        let label = format!(
+            "Filter by {}",
+            self.generate_label(&field.name).to_lowercase()
+        );
 
         format!(
-r#"  {{
+            r#"  {{
     name: '{field_snake}',
     label: '{label}',
     options: [
@@ -380,7 +410,14 @@ r#"  {{
     /// Find the best field to use for display name
     fn find_display_field(&self, entity: &EntityDefinition) -> String {
         // Priority order for display field
-        let preferred = ["name", "title", "username", "email", "label", "display_name"];
+        let preferred = [
+            "name",
+            "title",
+            "username",
+            "email",
+            "label",
+            "display_name",
+        ];
 
         for pref in &preferred {
             if entity.fields.iter().any(|f| f.name.to_lowercase() == *pref) {
@@ -395,12 +432,16 @@ r#"  {{
             let field_lower = field.name.to_lowercase();
             let base_type = field.type_name.base_type();
 
-            let is_string_type = matches!(base_type, FieldType::String | FieldType::Text | FieldType::Email);
+            let is_string_type = matches!(
+                base_type,
+                FieldType::String | FieldType::Text | FieldType::Email
+            );
 
-            if is_string_type &&
-               !field_lower.contains("id") &&
-               !field_lower.contains("password") &&
-               !field_lower.contains("secret") {
+            if is_string_type
+                && !field_lower.contains("id")
+                && !field_lower.contains("password")
+                && !field_lower.contains("secret")
+            {
                 return to_snake_case(&field.name);
             }
         }
@@ -417,7 +458,9 @@ r#"  {{
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let pages_dir = self.config.output_dir
+        let pages_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("pages")
             .join(&self.config.module);
@@ -443,14 +486,18 @@ r#"  {{
     }
 
     /// Generate wrapper pages content
-    fn generate_wrapper_content(&self, entity: &EntityDefinition, existing_custom: Option<String>) -> String {
+    fn generate_wrapper_content(
+        &self,
+        entity: &EntityDefinition,
+        existing_custom: Option<String>,
+    ) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_camel = to_camel_case(&entity.name);
         let has_soft_delete = entity.has_soft_delete();
 
         let trash_wrapper = if has_soft_delete {
             format!(
-r#"
+                r#"
 /**
  * {entity_pascal} Trash Page
  * Wrapper component using ResourceTrashPage with {entity_camel}Config
@@ -475,7 +522,7 @@ export function {entity_pascal}TrashPage() {{
         let custom_section = existing_custom.unwrap_or_default();
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Wrapper Pages
  *
  * Thin wrapper components using generic ResourceListPage and ResourceTrashPage.
@@ -521,7 +568,9 @@ export function {entity_pascal}ListPage() {{
         let has_soft_delete = entity.has_soft_delete();
 
         // Create entity-specific pages directory (e.g., pages/sapiens/roles/)
-        let entity_pages_dir = self.config.output_dir
+        let entity_pages_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("pages")
             .join(&self.config.module)
@@ -547,7 +596,12 @@ export function {entity_pascal}ListPage() {{
     }
 
     /// Generate barrel export content
-    fn generate_barrel_content(&self, entity: &EntityDefinition, has_soft_delete: bool, existing_custom: Option<String>) -> String {
+    fn generate_barrel_content(
+        &self,
+        entity: &EntityDefinition,
+        has_soft_delete: bool,
+        existing_custom: Option<String>,
+    ) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
 
         let trash_export = if has_soft_delete {
@@ -565,7 +619,7 @@ export function {entity_pascal}ListPage() {{
         let custom_section = existing_custom.unwrap_or_default();
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Pages Export
  *
  * Barrel export for {entity_pascal} pages.

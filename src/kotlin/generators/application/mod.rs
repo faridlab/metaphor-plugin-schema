@@ -1,10 +1,10 @@
 //! Application layer generators (use cases, services, validators, mappers)
 
+use crate::ast::{Model, ModuleSchema, TypeRef};
 use crate::kotlin::error::{MobileGenError, Result};
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::{Model, ModuleSchema, TypeRef};
 use std::path::Path;
 
 /// Generate use cases for all models in a schema
@@ -16,7 +16,8 @@ pub fn generate_usecases(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::UseCases) {
+        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::UseCases)
+        {
             continue;
         }
         match generate_usecase(generator, model, &schema.name, output_dir) {
@@ -41,7 +42,9 @@ pub fn generate_app_services(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::AppServices) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::AppServices)
+        {
             continue;
         }
         match generate_app_service(generator, model, &schema.name, output_dir) {
@@ -66,7 +69,8 @@ pub fn generate_mappers(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Mappers) {
+        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Mappers)
+        {
             continue;
         }
         match generate_mapper(generator, model, &schema.name, output_dir) {
@@ -92,7 +96,9 @@ pub fn generate_validators(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Validators) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Validators)
+        {
             continue;
         }
         match generate_validator(generator, model, &schema.name, output_dir) {
@@ -145,11 +151,16 @@ fn generate_usecase(
     // Create output path: application/{module}/usecases/{Entity}UseCases.kt
     let relative_path = format!(
         "{}/application/usecases/{}UseCases.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -204,11 +215,16 @@ fn generate_app_service(
     // Create output path: application/{module}/services/{Entity}Service.kt
     let relative_path = format!(
         "{}/application/services/{}Service.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -239,14 +255,29 @@ fn generate_mapper(
     let mut needs_json_element = false;
     let mut needs_metadata = false;
 
-    let fields: Vec<FieldMappingData> = model.fields.iter()
+    let fields: Vec<FieldMappingData> = model
+        .fields
+        .iter()
         .map(|f| {
             // Collect custom enum types (TypeRef::Custom that aren't primitives)
             if let TypeRef::Custom(type_name) = &f.type_ref {
-                let is_special = matches!(type_name.as_str(),
-                    "String" | "Int" | "Long" | "Double" | "Boolean" | "Instant"
-                    | "LocalDate" | "LocalTime" | "Duration" | "ByteArray" | "Unit"
-                    | "Metadata" | "JsonElement" | "JsonObject" | "JsonArray"
+                let is_special = matches!(
+                    type_name.as_str(),
+                    "String"
+                        | "Int"
+                        | "Long"
+                        | "Double"
+                        | "Boolean"
+                        | "Instant"
+                        | "LocalDate"
+                        | "LocalTime"
+                        | "Duration"
+                        | "ByteArray"
+                        | "Unit"
+                        | "Metadata"
+                        | "JsonElement"
+                        | "JsonObject"
+                        | "JsonArray"
                 );
                 if !is_special && !type_name.contains('.') {
                     enum_types.insert(type_name.clone());
@@ -255,10 +286,23 @@ fn generate_mapper(
             // Also check unwrapped optional types
             if let TypeRef::Optional(inner) = &f.type_ref {
                 if let TypeRef::Custom(type_name) = inner.as_ref() {
-                    let is_special = matches!(type_name.as_str(),
-                        "String" | "Int" | "Long" | "Double" | "Boolean" | "Instant"
-                        | "LocalDate" | "LocalTime" | "Duration" | "ByteArray" | "Unit"
-                        | "Metadata" | "JsonElement" | "JsonObject" | "JsonArray"
+                    let is_special = matches!(
+                        type_name.as_str(),
+                        "String"
+                            | "Int"
+                            | "Long"
+                            | "Double"
+                            | "Boolean"
+                            | "Instant"
+                            | "LocalDate"
+                            | "LocalTime"
+                            | "Duration"
+                            | "ByteArray"
+                            | "Unit"
+                            | "Metadata"
+                            | "JsonElement"
+                            | "JsonObject"
+                            | "JsonArray"
                     );
                     if !is_special && !type_name.contains('.') {
                         enum_types.insert(type_name.clone());
@@ -270,15 +314,25 @@ fn generate_mapper(
             // Use the field-aware variants so `@audit_metadata` fields are seen as `Metadata`,
             // not `JsonElement` (the bare type mapper produces JsonElement for PrimitiveType::Json).
             let type_str = generator.type_mapper.to_kotlin_field_type(f);
-            if type_str.contains("Instant") { needs_instant = true; }
-            if type_str.contains("LocalDate") { needs_local_date = true; }
-            if type_str.contains("JsonElement") || type_str.contains("JsonObject") || type_str.contains("JsonArray") {
+            if type_str.contains("Instant") {
+                needs_instant = true;
+            }
+            if type_str.contains("LocalDate") {
+                needs_local_date = true;
+            }
+            if type_str.contains("JsonElement")
+                || type_str.contains("JsonObject")
+                || type_str.contains("JsonArray")
+            {
                 needs_json_element = true;
             }
-            if type_str.contains("Metadata") { needs_metadata = true; }
+            if type_str.contains("Metadata") {
+                needs_metadata = true;
+            }
 
             {
-                let kt_type_non_nullable = generator.type_mapper.to_kotlin_field_type_non_nullable(f);
+                let kt_type_non_nullable =
+                    generator.type_mapper.to_kotlin_field_type_non_nullable(f);
                 let is_nullable = f.type_ref.is_optional();
                 let default_val = form_default_value(&kt_type_non_nullable, is_nullable);
                 let form_is_nullable = is_nullable || default_val == "null";
@@ -297,14 +351,13 @@ fn generate_mapper(
         .collect();
 
     // Enum imports — exclude Metadata (handled by needs_metadata flag)
-    let enum_imports: Vec<String> = enum_types.into_iter()
-        .filter(|t| t != "Metadata")
-        .collect();
+    let enum_imports: Vec<String> = enum_types.into_iter().filter(|t| t != "Metadata").collect();
 
     // True when any non-PK field is required by the entity but optional on the
     // form (form_is_nullable && !is_nullable). Those fields call `.required(...)`
     // in toEntity, so the mapper must import the `required` helper.
-    let needs_required = fields.iter()
+    let needs_required = fields
+        .iter()
         .any(|f| f.form_is_nullable && !f.is_nullable && !f.is_primary_key);
 
     // Prepare template data
@@ -338,12 +391,25 @@ fn generate_mapper(
 
     let mut written = Vec::new();
     for (relative_path, content) in [
-        (format!("{}/application/mappers/{}DTO.kt", module_name, entity_name), dto_content),
-        (format!("{}/application/mappers/{}Mapper.kt", module_name, entity_name), mapper_content),
+        (
+            format!("{}/application/mappers/{}DTO.kt", module_name, entity_name),
+            dto_content,
+        ),
+        (
+            format!(
+                "{}/application/mappers/{}Mapper.kt",
+                module_name, entity_name
+            ),
+            mapper_content,
+        ),
     ] {
-        if let crate::kotlin::generators::WriteOutcome::Written(path) =
-            write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)?
-        {
+        if let crate::kotlin::generators::WriteOutcome::Written(path) = write_generated_file(
+            output_dir,
+            base_package,
+            &relative_path,
+            &content,
+            generator.skip_existing,
+        )? {
             written.push(path);
         }
     }
@@ -421,14 +487,29 @@ fn generate_validator(
     let mut needs_local_date = false;
     let mut needs_json_element = false;
 
-    let fields: Vec<FieldMappingData> = model.fields.iter()
+    let fields: Vec<FieldMappingData> = model
+        .fields
+        .iter()
         .map(|f| {
             // Collect custom enum types (TypeRef::Custom that aren't primitives)
             if let TypeRef::Custom(type_name) = &f.type_ref {
-                let is_special = matches!(type_name.as_str(),
-                    "String" | "Int" | "Long" | "Double" | "Boolean" | "Instant"
-                    | "LocalDate" | "LocalTime" | "Duration" | "ByteArray" | "Unit"
-                    | "Metadata" | "JsonElement" | "JsonObject" | "JsonArray"
+                let is_special = matches!(
+                    type_name.as_str(),
+                    "String"
+                        | "Int"
+                        | "Long"
+                        | "Double"
+                        | "Boolean"
+                        | "Instant"
+                        | "LocalDate"
+                        | "LocalTime"
+                        | "Duration"
+                        | "ByteArray"
+                        | "Unit"
+                        | "Metadata"
+                        | "JsonElement"
+                        | "JsonObject"
+                        | "JsonArray"
                 );
                 if !is_special && !type_name.contains('.') {
                     enum_types.insert(type_name.clone());
@@ -437,10 +518,20 @@ fn generate_validator(
             // Also check unwrapped optional types
             if let TypeRef::Optional(inner) = &f.type_ref {
                 if let TypeRef::Custom(type_name) = inner.as_ref() {
-                    let is_special = matches!(type_name.as_str(),
-                        "String" | "Int" | "Long" | "Double" | "Boolean" | "Instant"
-                        | "LocalDate" | "LocalTime" | "Duration" | "ByteArray" | "Unit"
-                        | "Metadata"
+                    let is_special = matches!(
+                        type_name.as_str(),
+                        "String"
+                            | "Int"
+                            | "Long"
+                            | "Double"
+                            | "Boolean"
+                            | "Instant"
+                            | "LocalDate"
+                            | "LocalTime"
+                            | "Duration"
+                            | "ByteArray"
+                            | "Unit"
+                            | "Metadata"
                     );
                     if !is_special && !type_name.contains('.') {
                         enum_types.insert(type_name.clone());
@@ -468,7 +559,8 @@ fn generate_validator(
             }
 
             {
-                let kt_type_non_nullable = generator.type_mapper.to_kotlin_field_type_non_nullable(f);
+                let kt_type_non_nullable =
+                    generator.type_mapper.to_kotlin_field_type_non_nullable(f);
                 let is_nullable = f.type_ref.is_optional();
                 let default_val = form_default_value(&kt_type_non_nullable, is_nullable);
                 let form_is_nullable = is_nullable || default_val == "null";
@@ -490,7 +582,9 @@ fn generate_validator(
     let needs_metadata = enum_types.contains("Metadata");
 
     // Convert to sorted Vec for consistent imports (excluding Metadata which is imported separately)
-    let enum_imports: Vec<String> = enum_types.clone().into_iter()
+    let enum_imports: Vec<String> = enum_types
+        .clone()
+        .into_iter()
         .filter(|t| t != "Metadata")
         .collect();
 
@@ -519,11 +613,16 @@ fn generate_validator(
     // Create output path: application/{module}/validators/{Entity}Validator.kt
     let relative_path = format!(
         "{}/application/validators/{}Validator.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -591,9 +690,10 @@ mod tests {
     fn mapper_emits_required_helper_not_double_bang() {
         let generator = MobileGenerator::new("com.test").unwrap();
         let mut model = Model::new("Order");
-        model
-            .fields
-            .push(Field::new("status", TypeRef::Custom("OrderStatus".to_string())));
+        model.fields.push(Field::new(
+            "status",
+            TypeRef::Custom("OrderStatus".to_string()),
+        ));
         let mut schema = ModuleSchema::new("orders");
         schema.models = vec![model];
         let dir = tempdir().unwrap();

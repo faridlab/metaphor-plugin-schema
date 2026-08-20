@@ -1,24 +1,17 @@
 //! Enhanced webapp code generator using YAML schemas
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use crate::webgen::config::{Config, Target};
-use crate::webgen::error::{Error, Result};
-use crate::webgen::parser::{
-    ModelParser,
-    HookParser,
-    to_snake_case, to_pascal_case,
-};
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition};
 use crate::webgen::ast::HookSchema;
-use crate::webgen::templates::enhanced::{FormTemplates, TableTemplates};
-use crate::webgen::templates::base::TemplateReplacer;
+use crate::webgen::config::{Config, Target};
+use crate::webgen::error::{Error, Result};
 use crate::webgen::generators::{
-    DomainGenerator,
-    PresentationGenerator,
-    ApplicationGenerator,
-    InfrastructureGenerator,
+    ApplicationGenerator, DomainGenerator, InfrastructureGenerator, PresentationGenerator,
 };
+use crate::webgen::parser::{to_pascal_case, to_snake_case, HookParser, ModelParser};
+use crate::webgen::templates::base::TemplateReplacer;
+use crate::webgen::templates::enhanced::{FormTemplates, TableTemplates};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Enhanced generator that uses YAML schemas for field-aware code generation
 pub struct EnhancedGenerator {
@@ -47,7 +40,9 @@ impl EnhancedGenerator {
         // Find all model.yaml files
         let model_files = Self::find_model_files(&schema_dir)?;
         if model_files.is_empty() {
-            return Err(Error::Parse("No .model.yaml files found in schema directory".to_string()));
+            return Err(Error::Parse(
+                "No .model.yaml files found in schema directory".to_string(),
+            ));
         }
 
         // Parse all model schemas
@@ -74,22 +69,24 @@ impl EnhancedGenerator {
         }
 
         if all_entities.is_empty() {
-            return Err(Error::Parse("No entities found in model schemas".to_string()));
+            return Err(Error::Parse(
+                "No entities found in model schemas".to_string(),
+            ));
         }
 
         result.entities_found = all_entities.len();
 
         // Check if domain generation is requested
-        let generate_domain = self.config.targets.contains(&Target::Domain) ||
-                             self.config.targets.contains(&Target::All);
+        let generate_domain = self.config.targets.contains(&Target::Domain)
+            || self.config.targets.contains(&Target::All);
 
         // Check if presentation generation is requested
-        let generate_presentation = self.config.targets.contains(&Target::Presentation) ||
-                                    self.config.targets.contains(&Target::All);
+        let generate_presentation = self.config.targets.contains(&Target::Presentation)
+            || self.config.targets.contains(&Target::All);
 
         // Check if application generation is requested
-        let generate_application = self.config.targets.contains(&Target::Application) ||
-                                   self.config.targets.contains(&Target::All);
+        let generate_application = self.config.targets.contains(&Target::Application)
+            || self.config.targets.contains(&Target::All);
 
         // Parse hook schemas if needed for domain, presentation, or application generation
         let hook_schemas = if generate_domain || generate_presentation || generate_application {
@@ -129,16 +126,16 @@ impl EnhancedGenerator {
         }
 
         // Check if infrastructure generation is requested
-        let generate_infrastructure = self.config.targets.contains(&Target::Infrastructure) ||
-                                      self.config.targets.contains(&Target::All);
+        let generate_infrastructure = self.config.targets.contains(&Target::Infrastructure)
+            || self.config.targets.contains(&Target::All);
 
         if generate_infrastructure {
             self.generate_infrastructure(&all_entities, &all_enums, &mut result)?;
         }
 
         // Check if routing generation is requested
-        let generate_routing = self.config.targets.contains(&Target::Routing) ||
-                               self.config.targets.contains(&Target::All);
+        let generate_routing = self.config.targets.contains(&Target::Routing)
+            || self.config.targets.contains(&Target::All);
 
         if generate_routing {
             self.generate_routing(&all_entities, &mut result)?;
@@ -158,8 +155,9 @@ impl EnhancedGenerator {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("yaml") ||
-                   path.extension().and_then(|s| s.to_str()) == Some("yml") {
+                if path.extension().and_then(|s| s.to_str()) == Some("yaml")
+                    || path.extension().and_then(|s| s.to_str()) == Some("yml")
+                {
                     model_files.push(path);
                 }
             }
@@ -180,9 +178,7 @@ impl EnhancedGenerator {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                let filename = path.file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
                 // Match *.hook.yaml or *.hook.yml files
                 if filename.ends_with(".hook.yaml") || filename.ends_with(".hook.yml") {
@@ -240,9 +236,13 @@ impl EnhancedGenerator {
 
         // Merge results
         if self.config.dry_run {
-            result.dry_run_files.extend(presentation_result.dry_run_files);
+            result
+                .dry_run_files
+                .extend(presentation_result.dry_run_files);
         } else {
-            result.files_generated.extend(presentation_result.files_generated);
+            result
+                .files_generated
+                .extend(presentation_result.files_generated);
         }
 
         Ok(())
@@ -263,9 +263,13 @@ impl EnhancedGenerator {
 
         // Merge results
         if self.config.dry_run {
-            result.dry_run_files.extend(application_result.dry_run_files);
+            result
+                .dry_run_files
+                .extend(application_result.dry_run_files);
         } else {
-            result.files_generated.extend(application_result.files_generated);
+            result
+                .files_generated
+                .extend(application_result.files_generated);
         }
 
         Ok(())
@@ -285,9 +289,13 @@ impl EnhancedGenerator {
 
         // Merge results
         if self.config.dry_run {
-            result.dry_run_files.extend(infrastructure_result.dry_run_files);
+            result
+                .dry_run_files
+                .extend(infrastructure_result.dry_run_files);
         } else {
-            result.files_generated.extend(infrastructure_result.files_generated);
+            result
+                .files_generated
+                .extend(infrastructure_result.files_generated);
         }
 
         Ok(())
@@ -301,7 +309,9 @@ impl EnhancedGenerator {
     ) -> Result<()> {
         use crate::webgen::templates::routing::RoutingTemplates;
 
-        let output_dir = self.config.output_dir
+        let output_dir = self
+            .config
+            .output_dir
             .join("shared/routing")
             .join(&self.config.module);
 
@@ -311,7 +321,8 @@ impl EnhancedGenerator {
         }
 
         // Generate route definitions
-        let routes_content = RoutingTemplates::generate_route_definitions(entities, &self.config.module);
+        let routes_content =
+            RoutingTemplates::generate_route_definitions(entities, &self.config.module);
         let routes_path = output_dir.join("routes.ts");
 
         if self.config.dry_run {
@@ -322,7 +333,8 @@ impl EnhancedGenerator {
         }
 
         // Generate route components
-        let components_content = RoutingTemplates::generate_route_components(entities, &self.config.module);
+        let components_content =
+            RoutingTemplates::generate_route_components(entities, &self.config.module);
         let components_path = output_dir.join("route-components.ts");
 
         if self.config.dry_run {
@@ -366,7 +378,9 @@ impl EnhancedGenerator {
     ) -> Result<()> {
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_snake = to_snake_case(&entity.name);
-        let forms_dir = self.config.output_dir
+        let forms_dir = self
+            .config
+            .output_dir
             .join("presentation/components/forms")
             .join(&self.config.module);
 
@@ -426,7 +440,9 @@ impl EnhancedGenerator {
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_snake = to_snake_case(&entity.name);
         let has_soft_delete = entity.has_soft_delete();
-        let pages_dir = self.config.output_dir
+        let pages_dir = self
+            .config
+            .output_dir
             .join("presentation/pages")
             .join(&self.config.module)
             .join(&entity_snake);
@@ -445,9 +461,11 @@ impl EnhancedGenerator {
         );
 
         // Generate list page with data table
-        let table_columns = TableTemplates::generate_table_columns(entity, &self.config.module, &entity_snake);
+        let table_columns =
+            TableTemplates::generate_table_columns(entity, &self.config.module, &entity_snake);
         let table_rows = TableTemplates::generate_table_rows(entity);
-        let list_template = Self::enhanced_list_page_template(&entity_pascal, &entity_snake, has_soft_delete);
+        let list_template =
+            Self::enhanced_list_page_template(&entity_pascal, &entity_snake, has_soft_delete);
         let list_content = replacer.replace(&list_template);
         let list_content = list_content.replace("{{TABLE_COLUMNS}}", &table_columns);
         let list_content = list_content.replace("{{TABLE_ROWS}}", &table_rows);
@@ -463,7 +481,8 @@ impl EnhancedGenerator {
 
         // Generate detail page with field display
         let detail_fields = Self::generate_detail_fields(entity);
-        let detail_template = Self::enhanced_detail_page_template(&entity_pascal, &entity_snake, has_soft_delete);
+        let detail_template =
+            Self::enhanced_detail_page_template(&entity_pascal, &entity_snake, has_soft_delete);
         let detail_content = replacer.replace(&detail_template);
         let detail_content = detail_content.replace("{{DETAIL_FIELDS}}", &detail_fields);
 
@@ -515,9 +534,11 @@ impl EnhancedGenerator {
             }
 
             // Generate trash detail page
-            let trash_detail_template = Self::enhanced_trash_detail_page_template(&entity_pascal, &entity_snake);
+            let trash_detail_template =
+                Self::enhanced_trash_detail_page_template(&entity_pascal, &entity_snake);
             let trash_detail_content = replacer.replace(&trash_detail_template);
-            let trash_detail_content = trash_detail_content.replace("{{DETAIL_FIELDS}}", &detail_fields);
+            let trash_detail_content =
+                trash_detail_content.replace("{{DETAIL_FIELDS}}", &detail_fields);
             let trash_detail_path = pages_dir.join(format!("{}TrashDetailPage.tsx", entity_pascal));
 
             if self.config.dry_run {
@@ -531,7 +552,7 @@ impl EnhancedGenerator {
         // Generate index.ts for importing pages from directory
         let trash_exports = if has_soft_delete {
             format!(
-r#"export {{ {entity_pascal}TrashPage }} from './{entity_pascal}TrashPage';
+                r#"export {{ {entity_pascal}TrashPage }} from './{entity_pascal}TrashPage';
 export {{ {entity_pascal}TrashDetailPage }} from './{entity_pascal}TrashDetailPage';
 "#,
                 entity_pascal = entity_pascal
@@ -541,7 +562,7 @@ export {{ {entity_pascal}TrashDetailPage }} from './{entity_pascal}TrashDetailPa
         };
 
         let index_content = format!(
-r#"// Re-exports all page components for {entity_pascal}
+            r#"// Re-exports all page components for {entity_pascal}
 export {{ {entity_pascal}ListPage }} from './{entity_pascal}ListPage';
 export {{ {entity_pascal}DetailPage }} from './{entity_pascal}DetailPage';
 export {{ {entity_pascal}CreatePage }} from './{entity_pascal}CreatePage';
@@ -571,7 +592,9 @@ export {{ {entity_pascal}EditPage }} from './{entity_pascal}EditPage';
     ) -> Result<()> {
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_snake = to_snake_case(&entity.name);
-        let validators_dir = self.config.output_dir
+        let validators_dir = self
+            .config
+            .output_dir
             .join("application/validators")
             .join(&self.config.module);
 
@@ -625,7 +648,9 @@ export {{ {entity_pascal}EditPage }} from './{entity_pascal}EditPage';
         let entity_snake = to_snake_case(&entity.name);
         let has_soft_delete = entity.has_soft_delete();
 
-        let hooks_dir = self.config.output_dir
+        let hooks_dir = self
+            .config
+            .output_dir
             .join("application/hooks")
             .join(&self.config.module);
 
@@ -682,11 +707,14 @@ export {{ {entity_pascal}EditPage }} from './{entity_pascal}EditPage';
 
     /// Generate enum definition for Zod
     fn generate_enum_def(enum_def: &EnumDefinition) -> String {
-        let variants: Vec<String> = enum_def.variants.iter()
+        let variants: Vec<String> = enum_def
+            .variants
+            .iter()
             .map(|v| format!("'{}'", v.name))
             .collect();
 
-        format!(r#"/** {} enum values */
+        format!(
+            r#"/** {} enum values */
 export const {}Enum = [{}] as const;
 export type {}EnumValue = typeof {}Enum[number];
 "#,
@@ -704,7 +732,10 @@ export type {}EnumValue = typeof {}Enum[number];
 
         for field in &entity.fields {
             // Skip sensitive fields
-            if field.name.contains("password") || field.name.contains("hash") || field.name.contains("token") {
+            if field.name.contains("password")
+                || field.name.contains("hash")
+                || field.name.contains("token")
+            {
                 continue;
             }
 
@@ -716,8 +747,10 @@ export type {}EnumValue = typeof {}Enum[number];
             fields.push_str(&label);
             fields.push_str(r#"" value={"#);
             fields.push_str(&field_display);
-            fields.push_str(r#"} />
-"#);
+            fields.push_str(
+                r#"} />
+"#,
+            );
         }
 
         fields
@@ -730,10 +763,16 @@ export type {}EnumValue = typeof {}Enum[number];
                 format!(r#"{}.{} ? 'Yes' : 'No'"#, "entity", field.name)
             }
             crate::webgen::ast::entity::FieldType::DateTime => {
-                format!(r#"{}.{} ? new Date({}.{}).toLocaleString() : '-'"#, "entity", field.name, "entity", field.name)
+                format!(
+                    r#"{}.{} ? new Date({}.{}).toLocaleString() : '-'"#,
+                    "entity", field.name, "entity", field.name
+                )
             }
             crate::webgen::ast::entity::FieldType::Date => {
-                format!(r#"{}.{} ? new Date({}.{}).toLocaleDateString() : '-'"#, "entity", field.name, "entity", field.name)
+                format!(
+                    r#"{}.{} ? new Date({}.{}).toLocaleDateString() : '-'"#,
+                    "entity", field.name, "entity", field.name
+                )
             }
             _ => {
                 format!("entity.{}", field.name)
@@ -744,8 +783,7 @@ export type {}EnumValue = typeof {}Enum[number];
     /// Write file to disk
     fn write_file(&self, path: &PathBuf, content: &str) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| Error::write_error(path.clone(), e))?;
+            fs::create_dir_all(parent).map_err(|e| Error::write_error(path.clone(), e))?;
         }
 
         if path.exists() && !self.config.force {
@@ -761,7 +799,8 @@ export type {}EnumValue = typeof {}Enum[number];
     // Template methods
 
     fn enhanced_create_form_template(entity_pascal: &str, entity_snake: &str) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Create Form Component
  *
  * Generated form component for creating a {entity_pascal}.
@@ -824,11 +863,13 @@ export function {entity_pascal}CreateForm({{ onSuccess, onCancel }}: {entity_pas
     </Box>
   );
 }}
-"#)
+"#
+        )
     }
 
     fn enhanced_edit_form_template(entity_pascal: &str, entity_snake: &str) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Edit Form Component
  *
  * Generated form component for editing a {entity_pascal}.
@@ -901,19 +942,26 @@ export function {entity_pascal}EditForm({{ {entity_snake}, onSuccess, onCancel }
     </Box>
   );
 }}
-"#)
+"#
+        )
     }
 
-    fn enhanced_list_page_template(entity_pascal: &str, entity_snake: &str, has_soft_delete: bool) -> String {
+    fn enhanced_list_page_template(
+        entity_pascal: &str,
+        entity_snake: &str,
+        has_soft_delete: bool,
+    ) -> String {
         let trash_menu_item = if has_soft_delete {
-            format!(r#"
+            format!(
+                r#"
             moreMenuItems={{[
               {{
                 label: 'Trash',
                 icon: <DeleteSweep />,
                 onClick: () => navigate('/{{{{MODULE_NAME}}}}/{entity_snake}/trash'),
               }},
-            ]}}"#)
+            ]}}"#
+            )
         } else {
             String::new()
         };
@@ -924,13 +972,10 @@ export function {entity_pascal}EditForm({{ {entity_snake}, onSuccess, onCancel }
             ""
         };
 
-        let soft_delete_icon_import = if has_soft_delete {
-            ", DeleteSweep"
-        } else {
-            ""
-        };
+        let soft_delete_icon_import = if has_soft_delete { ", DeleteSweep" } else { "" };
 
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} List Page
  *
  * Generated list page for {entity_pascal} entities.
@@ -1043,17 +1088,23 @@ export function {entity_pascal}ListPage() {{
     </Container>
   );
 }}
-"#)
+"#
+        )
     }
 
-    fn enhanced_detail_page_template(entity_pascal: &str, entity_snake: &str, has_soft_delete: bool) -> String {
+    fn enhanced_detail_page_template(
+        entity_pascal: &str,
+        entity_snake: &str,
+        has_soft_delete: bool,
+    ) -> String {
         let is_soft_delete_prop = if has_soft_delete {
             "\n          isSoftDelete"
         } else {
             ""
         };
 
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Detail Page
  *
  * Generated detail page for viewing a single {entity_pascal}.
@@ -1189,11 +1240,13 @@ export function {entity_pascal}DetailPage() {{
     </Container>
   );
 }}
-"#)
+"#
+        )
     }
 
     fn enhanced_create_page_template(entity_pascal: &str, entity_snake: &str) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Create Page
  *
  * Generated create page for creating a new {entity_pascal}.
@@ -1228,11 +1281,13 @@ export function {entity_pascal}CreatePage() {{
     </Container>
   );
 }}
-"#)
+"#
+        )
     }
 
     fn enhanced_edit_page_template(entity_pascal: &str, entity_snake: &str) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Edit Page
  *
  * Generated edit page for editing an existing {entity_pascal}.
@@ -1280,12 +1335,14 @@ export function {entity_pascal}EditPage() {{
     </Container>
   );
 }}
-"#)
+"#
+        )
     }
 
     /// Generate trash page template for soft-delete entities
     fn enhanced_trash_page_template(entity_pascal: &str, entity_snake: &str) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Trash Page
  *
  * Generated trash page for soft-deleted {entity_pascal} entities.
@@ -1430,12 +1487,14 @@ export function {entity_pascal}TrashPage() {{
     </Container>
   );
 }}
-"#)
+"#
+        )
     }
 
     /// Generate trash detail page template for soft-delete entities
     fn enhanced_trash_detail_page_template(entity_pascal: &str, entity_snake: &str) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Trash Detail Page
  *
  * Generated trash detail page for viewing a soft-deleted {entity_pascal}.
@@ -1625,7 +1684,8 @@ export function {entity_pascal}TrashDetailPage() {{
     </Container>
   );
 }}
-"#)
+"#
+        )
     }
 
     fn enhanced_schema_template(
@@ -1635,7 +1695,8 @@ export function {entity_pascal}TrashDetailPage() {{
         zod_fields: &str,
         create_zod_fields: &str,
     ) -> String {
-        format!(r#"/**
+        format!(
+            r#"/**
  * {entity_pascal} Validation Schema
  *
  * Generated Zod schema for {entity_pascal} validation.
@@ -1673,7 +1734,8 @@ export type Update{entity_pascal}Input = z.infer<typeof update{entity_pascal}Sch
 
 // <<< CUSTOM: Add custom schemas here
 // END CUSTOM
-"#)
+"#
+        )
     }
 }
 
@@ -1727,9 +1789,7 @@ impl FieldDefinition {
                 let mut chars = s.chars();
                 match chars.next() {
                     None => String::new(),
-                    Some(first) => {
-                        first.to_uppercase().collect::<String>() + chars.as_str()
-                    }
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                 }
             })
             .collect::<Vec<_>>()

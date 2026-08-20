@@ -3,11 +3,11 @@
 pub mod navigation;
 pub mod theme;
 
+use crate::ast::{Model, ModuleSchema};
 use crate::kotlin::error::{MobileGenError, Result};
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::{Model, ModuleSchema};
 use std::path::Path;
 
 /// Generate MVI ViewModels for all models in a schema
@@ -19,7 +19,9 @@ pub fn generate_viewmodels(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::ViewModels) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::ViewModels)
+        {
             continue;
         }
         match generate_viewmodel(generator, model, &schema.name, output_dir) {
@@ -44,7 +46,9 @@ pub fn generate_components(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Components) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Components)
+        {
             continue;
         }
         match generate_component(generator, model, &schema.name, output_dir) {
@@ -80,7 +84,9 @@ fn generate_viewmodel(
     let mapper_package = format!("{}.{}.application.mappers", base_package, module_lower);
 
     // Find the primary key field name (first primary key field)
-    let primary_key_field = model.fields.iter()
+    let primary_key_field = model
+        .fields
+        .iter()
         .find(|f| f.is_primary_key())
         .map(|f| generator.type_mapper.to_kotlin_property_name(&f.name))
         .unwrap_or_else(|| "id".to_string());
@@ -106,11 +112,16 @@ fn generate_viewmodel(
     // Create output path: presentation/state/{module}/{Entity}ListViewModel.kt
     let relative_path = format!(
         "{}/presentation/state/{}ListViewModel.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -133,7 +144,9 @@ fn generate_component(
     let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
 
     // Find the primary key field name (first primary key field)
-    let primary_key_field = model.fields.iter()
+    let primary_key_field = model
+        .fields
+        .iter()
         .find(|f| f.is_primary_key())
         .map(|f| generator.type_mapper.to_kotlin_property_name(&f.name))
         .unwrap_or_else(|| "id".to_string());
@@ -159,11 +172,16 @@ fn generate_component(
     // Create output path: presentation/components/{module}/{Entity}Card.kt
     let relative_path = format!(
         "{}/presentation/components/{}Card.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }

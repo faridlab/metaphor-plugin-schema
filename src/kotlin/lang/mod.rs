@@ -68,7 +68,11 @@ impl KotlinTypeMapper {
     }
 
     /// Convert a TypeRef to Kotlin type string with optional handling
-    pub fn to_kotlin_type_with_optional(&self, type_ref: &TypeRef, include_optional: bool) -> String {
+    pub fn to_kotlin_type_with_optional(
+        &self,
+        type_ref: &TypeRef,
+        include_optional: bool,
+    ) -> String {
         match type_ref {
             TypeRef::Primitive(primitive) => {
                 let base_type = self.primitive_to_kotlin(primitive);
@@ -99,9 +103,7 @@ impl KotlinTypeMapper {
                 let value_type = self.to_kotlin_type_with_optional(value, false);
                 format!("Map<{}, {}>", key_type, value_type)
             }
-            TypeRef::Optional(inner) => {
-                self.to_kotlin_type_with_optional(inner, true)
-            }
+            TypeRef::Optional(inner) => self.to_kotlin_type_with_optional(inner, true),
             TypeRef::ModuleRef { module, name } => {
                 format!("{}.{}", module, name)
             }
@@ -129,13 +131,17 @@ impl KotlinTypeMapper {
             PrimitiveType::Int64 => "Long".to_string(),
 
             // Float types
-            PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "Double".to_string(),
+            PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => {
+                "Double".to_string()
+            }
 
             // Boolean
             PrimitiveType::Bool => "Boolean".to_string(),
 
             // Binary types
-            PrimitiveType::Bytes | PrimitiveType::Binary | PrimitiveType::Base64 => "ByteArray".to_string(),
+            PrimitiveType::Bytes | PrimitiveType::Binary | PrimitiveType::Base64 => {
+                "ByteArray".to_string()
+            }
 
             // Special types - use kotlinx.datetime
             PrimitiveType::DateTime | PrimitiveType::Timestamp => "Instant".to_string(),
@@ -178,13 +184,17 @@ impl KotlinTypeMapper {
             PrimitiveType::Int64 => "INTEGER".to_string(),
 
             // Float types
-            PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "REAL".to_string(),
+            PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => {
+                "REAL".to_string()
+            }
 
             // Boolean as INTEGER
             PrimitiveType::Bool => "INTEGER".to_string(),
 
             // Binary types
-            PrimitiveType::Bytes | PrimitiveType::Binary | PrimitiveType::Base64 => "BLOB".to_string(),
+            PrimitiveType::Bytes | PrimitiveType::Binary | PrimitiveType::Base64 => {
+                "BLOB".to_string()
+            }
 
             // Date/Time types
             PrimitiveType::DateTime | PrimitiveType::Timestamp => "INTEGER".to_string(), // Unix timestamp
@@ -206,10 +216,14 @@ impl KotlinTypeMapper {
     pub fn default_value(&self, type_ref: &TypeRef) -> String {
         match type_ref {
             TypeRef::Primitive(primitive) => match primitive {
-                PrimitiveType::String | PrimitiveType::Email | PrimitiveType::Url => "\"\"".to_string(),
+                PrimitiveType::String | PrimitiveType::Email | PrimitiveType::Url => {
+                    "\"\"".to_string()
+                }
                 PrimitiveType::Int | PrimitiveType::Int32 => "0".to_string(),
                 PrimitiveType::Int64 => "0L".to_string(),
-                PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => "0.0".to_string(),
+                PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => {
+                    "0.0".to_string()
+                }
                 PrimitiveType::Bool => "false".to_string(),
                 PrimitiveType::DateTime | PrimitiveType::Timestamp => {
                     "Clock.System.now()".to_string()
@@ -347,7 +361,10 @@ mod tests {
         assert_eq!(mapper.primitive_to_kotlin(&PrimitiveType::Int64), "Long");
         assert_eq!(mapper.primitive_to_kotlin(&PrimitiveType::Float), "Double");
         assert_eq!(mapper.primitive_to_kotlin(&PrimitiveType::Bool), "Boolean");
-        assert_eq!(mapper.primitive_to_kotlin(&PrimitiveType::DateTime), "Instant");
+        assert_eq!(
+            mapper.primitive_to_kotlin(&PrimitiveType::DateTime),
+            "Instant"
+        );
         assert_eq!(mapper.primitive_to_kotlin(&PrimitiveType::Uuid), "String");
     }
 
@@ -356,7 +373,8 @@ mod tests {
         let mapper = KotlinTypeMapper::new();
 
         // Optional string
-        let optional_string = TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::String)));
+        let optional_string =
+            TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::String)));
         assert_eq!(mapper.to_kotlin_type(&optional_string), "String?");
 
         // Array of integers

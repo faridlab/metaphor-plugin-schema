@@ -14,7 +14,10 @@ use std::path::Path;
 /// - User-defined values are kept unchanged.
 /// - New keys from the generator that don't exist in the user file are added.
 /// - For nested mappings, recursion is applied with the same precedence rule.
-pub(in crate::commands::schema) fn merge_yaml_config(generated_content: &str, existing_path: &Path) -> Result<String> {
+pub(in crate::commands::schema) fn merge_yaml_config(
+    generated_content: &str,
+    existing_path: &Path,
+) -> Result<String> {
     if !existing_path.exists() {
         return Ok(generated_content.to_string());
     }

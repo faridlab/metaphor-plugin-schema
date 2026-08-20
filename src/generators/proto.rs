@@ -71,7 +71,11 @@ impl ProtoGenerator {
         Ok(output)
     }
 
-    fn generate_enum(&self, enum_def: &EnumDef, module_name: &str) -> Result<String, GenerateError> {
+    fn generate_enum(
+        &self,
+        enum_def: &EnumDef,
+        module_name: &str,
+    ) -> Result<String, GenerateError> {
         let mut output = String::new();
 
         // Header
@@ -112,7 +116,11 @@ impl ProtoGenerator {
             TypeRef::Array(inner) => format!("repeated {}", self.type_to_proto(inner)),
             TypeRef::Optional(inner) => format!("optional {}", self.type_to_proto(inner)),
             TypeRef::Map { key, value } => {
-                format!("map<{}, {}>", self.type_to_proto(key), self.type_to_proto(value))
+                format!(
+                    "map<{}, {}>",
+                    self.type_to_proto(key),
+                    self.type_to_proto(value)
+                )
             }
             TypeRef::ModuleRef { module, name } => format!("{}.{}", module, name),
         }
@@ -138,7 +146,8 @@ impl ProtoGenerator {
                 "min" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
                         if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::String)) {
-                            validations.push(format!("(buf.validate.field).string.min_len = {}", val));
+                            validations
+                                .push(format!("(buf.validate.field).string.min_len = {}", val));
                         } else {
                             validations.push(format!("(buf.validate.field).int64.gte = {}", val));
                         }
@@ -147,7 +156,8 @@ impl ProtoGenerator {
                 "max" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
                         if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::String)) {
-                            validations.push(format!("(buf.validate.field).string.max_len = {}", val));
+                            validations
+                                .push(format!("(buf.validate.field).string.max_len = {}", val));
                         } else {
                             validations.push(format!("(buf.validate.field).int64.lte = {}", val));
                         }
@@ -155,7 +165,8 @@ impl ProtoGenerator {
                 }
                 "pattern" => {
                     if let Some(val) = attr.first_arg().and_then(|v| v.as_str()) {
-                        validations.push(format!("(buf.validate.field).string.pattern = \"{}\"", val));
+                        validations
+                            .push(format!("(buf.validate.field).string.pattern = \"{}\"", val));
                     }
                 }
                 _ => {}
@@ -226,7 +237,6 @@ impl Generator for ProtoGenerator {
 }
 
 use crate::utils::to_snake_case;
-
 
 fn to_screaming_snake_case(name: &str) -> String {
     to_snake_case(name).to_uppercase()

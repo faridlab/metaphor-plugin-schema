@@ -1,10 +1,10 @@
 //! Helper functions for type parsing, attribute parsing, and serialization
 
-use crate::ast::model::{Attribute, AttributeValue, RelationType};
-use crate::ast::types::{TypeRef, PrimitiveType};
-use crate::ast::hook::ActionKind;
-use crate::ast::expressions::Expression;
 use super::types::YamlField;
+use crate::ast::expressions::Expression;
+use crate::ast::hook::ActionKind;
+use crate::ast::model::{Attribute, AttributeValue, RelationType};
+use crate::ast::types::{PrimitiveType, TypeRef};
 use indexmap::IndexMap;
 
 /// Parse a type string into a TypeRef
@@ -17,7 +17,9 @@ pub(crate) fn parse_type_ref(s: &str) -> TypeRef {
 pub(crate) fn yaml_value_to_expr(value: serde_yaml::Value) -> Expression {
     match value {
         serde_yaml::Value::Null => Expression::Literal(crate::ast::expressions::Literal::Null),
-        serde_yaml::Value::Bool(b) => Expression::Literal(crate::ast::expressions::Literal::Bool(b)),
+        serde_yaml::Value::Bool(b) => {
+            Expression::Literal(crate::ast::expressions::Literal::Bool(b))
+        }
         serde_yaml::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Expression::Literal(crate::ast::expressions::Literal::Int(i))
@@ -53,14 +55,21 @@ pub(crate) fn serialize_type_fields_to_json(fields: &IndexMap<String, YamlField>
         // Get type information
         let (type_str, attributes) = match yaml_field {
             YamlField::Simple(s) => (s.clone(), vec![]),
-            YamlField::Full { field_type, attributes, .. } => (field_type.clone(), attributes.clone()),
+            YamlField::Full {
+                field_type,
+                attributes,
+                ..
+            } => (field_type.clone(), attributes.clone()),
         };
 
         // Determine if optional
         let is_optional = type_str.ends_with('?');
         let base_type = type_str.trim_end_matches('?').trim_end_matches("[]");
 
-        field_schema.insert("type".to_string(), serde_json::Value::String(base_type.to_string()));
+        field_schema.insert(
+            "type".to_string(),
+            serde_json::Value::String(base_type.to_string()),
+        );
         field_schema.insert("optional".to_string(), serde_json::Value::Bool(is_optional));
 
         // Add validation rules from attributes
@@ -149,7 +158,10 @@ pub(crate) fn parse_relation_type(s: &str) -> (TypeRef, RelationType) {
     let s = s.trim();
 
     if let Some(inner) = s.strip_suffix("[]") {
-        (TypeRef::Array(Box::new(make_type_ref_from_name(inner))), RelationType::Many)
+        (
+            TypeRef::Array(Box::new(make_type_ref_from_name(inner))),
+            RelationType::Many,
+        )
     } else if let Some(inner) = s.strip_suffix('?') {
         (
             TypeRef::Optional(Box::new(make_type_ref_from_name(inner))),
@@ -188,7 +200,8 @@ pub(crate) fn parse_attribute_string(s: &str) -> Option<Attribute> {
             if let Some(eq_pos) = colon_pos {
                 let key = arg[..eq_pos].trim();
                 let val = arg[eq_pos + 1..].trim();
-                attr.args.push((Some(key.to_string()), parse_attr_value(val)));
+                attr.args
+                    .push((Some(key.to_string()), parse_attr_value(val)));
             } else {
                 attr.args.push((None, parse_attr_value(arg)));
             }

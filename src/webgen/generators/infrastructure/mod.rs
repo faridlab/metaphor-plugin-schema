@@ -7,13 +7,13 @@
 //! - Service initialization
 //! - External service adapters
 
-mod grpc_client;
 mod api_client;
+mod grpc_client;
 mod repository_impl;
 mod service_init;
 
-pub use grpc_client::GrpcClientGenerator;
 pub use api_client::ApiClientGenerator;
+pub use grpc_client::GrpcClientGenerator;
 pub use repository_impl::RepositoryImplGenerator;
 pub use service_init::ServiceInitGenerator;
 
@@ -102,8 +102,11 @@ impl InfrastructureGenerator {
         entities: &[EntityDefinition],
         result: &mut DomainGenerationResult,
     ) -> Result<()> {
-        let base_dir = self.config.output_dir
-            .join(&self.config.module).join("infrastructure");
+        let base_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("infrastructure");
 
         if !self.config.dry_run {
             fs::create_dir_all(&base_dir).ok();
@@ -122,7 +125,8 @@ impl InfrastructureGenerator {
     }
 
     fn generate_index_content(&self, entities: &[EntityDefinition]) -> String {
-        let exports: Vec<String> = entities.iter()
+        let exports: Vec<String> = entities
+            .iter()
             .map(|e| {
                 let pascal = to_pascal_case(&e.name);
                 format!(

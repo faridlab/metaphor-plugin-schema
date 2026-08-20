@@ -430,7 +430,10 @@ mod tests {
     #[test]
     fn test_authorization_config() {
         let mut config = AuthorizationConfig::new();
-        config.permissions.insert("users".to_string(), vec!["read".to_string(), "create".to_string()]);
+        config.permissions.insert(
+            "users".to_string(),
+            vec!["read".to_string(), "create".to_string()],
+        );
         config.roles.push(RoleDefinition::new("admin"));
 
         assert!(config.has_role("admin"));

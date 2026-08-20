@@ -211,8 +211,17 @@ impl PrimitiveType {
     /// Get the Rust type for this primitive
     pub fn rust_type(&self) -> &'static str {
         match self {
-            Self::String | Self::Email | Self::Url | Self::Phone | Self::Slug | Self::Ip
-            | Self::IpV4 | Self::IpV6 | Self::Mac | Self::Markdown | Self::Html => "String",
+            Self::String
+            | Self::Email
+            | Self::Url
+            | Self::Phone
+            | Self::Slug
+            | Self::Ip
+            | Self::IpV4
+            | Self::IpV6
+            | Self::Mac
+            | Self::Markdown
+            | Self::Html => "String",
             Self::Int | Self::Int32 => "i32",
             Self::Int64 => "i64",
             Self::Float | Self::Float64 => "f64",
@@ -232,8 +241,17 @@ impl PrimitiveType {
     /// Get the PostgreSQL type for this primitive
     pub fn postgres_type(&self) -> &'static str {
         match self {
-            Self::String | Self::Email | Self::Url | Self::Phone | Self::Slug | Self::Ip
-            | Self::IpV4 | Self::IpV6 | Self::Mac | Self::Markdown | Self::Html => "TEXT",
+            Self::String
+            | Self::Email
+            | Self::Url
+            | Self::Phone
+            | Self::Slug
+            | Self::Ip
+            | Self::IpV4
+            | Self::IpV6
+            | Self::Mac
+            | Self::Markdown
+            | Self::Html => "TEXT",
             Self::Int | Self::Int32 => "INTEGER",
             Self::Int64 => "BIGINT",
             Self::Float | Self::Float64 => "DOUBLE PRECISION",
@@ -253,10 +271,18 @@ impl PrimitiveType {
     /// Get the Proto type for this primitive
     pub fn proto_type(&self) -> &'static str {
         match self {
-            Self::String | Self::Email | Self::Url | Self::Phone | Self::Slug | Self::Ip
-            | Self::IpV4 | Self::IpV6 | Self::Mac | Self::Markdown | Self::Html | Self::Uuid => {
-                "string"
-            }
+            Self::String
+            | Self::Email
+            | Self::Url
+            | Self::Phone
+            | Self::Slug
+            | Self::Ip
+            | Self::IpV4
+            | Self::IpV6
+            | Self::Mac
+            | Self::Markdown
+            | Self::Html
+            | Self::Uuid => "string",
             Self::Int | Self::Int32 => "int32",
             Self::Int64 => "int64",
             Self::Float | Self::Float32 => "float",

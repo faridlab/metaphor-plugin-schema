@@ -29,7 +29,10 @@ pub(super) fn announce_run(
         println!("  {}", "(force - will overwrite existing files)".yellow());
     }
     if changed {
-        println!("  {}", "(changed only - using git to detect changes)".cyan());
+        println!(
+            "  {}",
+            "(changed only - using git to detect changes)".cyan()
+        );
     }
 }
 

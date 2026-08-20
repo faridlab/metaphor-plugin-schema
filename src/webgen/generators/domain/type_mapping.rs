@@ -5,7 +5,7 @@
 //! - Zod validation schemas
 //! - Default values
 
-use crate::webgen::ast::entity::{FieldType, FieldAttribute, FieldDefinition, EnumDefinition};
+use crate::webgen::ast::entity::{EnumDefinition, FieldAttribute, FieldDefinition, FieldType};
 
 /// Type mapper for Schema → TypeScript/Zod conversion
 #[derive(Debug, Clone)]
@@ -36,9 +36,23 @@ impl TypeMapper {
     pub fn is_numeric_scalar(name: &str) -> bool {
         matches!(
             name.to_lowercase().as_str(),
-            "int" | "int32" | "int64" | "uint" | "uint32" | "uint64"
-                | "sint32" | "sint64" | "fixed32" | "fixed64"
-                | "float" | "float32" | "float64" | "double" | "decimal" | "bigint" | "long"
+            "int"
+                | "int32"
+                | "int64"
+                | "uint"
+                | "uint32"
+                | "uint64"
+                | "sint32"
+                | "sint64"
+                | "fixed32"
+                | "fixed64"
+                | "float"
+                | "float32"
+                | "float64"
+                | "double"
+                | "decimal"
+                | "bigint"
+                | "long"
         )
     }
 
@@ -48,9 +62,19 @@ impl TypeMapper {
     pub fn is_function_default(value: &str) -> bool {
         matches!(
             value.trim().to_lowercase().as_str(),
-            "uuid" | "uuidv4" | "uuid_v4" | "gen_random_uuid" | "cuid" | "nanoid"
-                | "now" | "now()" | "current_timestamp" | "autoincrement" | "auto"
-                | "auto_increment" | "identity"
+            "uuid"
+                | "uuidv4"
+                | "uuid_v4"
+                | "gen_random_uuid"
+                | "cuid"
+                | "nanoid"
+                | "now"
+                | "now()"
+                | "current_timestamp"
+                | "autoincrement"
+                | "auto"
+                | "auto_increment"
+                | "identity"
         )
     }
 
@@ -110,7 +134,11 @@ impl TypeMapper {
         // they are server-assigned, not literal Zod defaults.
         if let Some(default) = &field.default_value {
             if !Self::is_function_default(default) {
-                schema = format!("{}.default({})", schema, Self::format_default_value(default, &field.type_name));
+                schema = format!(
+                    "{}.default({})",
+                    schema,
+                    Self::format_default_value(default, &field.type_name)
+                );
             }
         }
 
@@ -135,7 +163,9 @@ impl TypeMapper {
             FieldType::Ip => "ipSchema".to_string(), // IP address validation
             FieldType::Enum(name) => {
                 if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
-                    let variants: Vec<String> = enum_def.variants.iter()
+                    let variants: Vec<String> = enum_def
+                        .variants
+                        .iter()
                         .map(|v| format!("'{}'", v.name))
                         .collect();
                     format!("z.enum([{}])", variants.join(", "))
@@ -146,7 +176,9 @@ impl TypeMapper {
             FieldType::Custom(name) => {
                 // Check if it's an enum
                 if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
-                    let variants: Vec<String> = enum_def.variants.iter()
+                    let variants: Vec<String> = enum_def
+                        .variants
+                        .iter()
                         .map(|v| format!("'{}'", v.name))
                         .collect();
                     format!("z.enum([{}])", variants.join(", "))
@@ -163,9 +195,7 @@ impl TypeMapper {
             FieldType::Array(inner) => {
                 format!("z.array({})", Self::base_zod_schema(inner, enums))
             }
-            FieldType::Optional(inner) => {
-                Self::base_zod_schema(inner, enums)
-            }
+            FieldType::Optional(inner) => Self::base_zod_schema(inner, enums),
         }
     }
 
@@ -183,7 +213,11 @@ impl TypeMapper {
     }
 
     /// Convert a single attribute to Zod validation
-    fn attribute_to_zod_validation(&self, attr: &FieldAttribute, field_type: &FieldType) -> Option<String> {
+    fn attribute_to_zod_validation(
+        &self,
+        attr: &FieldAttribute,
+        field_type: &FieldType,
+    ) -> Option<String> {
         match attr.name.as_str() {
             "min" => {
                 let arg = attr.first_arg()?;
@@ -272,9 +306,16 @@ impl TypeMapper {
     /// Format a default value for Zod
     fn format_default_value(value: &str, field_type: &FieldType) -> String {
         match field_type {
-            FieldType::String | FieldType::Text | FieldType::Email |
-            FieldType::Phone | FieldType::Url | FieldType::Uuid |
-            FieldType::Date | FieldType::Time | FieldType::DateTime | FieldType::Ip => {
+            FieldType::String
+            | FieldType::Text
+            | FieldType::Email
+            | FieldType::Phone
+            | FieldType::Url
+            | FieldType::Uuid
+            | FieldType::Date
+            | FieldType::Time
+            | FieldType::DateTime
+            | FieldType::Ip => {
                 // Quote strings unless already quoted
                 if value.starts_with('"') || value.starts_with('\'') {
                     value.to_string()
@@ -289,9 +330,7 @@ impl TypeMapper {
                     "false".to_string()
                 }
             }
-            FieldType::Int | FieldType::Float | FieldType::Decimal => {
-                value.to_string()
-            }
+            FieldType::Int | FieldType::Float | FieldType::Decimal => value.to_string(),
             FieldType::Array(_) => {
                 if value == "[]" || value.starts_with('[') {
                     value.to_string()
@@ -307,7 +346,11 @@ impl TypeMapper {
                 }
             }
             FieldType::Custom(name) if Self::is_numeric_scalar(name) => {
-                if value.parse::<f64>().is_ok() { value.to_string() } else { "0".to_string() }
+                if value.parse::<f64>().is_ok() {
+                    value.to_string()
+                } else {
+                    "0".to_string()
+                }
             }
             FieldType::Enum(_) | FieldType::Custom(_) => {
                 if value.starts_with('"') || value.starts_with('\'') {
@@ -316,17 +359,19 @@ impl TypeMapper {
                     format!("'{}'", value)
                 }
             }
-            FieldType::Optional(inner) => {
-                Self::format_default_value(value, inner)
-            }
+            FieldType::Optional(inner) => Self::format_default_value(value, inner),
         }
     }
 
     /// Get default value for a field type
     pub fn default_value_for_type(&self, field_type: &FieldType) -> String {
         match field_type {
-            FieldType::String | FieldType::Text | FieldType::Email |
-            FieldType::Phone | FieldType::Url | FieldType::Ip => "''".to_string(),
+            FieldType::String
+            | FieldType::Text
+            | FieldType::Email
+            | FieldType::Phone
+            | FieldType::Url
+            | FieldType::Ip => "''".to_string(),
             FieldType::Uuid => "crypto.randomUUID()".to_string(),
             FieldType::Int => "0".to_string(),
             FieldType::Float | FieldType::Decimal => "0.0".to_string(),
@@ -355,15 +400,15 @@ impl TypeMapper {
     pub fn is_value_object_field(&self, field: &FieldDefinition) -> bool {
         // Check by name patterns
         let name = field.name.to_lowercase();
-        let is_vo_name = name.ends_with("_address") ||
-            name.ends_with("_email") ||
-            name.ends_with("_phone") ||
-            name.ends_with("_money") ||
-            name.ends_with("_amount") ||
-            name.ends_with("_price") ||
-            name == "email" ||
-            name == "phone" ||
-            name == "address";
+        let is_vo_name = name.ends_with("_address")
+            || name.ends_with("_email")
+            || name.ends_with("_phone")
+            || name.ends_with("_money")
+            || name.ends_with("_amount")
+            || name.ends_with("_price")
+            || name == "email"
+            || name == "phone"
+            || name == "address";
 
         // Check by type
         let is_vo_type = matches!(
@@ -399,7 +444,11 @@ impl TypeMapper {
         if name.contains("address") && !name.contains("email") {
             return Some(ValueObjectType::Address);
         }
-        if name.contains("money") || name.contains("amount") || name.contains("price") || name.contains("cost") {
+        if name.contains("money")
+            || name.contains("amount")
+            || name.contains("price")
+            || name.contains("cost")
+        {
             return Some(ValueObjectType::Money);
         }
         if name.contains("url") || name.contains("website") || name.contains("link") {
@@ -461,11 +510,23 @@ mod tests {
     fn test_typescript_type_mapping() {
         let mapper = TypeMapper::new();
 
-        assert_eq!(mapper.to_typescript_type(&FieldType::String, false), "string");
-        assert_eq!(mapper.to_typescript_type(&FieldType::String, true), "string | null");
+        assert_eq!(
+            mapper.to_typescript_type(&FieldType::String, false),
+            "string"
+        );
+        assert_eq!(
+            mapper.to_typescript_type(&FieldType::String, true),
+            "string | null"
+        );
         assert_eq!(mapper.to_typescript_type(&FieldType::Int, false), "number");
-        assert_eq!(mapper.to_typescript_type(&FieldType::Bool, false), "boolean");
-        assert_eq!(mapper.to_typescript_type(&FieldType::DateTime, false), "Date");
+        assert_eq!(
+            mapper.to_typescript_type(&FieldType::Bool, false),
+            "boolean"
+        );
+        assert_eq!(
+            mapper.to_typescript_type(&FieldType::DateTime, false),
+            "Date"
+        );
         assert_eq!(mapper.to_typescript_type(&FieldType::Uuid, false), "string");
     }
 
@@ -501,6 +562,9 @@ mod tests {
         };
 
         assert!(mapper.is_value_object_field(&email_field));
-        assert_eq!(mapper.detect_value_object_type(&email_field), Some(ValueObjectType::Email));
+        assert_eq!(
+            mapper.detect_value_object_type(&email_field),
+            Some(ValueObjectType::Email)
+        );
     }
 }

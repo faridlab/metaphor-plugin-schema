@@ -288,7 +288,11 @@ mod tests {
         )
         .unwrap();
         // Hand-written (no marker) — must NOT be in `authored`
-        std::fs::write(dir.join("20240101120000_create_user_table.up.sql"), "-- hand\n").unwrap();
+        std::fs::write(
+            dir.join("20240101120000_create_user_table.up.sql"),
+            "-- hand\n",
+        )
+        .unwrap();
         // A down file (no marker by convention) — its base is authored via the up
         std::fs::write(
             dir.join("20260426220001_create_company_table.down.sql"),
@@ -299,7 +303,10 @@ mod tests {
         let index = build_migration_index(dir);
         assert_eq!(index.max_ts.as_deref(), Some("20260426220001"));
         assert_eq!(
-            index.authored.get("create_company_table").map(|s| s.as_str()),
+            index
+                .authored
+                .get("create_company_table")
+                .map(|s| s.as_str()),
             Some("20260426220001")
         );
         // Hand-written base is not reused.
@@ -326,7 +333,10 @@ mod tests {
         let index = build_migration_index(dir);
         // Min timestamp wins, deterministically.
         assert_eq!(
-            index.authored.get("create_company_table").map(|s| s.as_str()),
+            index
+                .authored
+                .get("create_company_table")
+                .map(|s| s.as_str()),
             Some("20260426220135")
         );
         assert_eq!(index.max_ts.as_deref(), Some("20260723180002"));

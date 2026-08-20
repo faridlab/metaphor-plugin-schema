@@ -100,10 +100,8 @@ pub(super) fn build_module_schema(
                     let enums: Vec<_> = yaml_schema.enums.to_vec();
                     for yaml_enum in enums {
                         let enum_def = yaml_enum.into_enum();
-                        if let Some(existing) = module_schema
-                            .enums
-                            .iter()
-                            .find(|e| e.name == enum_def.name)
+                        if let Some(existing) =
+                            module_schema.enums.iter().find(|e| e.name == enum_def.name)
                         {
                             errors.push(format!(
                                 "Duplicate enum '{}' defined in '{}' — already defined with {} variant(s). \
@@ -253,15 +251,14 @@ pub(super) fn build_module_schema(
                     );
 
                     // Convert models with shared-types context (for `extends` and JSONB support)
-                    let mut models = match yaml_schema
-                        .into_models_with_context(&resolved_shared_types)
-                    {
-                        Ok(models) => models,
-                        Err(e) => {
-                            errors.push(format!("{}: {e}", filename));
-                            continue;
-                        }
-                    };
+                    let mut models =
+                        match yaml_schema.into_models_with_context(&resolved_shared_types) {
+                            Ok(models) => models,
+                            Err(e) => {
+                                errors.push(format!("{}: {e}", filename));
+                                continue;
+                            }
+                        };
                     // Apply the module-level schema default last: per-model and
                     // file-level `schema:` have already been resolved, so only
                     // models still without a schema inherit the module default.
@@ -269,11 +266,7 @@ pub(super) fn build_module_schema(
                         model.apply_schema_default(&module_schema_default);
                     }
                     for model in models {
-                        if module_schema
-                            .models
-                            .iter()
-                            .any(|m| m.name == model.name)
-                        {
+                        if module_schema.models.iter().any(|m| m.name == model.name) {
                             errors.push(format!(
                                 "Duplicate model '{}' defined in '{}' — already defined in another schema file. \
                                  Each model name must be unique within a module.",
@@ -373,7 +366,10 @@ mod tests {
         assert_eq!(job.name, "mail_queue");
         assert_eq!(job.posture, Some(crate::ast::JobPosture::SelfArming));
         assert_eq!(job.triggers, vec!["message.created", "message.retried"]);
-        assert_eq!(job.commit_policy, Some(crate::ast::CommitPolicy::CommitPerBatch));
+        assert_eq!(
+            job.commit_policy,
+            Some(crate::ast::CommitPolicy::CommitPerBatch)
+        );
         assert!(job.pickup_lock);
     }
 

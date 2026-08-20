@@ -20,7 +20,10 @@ use std::path::Path;
 /// If the existing file has a `-- <<< CUSTOM SEED DATA >>>` marker, the
 /// content below it is appended to the regenerated base. Otherwise the
 /// generated content is used as-is.
-pub(in crate::commands::schema) fn merge_seed_file(generated_content: &str, existing_path: &Path) -> Result<String> {
+pub(in crate::commands::schema) fn merge_seed_file(
+    generated_content: &str,
+    existing_path: &Path,
+) -> Result<String> {
     if !existing_path.exists() {
         return Ok(generated_content.to_string());
     }
@@ -29,7 +32,11 @@ pub(in crate::commands::schema) fn merge_seed_file(generated_content: &str, exis
         .with_context(|| format!("Failed to read existing seed file: {:?}", existing_path))?;
 
     if let Some(custom_data) = extract_custom_seed_data(&existing_content) {
-        Ok(format!("{}\n\n{}", generated_content.trim_end(), custom_data))
+        Ok(format!(
+            "{}\n\n{}",
+            generated_content.trim_end(),
+            custom_data
+        ))
     } else {
         Ok(generated_content.to_string())
     }
@@ -62,13 +69,20 @@ fn extract_custom_seed_data(content: &str) -> Option<String> {
 /// The user's existing ordering is preserved verbatim. Any seed names the
 /// generator emits that aren't already in the file are listed below a
 /// `# Newly added seeds` comment for the user to slot in.
-pub(in crate::commands::schema) fn merge_seed_order(generated_content: &str, existing_path: &Path) -> Result<String> {
+pub(in crate::commands::schema) fn merge_seed_order(
+    generated_content: &str,
+    existing_path: &Path,
+) -> Result<String> {
     if !existing_path.exists() {
         return Ok(generated_content.to_string());
     }
 
-    let existing_content = fs::read_to_string(existing_path)
-        .with_context(|| format!("Failed to read existing seed_order.yml: {:?}", existing_path))?;
+    let existing_content = fs::read_to_string(existing_path).with_context(|| {
+        format!(
+            "Failed to read existing seed_order.yml: {:?}",
+            existing_path
+        )
+    })?;
 
     let generated_seeds = extract_seed_names(generated_content);
 

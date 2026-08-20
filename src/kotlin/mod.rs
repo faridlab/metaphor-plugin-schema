@@ -15,7 +15,7 @@ pub mod lang;
 pub mod package_detector;
 pub mod templates;
 
-pub use config::{GeneratorConfig, GenerationTarget};
+pub use config::{GenerationTarget, GeneratorConfig};
 pub use error::{MobileGenError, Result};
 pub use generators::MobileGenerator;
 pub use lang::KotlinTypeMapper;
@@ -31,19 +31,13 @@ use crate::parser;
 /// Lifted directly from the original mobilegen `main.rs::parse_module_schema`.
 /// Lives here so the kotlin module is fully self-contained — `crate::commands::kotlin`
 /// only needs to call `kotlin::parse_module_schema` and then `MobileGenerator::generate`.
-pub fn parse_module_schema(
-    schema_path: &Path,
-    module_name: &str,
-) -> Result<ModuleSchema> {
+pub fn parse_module_schema(schema_path: &Path, module_name: &str) -> Result<ModuleSchema> {
     let mut schema = ModuleSchema::new(module_name);
 
     // Directories to skip (non-model directories)
     const SKIP_DIRS: &[&str] = &["hooks", "workflows", "openapi"];
 
-    fn find_model_files(
-        dir: &Path,
-        files: &mut Vec<std::path::PathBuf>,
-    ) -> std::io::Result<()> {
+    fn find_model_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -68,8 +62,9 @@ pub fn parse_module_schema(
         .map_err(|e| error::MobileGenError::SchemaParse(format!("read schema dir: {e}")))?;
 
     for path in model_files {
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| error::MobileGenError::SchemaParse(format!("read {}: {e}", path.display())))?;
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            error::MobileGenError::SchemaParse(format!("read {}: {e}", path.display()))
+        })?;
 
         if parser::is_model_index_file(&content) {
             if let Ok(index) = parser::parse_model_index_yaml_str(&content) {
@@ -78,8 +73,9 @@ pub fn parse_module_schema(
                 }
             }
         } else {
-            let yaml_schema = parser::parse_model_yaml_str(&content)
-                .map_err(|e| error::MobileGenError::SchemaParse(format!("parse {}: {e}", path.display())))?;
+            let yaml_schema = parser::parse_model_yaml_str(&content).map_err(|e| {
+                error::MobileGenError::SchemaParse(format!("parse {}: {e}", path.display()))
+            })?;
 
             let file_disabled: Vec<String> = yaml_schema
                 .generators
@@ -95,9 +91,9 @@ pub fn parse_module_schema(
             for yaml_enum in &yaml_schema.enums {
                 schema.enums.push(yaml_enum.clone().into_enum());
             }
-            let mut models = yaml_schema
-                .into_models()
-                .map_err(|e| error::MobileGenError::SchemaParse(format!("convert {}: {e}", path.display())))?;
+            let mut models = yaml_schema.into_models().map_err(|e| {
+                error::MobileGenError::SchemaParse(format!("convert {}: {e}", path.display()))
+            })?;
 
             for model in &mut models {
                 if model.disabled_generators.is_empty() && !file_disabled.is_empty() {

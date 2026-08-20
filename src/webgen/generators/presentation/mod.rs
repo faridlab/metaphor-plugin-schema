@@ -6,17 +6,17 @@
 //! - CRUD page components
 //! - Detail view components
 
-mod form_fields;
-mod table_columns;
 mod crud_pages;
 mod detail_view;
+mod form_fields;
 mod page_config;
+mod table_columns;
 
-pub use form_fields::FormFieldsGenerator;
-pub use table_columns::TableColumnsGenerator;
 pub use crud_pages::CrudPagesGenerator;
 pub use detail_view::DetailViewGenerator;
+pub use form_fields::FormFieldsGenerator;
 pub use page_config::PageConfigGenerator;
+pub use table_columns::TableColumnsGenerator;
 
 use std::fs;
 
@@ -60,7 +60,9 @@ impl PresentationGenerator {
 
         // Find hook for entity by name matching
         let find_hook = |entity_name: &str| -> Option<&HookSchema> {
-            hooks.iter().find(|h| h.model.eq_ignore_ascii_case(entity_name))
+            hooks
+                .iter()
+                .find(|h| h.model.eq_ignore_ascii_case(entity_name))
         };
 
         // Generate for each entity
@@ -114,7 +116,9 @@ impl PresentationGenerator {
         entities: &[EntityDefinition],
         result: &mut DomainGenerationResult,
     ) -> Result<()> {
-        let base_dir = self.config.output_dir
+        let base_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("components")
             .join("forms")
@@ -134,7 +138,9 @@ impl PresentationGenerator {
         }
 
         // Generate tables index
-        let tables_dir = self.config.output_dir
+        let tables_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("components")
             .join("tables")
@@ -153,7 +159,9 @@ impl PresentationGenerator {
         }
 
         // Generate pages index
-        let pages_dir = self.config.output_dir
+        let pages_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("pages")
             .join(&self.config.module);
@@ -171,7 +179,9 @@ impl PresentationGenerator {
         }
 
         // Generate configs index for generic templates
-        let configs_dir = self.config.output_dir
+        let configs_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("pages")
             .join("templates")
@@ -186,7 +196,8 @@ impl PresentationGenerator {
 
         result.add_file(configs_index_path.clone(), self.config.dry_run);
         if !self.config.dry_run {
-            crate::webgen::custom_blocks::preserve_and_write(&configs_index_path, configs_index).ok();
+            crate::webgen::custom_blocks::preserve_and_write(&configs_index_path, configs_index)
+                .ok();
         }
 
         Ok(())
@@ -255,7 +266,8 @@ impl PresentationGenerator {
     fn generate_configs_index(&self, entities: &[EntityDefinition]) -> String {
         use crate::webgen::parser::{to_camel_case, to_snake_case};
 
-        let exports: Vec<String> = entities.iter()
+        let exports: Vec<String> = entities
+            .iter()
             .map(|e| {
                 let camel = to_camel_case(&e.name);
                 let snake = to_snake_case(&e.name);

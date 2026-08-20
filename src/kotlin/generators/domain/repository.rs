@@ -1,10 +1,10 @@
 //! Repository interface generator
 
+use crate::ast::{Model, ModuleSchema};
 use crate::kotlin::error::{MobileGenError, Result};
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::{Model, ModuleSchema};
 use std::path::Path;
 
 /// Generate repository interfaces for all models in a schema.
@@ -22,7 +22,9 @@ pub fn generate_repositories(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Repositories) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Repositories)
+        {
             continue;
         }
         match generate_repository(generator, model, &schema.name, output_dir) {
@@ -39,7 +41,6 @@ pub fn generate_repositories(
 
     Ok(result)
 }
-
 
 /// Generate a single repository interface
 fn generate_repository(
@@ -75,11 +76,16 @@ fn generate_repository(
     // Create output path: domain/{module}/repository/{Entity}Repository.kt
     let relative_path = format!(
         "{}/domain/repository/{}Repository.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }

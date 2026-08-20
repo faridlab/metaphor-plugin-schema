@@ -2,14 +2,14 @@
 //!
 //! Generates TypeScript value object types with validation and equality.
 
-use std::fs;
 use std::collections::HashSet;
+use std::fs;
 
+use super::type_mapping::{TypeMapper, ValueObjectType};
+use super::DomainGenerationResult;
 use crate::webgen::ast::entity::EntityDefinition;
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use super::type_mapping::{TypeMapper, ValueObjectType};
-use super::DomainGenerationResult;
 
 /// Generator for value object types
 pub struct ValueObjectGenerator {
@@ -20,7 +20,10 @@ pub struct ValueObjectGenerator {
 impl ValueObjectGenerator {
     /// Create a new value object generator
     pub fn new(config: Config, type_mapper: TypeMapper) -> Self {
-        Self { config, type_mapper }
+        Self {
+            config,
+            type_mapper,
+        }
     }
 
     /// Generate value objects from entity field analysis
@@ -41,7 +44,9 @@ impl ValueObjectGenerator {
             }
         }
 
-        let vo_dir = self.config.output_dir
+        let vo_dir = self
+            .config
+            .output_dir
             .join("domain")
             .join(&self.config.module)
             .join("value_object");
@@ -158,7 +163,8 @@ export function tryCreateEmail(value: string): Email | null {
   }
   return null;
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generate Phone value object
@@ -228,7 +234,8 @@ export function formatPhoneNumber(phone: PhoneNumber): string {
   // Basic formatting - can be enhanced with libphonenumber
   return phone.value;
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generate Address value object
@@ -322,7 +329,8 @@ export function formatAddress(address: Address, options?: { multiline?: boolean 
   const separator = options?.multiline ? '\n' : ', ';
   return parts.join(separator);
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generate Money value object
@@ -503,7 +511,8 @@ export function tryCreateUrl(value: string): Url | null {
   }
   return null;
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generate PersonName value object
@@ -585,7 +594,8 @@ export function personNameEquals(a: PersonName, b: PersonName): boolean {
     a.middleName === b.middleName
   );
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generate Identifier value object
@@ -650,13 +660,14 @@ export function isIdentifier<T extends string>(value: unknown): value is Identif
     typeof (value as Identifier<T>).type === 'string'
   );
 }
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Generate a custom value object template
     fn generate_custom_vo(&self, name: &str) -> String {
         format!(
-r#"/**
+            r#"/**
  * {name} Value Object
  *
  * Custom value object - implement according to domain requirements.
@@ -717,7 +728,7 @@ export * from './Identifier';
 
 // <<< CUSTOM: Add custom value object exports here
 // END CUSTOM
-"#.to_string()
+"#
+        .to_string()
     }
 }
-

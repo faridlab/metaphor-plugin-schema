@@ -6,10 +6,10 @@ use super::lexer::{Lexer, Token, TokenKind};
 use super::ParseError;
 use crate::ast::expressions::{BinaryOp, Expression, FieldRef, Literal};
 use crate::ast::hook::{
-    Action, ActionKind, ActionType, ComputedField, FieldRestriction, Permission, PermissionAction,
-    Rule, RuleWhen, State, StateMachine, Transition, Trigger, TriggerEvent, Hook,
+    Action, ActionKind, ActionType, ComputedField, FieldRestriction, Hook, Permission,
+    PermissionAction, Rule, RuleWhen, State, StateMachine, Transition, Trigger, TriggerEvent,
 };
-use crate::ast::{Span, HookFile};
+use crate::ast::{HookFile, Span};
 
 /// Parser for hook schema files (legacy DSL)
 pub struct WorkflowParser<'source> {
@@ -178,7 +178,10 @@ impl<'source> WorkflowParser<'source> {
     }
 
     /// Parse a single entry in state machine (transitions block or state)
-    fn parse_state_machine_entry(&mut self, state_machine: &mut StateMachine) -> Result<(), ParseError> {
+    fn parse_state_machine_entry(
+        &mut self,
+        state_machine: &mut StateMachine,
+    ) -> Result<(), ParseError> {
         match self.current_kind().cloned() {
             Some(TokenKind::Transitions) => {
                 self.advance()?;
@@ -519,7 +522,11 @@ impl<'source> WorkflowParser<'source> {
         };
 
         // Check for field restrictions or conditions
-        while self.check(TokenKind::LBrace) || self.check(TokenKind::Only) || self.check(TokenKind::Except) || self.check(TokenKind::If) {
+        while self.check(TokenKind::LBrace)
+            || self.check(TokenKind::Only)
+            || self.check(TokenKind::Except)
+            || self.check(TokenKind::If)
+        {
             if self.check(TokenKind::Only) {
                 self.advance()?;
                 self.expect(TokenKind::Colon)?;
@@ -648,7 +655,12 @@ impl<'source> WorkflowParser<'source> {
         let expression = self.parse_expression()?;
 
         let mut computed = ComputedField::new(name, expression);
-        computed.span = Span::new(start_line, start_col, self.current_line(), self.current_col());
+        computed.span = Span::new(
+            start_line,
+            start_col,
+            self.current_line(),
+            self.current_col(),
+        );
 
         Ok(computed)
     }
@@ -813,7 +825,10 @@ impl<'source> WorkflowParser<'source> {
     }
 
     /// Convert member access to method call when followed by parentheses
-    fn parse_method_call_from_member_access(&mut self, expr: Expression) -> Result<Expression, ParseError> {
+    fn parse_method_call_from_member_access(
+        &mut self,
+        expr: Expression,
+    ) -> Result<Expression, ParseError> {
         let Expression::MemberAccess { object, member } = expr else {
             return Ok(expr);
         };
@@ -830,7 +845,10 @@ impl<'source> WorkflowParser<'source> {
     }
 
     /// Parse comma-separated expressions until terminator
-    fn parse_comma_separated_exprs(&mut self, terminator: TokenKind) -> Result<Vec<Expression>, ParseError> {
+    fn parse_comma_separated_exprs(
+        &mut self,
+        terminator: TokenKind,
+    ) -> Result<Vec<Expression>, ParseError> {
         let mut args = Vec::new();
         while !self.check(terminator.clone()) {
             args.push(self.parse_expression()?);

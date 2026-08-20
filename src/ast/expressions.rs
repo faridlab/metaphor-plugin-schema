@@ -18,15 +18,9 @@ pub enum Expression {
         right: Box<Expression>,
     },
     /// Unary operation (e.g., `!a`)
-    Unary {
-        op: UnaryOp,
-        expr: Box<Expression>,
-    },
+    Unary { op: UnaryOp, expr: Box<Expression> },
     /// Function call (e.g., `count(items)`, `now()`)
-    FunctionCall {
-        name: String,
-        args: Vec<Expression>,
-    },
+    FunctionCall { name: String, args: Vec<Expression> },
     /// Aggregate expression (e.g., `any(items, item.active)`)
     Aggregate {
         function: AggregateFunc,

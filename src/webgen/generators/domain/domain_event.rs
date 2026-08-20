@@ -4,11 +4,11 @@
 
 use std::fs;
 
+use super::DomainGenerationResult;
 use crate::webgen::ast::entity::EntityDefinition;
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case, to_snake_case};
-use super::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case, to_snake_case};
 
 /// Generator for domain event types
 pub struct DomainEventGenerator {
@@ -26,7 +26,9 @@ impl DomainEventGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let events_dir = self.config.output_dir
+        let events_dir = self
+            .config
+            .output_dir
             .join("domain")
             .join(&self.config.module)
             .join("event");
@@ -54,7 +56,7 @@ impl DomainEventGenerator {
         let entity_snake = to_snake_case(&entity.name);
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Domain Events
  *
  * Event types for {entity_pascal} lifecycle and business operations.

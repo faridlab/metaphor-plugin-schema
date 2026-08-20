@@ -1,7 +1,7 @@
 //! Configuration for webapp code generation
 
-use std::path::PathBuf;
 use crate::webgen::{Error, Result};
+use std::path::PathBuf;
 
 /// Code generation target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,14 +124,14 @@ impl Target {
         matches!(
             self,
             Self::Workflows
-            | Self::StateMachines
-            | Self::Routing
-            | Self::EnhancedCrud
-            | Self::Domain
-            | Self::Presentation
-            | Self::Application
-            | Self::Infrastructure
-            | Self::Contracts
+                | Self::StateMachines
+                | Self::Routing
+                | Self::EnhancedCrud
+                | Self::Domain
+                | Self::Presentation
+                | Self::Application
+                | Self::Infrastructure
+                | Self::Contracts
         )
     }
 }
@@ -280,7 +280,9 @@ impl Config {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         if self.module.is_empty() {
-            return Err(Error::InvalidModule("Module name cannot be empty".to_string()));
+            return Err(Error::InvalidModule(
+                "Module name cannot be empty".to_string(),
+            ));
         }
 
         // Check if module name is valid (alphanumeric and underscores)

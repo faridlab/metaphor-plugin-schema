@@ -158,7 +158,8 @@ pub(super) fn execute_undeclared(module: &str) -> Result<()> {
     // Run the generators in memory to learn exactly which paths they claim.
     // This writes nothing — `generate_all` returns a path→content map. It is
     // what makes the headerless entity structs classify correctly.
-    let generator_paths: HashSet<PathBuf> = match generate_all(&resolved, &GenerationTarget::all()) {
+    let generator_paths: HashSet<PathBuf> = match generate_all(&resolved, &GenerationTarget::all())
+    {
         Ok(output) => output.files.keys().cloned().collect(),
         Err(e) => {
             // Degrade honestly rather than silently: without the path oracle we
@@ -183,7 +184,11 @@ pub(super) fn execute_undeclared(module: &str) -> Result<()> {
     let mut declared_count = 0usize;
     let mut undeclared: Vec<PathBuf> = Vec::new();
 
-    for entry in WalkDir::new(&src_root).follow_links(false).into_iter().flatten() {
+    for entry in WalkDir::new(&src_root)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;

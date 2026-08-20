@@ -68,7 +68,10 @@ pub(super) fn stabilize_migration_timestamps(generated: &mut GeneratedOutput, ou
         let Some(base) = migration_base_name(name) else {
             continue;
         };
-        by_name.entry(base.to_string()).or_default().push(path.clone());
+        by_name
+            .entry(base.to_string())
+            .or_default()
+            .push(path.clone());
     }
 
     // (old_path, new_path) remappings, applied after the iteration.
@@ -186,15 +189,36 @@ mod tests {
 
         // Generator (out of topo order) produced the pair at a different ts.
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(mig("20260426220009", "create_company_table", ".up.sql"), "-- new up\n".to_string());
-        generated.files.insert(mig("20260426220009", "create_company_table", ".down.sql"), "-- new down\n".to_string());
+        generated.files.insert(
+            mig("20260426220009", "create_company_table", ".up.sql"),
+            "-- new up\n".to_string(),
+        );
+        generated.files.insert(
+            mig("20260426220009", "create_company_table", ".down.sql"),
+            "-- new down\n".to_string(),
+        );
 
         stabilize_migration_timestamps(&mut generated, dir);
 
         // BOTH directions reuse the existing on-disk timestamp → pair stays unified.
-        assert!(has(&generated, "20260426220001", "create_company_table", ".up.sql"));
-        assert!(has(&generated, "20260426220001", "create_company_table", ".down.sql"));
-        assert!(!has(&generated, "20260426220009", "create_company_table", ".up.sql"));
+        assert!(has(
+            &generated,
+            "20260426220001",
+            "create_company_table",
+            ".up.sql"
+        ));
+        assert!(has(
+            &generated,
+            "20260426220001",
+            "create_company_table",
+            ".down.sql"
+        ));
+        assert!(!has(
+            &generated,
+            "20260426220009",
+            "create_company_table",
+            ".up.sql"
+        ));
     }
 
     #[test]
@@ -210,14 +234,35 @@ mod tests {
         // (no .down.sql on disk)
 
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(mig("20260426220009", "create_company_table", ".up.sql"), "-- up\n".to_string());
-        generated.files.insert(mig("20260426220009", "create_company_table", ".down.sql"), "-- down\n".to_string());
+        generated.files.insert(
+            mig("20260426220009", "create_company_table", ".up.sql"),
+            "-- up\n".to_string(),
+        );
+        generated.files.insert(
+            mig("20260426220009", "create_company_table", ".down.sql"),
+            "-- down\n".to_string(),
+        );
 
         stabilize_migration_timestamps(&mut generated, dir);
 
-        assert!(has(&generated, "20260426220001", "create_company_table", ".up.sql"));
-        assert!(has(&generated, "20260426220001", "create_company_table", ".down.sql"));
-        assert!(!has(&generated, "20260426220007", "create_company_table", ".down.sql"));
+        assert!(has(
+            &generated,
+            "20260426220001",
+            "create_company_table",
+            ".up.sql"
+        ));
+        assert!(has(
+            &generated,
+            "20260426220001",
+            "create_company_table",
+            ".down.sql"
+        ));
+        assert!(!has(
+            &generated,
+            "20260426220007",
+            "create_company_table",
+            ".down.sql"
+        ));
     }
 
     #[test]
@@ -232,21 +277,46 @@ mod tests {
         let md = dir.join("migrations");
         std::fs::create_dir_all(&md).unwrap();
         // Hand-written, no marker:
-        std::fs::write(md.join("20240101120000_create_user_table.up.sql"), "-- hand\n").unwrap();
+        std::fs::write(
+            md.join("20240101120000_create_user_table.up.sql"),
+            "-- hand\n",
+        )
+        .unwrap();
         // A generator-authored migration establishes the max timestamp:
         write_authored(&md, "20260426220006", "add_audit_triggers", ".up.sql");
 
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(mig("20260426220003", "create_user_table", ".up.sql"), "-- gen\n".to_string());
-        generated.files.insert(mig("20260426220003", "create_user_table", ".down.sql"), "-- gen\n".to_string());
+        generated.files.insert(
+            mig("20260426220003", "create_user_table", ".up.sql"),
+            "-- gen\n".to_string(),
+        );
+        generated.files.insert(
+            mig("20260426220003", "create_user_table", ".down.sql"),
+            "-- gen\n".to_string(),
+        );
 
         stabilize_migration_timestamps(&mut generated, dir);
 
         // The generated create_user_table migration is dropped — no duplicate at
         // any timestamp (not the hand-written 20240101120000, not max+1 ...20007).
-        assert!(!has(&generated, "20260426220007", "create_user_table", ".up.sql"));
-        assert!(!has(&generated, "20260426220007", "create_user_table", ".down.sql"));
-        assert!(!has(&generated, "20240101120000", "create_user_table", ".up.sql"));
+        assert!(!has(
+            &generated,
+            "20260426220007",
+            "create_user_table",
+            ".up.sql"
+        ));
+        assert!(!has(
+            &generated,
+            "20260426220007",
+            "create_user_table",
+            ".down.sql"
+        ));
+        assert!(!has(
+            &generated,
+            "20240101120000",
+            "create_user_table",
+            ".up.sql"
+        ));
         assert!(generated.files.keys().all(|p| {
             !p.file_name()
                 .and_then(|n| n.to_str())
@@ -266,15 +336,36 @@ mod tests {
 
         // Generator produced a NEW entity at a colliding positional slot (003).
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(mig("20260426220003", "create_industry_table", ".up.sql"), "-- new\n".to_string());
-        generated.files.insert(mig("20260426220003", "create_industry_table", ".down.sql"), "-- new\n".to_string());
+        generated.files.insert(
+            mig("20260426220003", "create_industry_table", ".up.sql"),
+            "-- new\n".to_string(),
+        );
+        generated.files.insert(
+            mig("20260426220003", "create_industry_table", ".down.sql"),
+            "-- new\n".to_string(),
+        );
 
         stabilize_migration_timestamps(&mut generated, dir);
 
         // Must NOT be 003 (collision); must be max+1 = 007, pair unified.
-        assert!(has(&generated, "20260426220007", "create_industry_table", ".up.sql"));
-        assert!(has(&generated, "20260426220007", "create_industry_table", ".down.sql"));
-        assert!(!has(&generated, "20260426220003", "create_industry_table", ".up.sql"));
+        assert!(has(
+            &generated,
+            "20260426220007",
+            "create_industry_table",
+            ".up.sql"
+        ));
+        assert!(has(
+            &generated,
+            "20260426220007",
+            "create_industry_table",
+            ".down.sql"
+        ));
+        assert!(!has(
+            &generated,
+            "20260426220003",
+            "create_industry_table",
+            ".up.sql"
+        ));
     }
 
     #[test]
@@ -286,8 +377,14 @@ mod tests {
         write_authored(&md, "20260426220006", "add_audit_triggers", ".up.sql");
 
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(mig("20260426220003", "create_industry_table", ".up.sql"), "-- a\n".to_string());
-        generated.files.insert(mig("20260426220003", "create_company_industry_table", ".up.sql"), "-- b\n".to_string());
+        generated.files.insert(
+            mig("20260426220003", "create_industry_table", ".up.sql"),
+            "-- a\n".to_string(),
+        );
+        generated.files.insert(
+            mig("20260426220003", "create_company_industry_table", ".up.sql"),
+            "-- b\n".to_string(),
+        );
 
         stabilize_migration_timestamps(&mut generated, dir);
 
@@ -309,9 +406,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path(); // no migrations/ subdir
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(mig("20260426220001", "create_company_table", ".up.sql"), "x".to_string());
+        generated.files.insert(
+            mig("20260426220001", "create_company_table", ".up.sql"),
+            "x".to_string(),
+        );
         stabilize_migration_timestamps(&mut generated, dir);
-        assert!(has(&generated, "20260426220001", "create_company_table", ".up.sql"));
+        assert!(has(
+            &generated,
+            "20260426220001",
+            "create_company_table",
+            ".up.sql"
+        ));
     }
 
     #[test]
@@ -319,10 +424,20 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::create_dir_all(dir.join("migrations")).unwrap();
-        write_authored(&dir.join("migrations"), "20260426220006", "add_audit_triggers", ".up.sql");
+        write_authored(
+            &dir.join("migrations"),
+            "20260426220006",
+            "add_audit_triggers",
+            ".up.sql",
+        );
         let mut generated = GeneratedOutput::default();
-        generated.files.insert(PathBuf::from("src/domain/entity/company.rs"), "pub struct Company;\n".to_string());
+        generated.files.insert(
+            PathBuf::from("src/domain/entity/company.rs"),
+            "pub struct Company;\n".to_string(),
+        );
         stabilize_migration_timestamps(&mut generated, dir);
-        assert!(generated.files.contains_key(Path::new("src/domain/entity/company.rs")));
+        assert!(generated
+            .files
+            .contains_key(Path::new("src/domain/entity/company.rs")));
     }
 }

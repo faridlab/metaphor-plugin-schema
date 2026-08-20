@@ -5,12 +5,12 @@
 
 use std::fs;
 
+use super::type_mapping::TypeMapper;
+use super::DomainGenerationResult;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_camel_case};
-use super::type_mapping::TypeMapper;
-use super::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case};
 
 /// Generator for TypeScript entity types
 pub struct EntityGenerator {
@@ -21,7 +21,10 @@ pub struct EntityGenerator {
 impl EntityGenerator {
     /// Create a new entity generator
     pub fn new(config: Config, type_mapper: TypeMapper) -> Self {
-        Self { config, type_mapper }
+        Self {
+            config,
+            type_mapper,
+        }
     }
 
     /// Generate entity type file for a single entity
@@ -33,8 +36,11 @@ impl EntityGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let entity_dir = self.config.output_dir
-            .join(&self.config.module).join("domain")
+        let entity_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("domain")
             .join("entity");
 
         if !self.config.dry_run {
@@ -79,11 +85,18 @@ impl EntityGenerator {
                 _ => false,
             }
         }
-        entity.fields.iter().any(|f| references(&f.type_name, enum_name))
+        entity
+            .fields
+            .iter()
+            .any(|f| references(&f.type_name, enum_name))
     }
 
     /// Generate the entity TypeScript content
-    fn generate_entity_content(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_entity_content(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
         let entity_camel = to_camel_case(&entity.name);
 
@@ -100,7 +113,7 @@ impl EntityGenerator {
         // file (single source of truth). This file imports it and adds runtime
         // helpers (factory, type guard) plus the "with relations" view.
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Entity Helpers
  *
  * Generated from schema definition. The canonical `{entity_pascal}` type is
@@ -156,7 +169,10 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
         // Check for enum imports
         for field in &entity.fields {
             if let Some(enum_name) = Self::get_enum_name(&field.type_name, enums) {
-                imports.push(format!("import {{ {} }} from './{}';", enum_name, enum_name));
+                imports.push(format!(
+                    "import {{ {} }} from './{}';",
+                    enum_name, enum_name
+                ));
             }
         }
 
@@ -209,7 +225,10 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
     }
 
     /// Get enum name if field type is an enum
-    fn get_enum_name(field_type: &crate::webgen::ast::entity::FieldType, enums: &[EnumDefinition]) -> Option<String> {
+    fn get_enum_name(
+        field_type: &crate::webgen::ast::entity::FieldType,
+        enums: &[EnumDefinition],
+    ) -> Option<String> {
         use crate::webgen::ast::entity::FieldType;
         match field_type {
             // Only treat as a (locally generated) enum if it is in our enum set,
@@ -228,7 +247,11 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
     }
 
     /// Generate factory default values
-    fn generate_factory_defaults(&self, entity: &EntityDefinition, enums: &[EnumDefinition]) -> String {
+    fn generate_factory_defaults(
+        &self,
+        entity: &EntityDefinition,
+        enums: &[EnumDefinition],
+    ) -> String {
         let mut defaults = Vec::new();
 
         for field in &entity.fields {
@@ -294,9 +317,16 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
         }
 
         match field_type {
-            FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone
-            | FieldType::Url | FieldType::Uuid | FieldType::Ip | FieldType::Date
-            | FieldType::Time | FieldType::DateTime => {
+            FieldType::String
+            | FieldType::Text
+            | FieldType::Email
+            | FieldType::Phone
+            | FieldType::Url
+            | FieldType::Uuid
+            | FieldType::Ip
+            | FieldType::Date
+            | FieldType::Time
+            | FieldType::DateTime => {
                 if value.starts_with('"') || value.starts_with('\'') {
                     value.to_string()
                 } else {
@@ -311,22 +341,38 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
                 }
             }
             FieldType::Int | FieldType::Float | FieldType::Decimal => {
-                if value.parse::<f64>().is_ok() { value.to_string() } else { "0".to_string() }
+                if value.parse::<f64>().is_ok() {
+                    value.to_string()
+                } else {
+                    "0".to_string()
+                }
             }
             FieldType::Json => {
                 // The TS type for Json is `Record<string, unknown>`; an array
                 // default would not be assignable, so coerce to an object.
-                if value.starts_with('{') { value.to_string() } else { "{}".to_string() }
+                if value.starts_with('{') {
+                    value.to_string()
+                } else {
+                    "{}".to_string()
+                }
             }
             FieldType::Array(_) => {
-                if value.starts_with('[') { value.to_string() } else { "[]".to_string() }
+                if value.starts_with('[') {
+                    value.to_string()
+                } else {
+                    "[]".to_string()
+                }
             }
             FieldType::Enum(name) => format!("{}.{}", name, value),
             FieldType::Custom(name) if enums.iter().any(|e| &e.name == name) => {
                 format!("{}.{}", name, value)
             }
             FieldType::Custom(name) if TypeMapper::is_numeric_scalar(name) => {
-                if value.parse::<f64>().is_ok() { value.to_string() } else { "0".to_string() }
+                if value.parse::<f64>().is_ok() {
+                    value.to_string()
+                } else {
+                    "0".to_string()
+                }
             }
             FieldType::Custom(_) => "{}".to_string(),
             FieldType::Optional(inner) => self.format_default_value(value, inner, enums),
@@ -362,7 +408,7 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
         }
 
         format!(
-r#"
+            r#"
 
 /**
  * {entity_pascal} with loaded relations
@@ -378,20 +424,26 @@ export interface {entity_pascal}WithRelations extends {entity_pascal} {{
 
     /// Generate enum TypeScript content
     fn generate_enum_content(&self, enum_def: &EnumDefinition) -> String {
-        let variants: Vec<String> = enum_def.variants.iter()
+        let variants: Vec<String> = enum_def
+            .variants
+            .iter()
             .map(|v| format!("  {} = '{}',", v.name, v.name))
             .collect();
 
-        let variant_union: Vec<String> = enum_def.variants.iter()
+        let variant_union: Vec<String> = enum_def
+            .variants
+            .iter()
             .map(|v| format!("'{}'", v.name))
             .collect();
 
-        let variant_array: Vec<String> = enum_def.variants.iter()
+        let variant_array: Vec<String> = enum_def
+            .variants
+            .iter()
             .map(|v| format!("  '{}',", v.name))
             .collect();
 
         format!(
-r#"/**
+            r#"/**
  * {name} Enum
  *
  * Generated from schema definition.
@@ -437,7 +489,9 @@ export function get{name}Label(value: {name}): string {{
             variants = variants.join("\n"),
             union = variant_union.join(" | "),
             array = variant_array.join("\n"),
-            labels = enum_def.variants.iter()
+            labels = enum_def
+                .variants
+                .iter()
                 .map(|v| {
                     let label = v.description.as_ref().unwrap_or(&v.name);
                     format!("    [{}.{}]: '{}',", enum_def.name, v.name, label)

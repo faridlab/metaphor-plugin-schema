@@ -1,13 +1,15 @@
 //! Webapp code generator
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use crate::webgen::config::{Config, Target};
 use crate::webgen::error::{Error, Result};
-use crate::webgen::parser::{ProtoParser, WorkflowParser, HookParser, ModelParser, to_snake_case, to_pascal_case};
-use crate::webgen::templates::{
-    HookTemplate, SchemaTemplate, FormTemplate, PageTemplate, TemplateReplacer
+use crate::webgen::parser::{
+    to_pascal_case, to_snake_case, HookParser, ModelParser, ProtoParser, WorkflowParser,
 };
+use crate::webgen::templates::{
+    FormTemplate, HookTemplate, PageTemplate, SchemaTemplate, TemplateReplacer,
+};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Webapp code generator
 pub struct Generator {
@@ -38,10 +40,7 @@ impl Generator {
             Vec::new() // Not needed for enhanced targets
         } else {
             let proto_dir = self.config.proto_dir();
-            ProtoParser::find_entities(
-                &proto_dir,
-                self.config.entity_filter.as_deref(),
-            )?
+            ProtoParser::find_entities(&proto_dir, self.config.entity_filter.as_deref())?
         };
 
         if !only_enhanced && entities.is_empty() {
@@ -105,8 +104,14 @@ impl Generator {
     }
 
     /// Generate React Query hooks
-    fn generate_hooks(&self, entities: &[crate::webgen::parser::ProtoEntity], result: &mut GenerationResult) -> Result<()> {
-        let hooks_dir = self.config.output_dir
+    fn generate_hooks(
+        &self,
+        entities: &[crate::webgen::parser::ProtoEntity],
+        result: &mut GenerationResult,
+    ) -> Result<()> {
+        let hooks_dir = self
+            .config
+            .output_dir
             .join("application/hooks")
             .join(&self.config.module);
 
@@ -156,8 +161,14 @@ impl Generator {
     }
 
     /// Generate Zod schemas
-    fn generate_schemas(&self, entities: &[crate::webgen::parser::ProtoEntity], result: &mut GenerationResult) -> Result<()> {
-        let validators_dir = self.config.output_dir
+    fn generate_schemas(
+        &self,
+        entities: &[crate::webgen::parser::ProtoEntity],
+        result: &mut GenerationResult,
+    ) -> Result<()> {
+        let validators_dir = self
+            .config
+            .output_dir
             .join("application/validators")
             .join(&self.config.module);
 
@@ -194,8 +205,14 @@ impl Generator {
     }
 
     /// Generate form components
-    fn generate_forms(&self, entities: &[crate::webgen::parser::ProtoEntity], result: &mut GenerationResult) -> Result<()> {
-        let forms_dir = self.config.output_dir
+    fn generate_forms(
+        &self,
+        entities: &[crate::webgen::parser::ProtoEntity],
+        result: &mut GenerationResult,
+    ) -> Result<()> {
+        let forms_dir = self
+            .config
+            .output_dir
             .join("presentation/components/forms")
             .join(&self.config.module);
 
@@ -245,7 +262,11 @@ impl Generator {
     }
 
     /// Generate CRUD pages
-    fn generate_pages(&self, entities: &[crate::webgen::parser::ProtoEntity], result: &mut GenerationResult) -> Result<()> {
+    fn generate_pages(
+        &self,
+        entities: &[crate::webgen::parser::ProtoEntity],
+        result: &mut GenerationResult,
+    ) -> Result<()> {
         let domain_import = self.config.domain_import_path();
 
         for entity in entities {
@@ -258,7 +279,9 @@ impl Generator {
                 domain_import.clone(),
             );
 
-            let pages_dir = self.config.output_dir
+            let pages_dir = self
+                .config
+                .output_dir
                 .join("presentation/pages")
                 .join(&self.config.module)
                 .join(&entity_snake);
@@ -280,7 +303,8 @@ impl Generator {
 
                 let content = replacer.replace(template);
                 let page_pascal = to_pascal_case(page);
-                let output_path = pages_dir.join(format!("{}{}Page.tsx", entity_pascal, page_pascal));
+                let output_path =
+                    pages_dir.join(format!("{}{}Page.tsx", entity_pascal, page_pascal));
 
                 if self.config.dry_run {
                     result.dry_run_files.push(output_path.clone());
@@ -297,8 +321,7 @@ impl Generator {
     /// Write file to disk
     fn write_file(&self, path: &PathBuf, content: &str, create_index: bool) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| Error::write_error(path.clone(), e))?;
+            fs::create_dir_all(parent).map_err(|e| Error::write_error(path.clone(), e))?;
         }
 
         // Check if file exists and force is not set
@@ -348,7 +371,8 @@ impl Generator {
     /// List entities that would be generated (without generating)
     pub fn list_entities(&self) -> Result<Vec<String>> {
         let proto_dir = self.config.proto_dir();
-        let entities = ProtoParser::find_entities(&proto_dir, self.config.entity_filter.as_deref())?;
+        let entities =
+            ProtoParser::find_entities(&proto_dir, self.config.entity_filter.as_deref())?;
 
         Ok(entities.into_iter().map(|e| e.name).collect())
     }
@@ -371,7 +395,9 @@ impl Generator {
             return Ok(());
         }
 
-        let output_dir = self.config.output_dir
+        let output_dir = self
+            .config
+            .output_dir
             .join("presentation/workflows")
             .join(&self.config.module);
 
@@ -385,8 +411,8 @@ impl Generator {
                 Ok(workflow) => {
                     // Generate workflow tracker component
                     let tracker_content = WorkflowTemplates::generate_workflow_tracker(&workflow);
-                    let tracker_path = output_dir.join(format!("{}Tracker.tsx",
-                        to_pascal_case(&workflow.name)));
+                    let tracker_path =
+                        output_dir.join(format!("{}Tracker.tsx", to_pascal_case(&workflow.name)));
 
                     if self.config.dry_run {
                         result.dry_run_files.push(tracker_path);
@@ -397,8 +423,8 @@ impl Generator {
 
                     // Generate workflow API hooks
                     let api_content = WorkflowTemplates::generate_workflow_api(&workflow);
-                    let api_path = output_dir.join(format!("{}Api.ts",
-                        to_pascal_case(&workflow.name)));
+                    let api_path =
+                        output_dir.join(format!("{}Api.ts", to_pascal_case(&workflow.name)));
 
                     if self.config.dry_run {
                         result.dry_run_files.push(api_path);
@@ -408,8 +434,11 @@ impl Generator {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse workflow {}: {}",
-                        workflow_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse workflow {}: {}",
+                        workflow_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -435,7 +464,9 @@ impl Generator {
             return Ok(());
         }
 
-        let output_dir = self.config.output_dir
+        let output_dir = self
+            .config
+            .output_dir
             .join("presentation/state-machines")
             .join(&self.config.module);
 
@@ -450,9 +481,12 @@ impl Generator {
                     // Only generate state machine components if the hook has a state machine
                     if hook_schema.state_machine.is_some() {
                         // Generate state badge component
-                        let badge_content = StateMachineTemplates::generate_state_badge(&hook_schema);
-                        let badge_path = output_dir.join(format!("{}StateBadge.tsx",
-                            to_pascal_case(&hook_schema.model)));
+                        let badge_content =
+                            StateMachineTemplates::generate_state_badge(&hook_schema);
+                        let badge_path = output_dir.join(format!(
+                            "{}StateBadge.tsx",
+                            to_pascal_case(&hook_schema.model)
+                        ));
 
                         if self.config.dry_run {
                             result.dry_run_files.push(badge_path.clone());
@@ -462,9 +496,12 @@ impl Generator {
                         }
 
                         // Generate transition buttons
-                        let transitions_content = StateMachineTemplates::generate_transition_buttons(&hook_schema);
-                        let transitions_path = output_dir.join(format!("{}TransitionButtons.tsx",
-                            to_pascal_case(&hook_schema.model)));
+                        let transitions_content =
+                            StateMachineTemplates::generate_transition_buttons(&hook_schema);
+                        let transitions_path = output_dir.join(format!(
+                            "{}TransitionButtons.tsx",
+                            to_pascal_case(&hook_schema.model)
+                        ));
 
                         if self.config.dry_run {
                             result.dry_run_files.push(transitions_path.clone());
@@ -474,9 +511,12 @@ impl Generator {
                         }
 
                         // Generate state machine hook
-                        let hook_content = StateMachineTemplates::generate_state_machine_hook(&hook_schema);
-                        let hook_path = output_dir.join(format!("use{}StateTransitions.ts",
-                            to_pascal_case(&hook_schema.model)));
+                        let hook_content =
+                            StateMachineTemplates::generate_state_machine_hook(&hook_schema);
+                        let hook_path = output_dir.join(format!(
+                            "use{}StateTransitions.ts",
+                            to_pascal_case(&hook_schema.model)
+                        ));
 
                         if self.config.dry_run {
                             result.dry_run_files.push(hook_path.clone());
@@ -486,9 +526,12 @@ impl Generator {
                         }
 
                         // Generate state history component
-                        let history_content = StateMachineTemplates::generate_state_history(&hook_schema);
-                        let history_path = output_dir.join(format!("{}StateHistory.tsx",
-                            to_pascal_case(&hook_schema.model)));
+                        let history_content =
+                            StateMachineTemplates::generate_state_history(&hook_schema);
+                        let history_path = output_dir.join(format!(
+                            "{}StateHistory.tsx",
+                            to_pascal_case(&hook_schema.model)
+                        ));
 
                         if self.config.dry_run {
                             result.dry_run_files.push(history_path.clone());
@@ -499,8 +542,11 @@ impl Generator {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse hook {}: {}",
-                        hook_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse hook {}: {}",
+                        hook_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -509,10 +555,16 @@ impl Generator {
     }
 
     /// Generate routing configuration from entity definitions
-    fn generate_routing(&self, entities: &[crate::webgen::parser::ProtoEntity], result: &mut GenerationResult) -> Result<()> {
+    fn generate_routing(
+        &self,
+        entities: &[crate::webgen::parser::ProtoEntity],
+        result: &mut GenerationResult,
+    ) -> Result<()> {
         use crate::webgen::templates::routing::RoutingTemplates;
 
-        let output_dir = self.config.output_dir
+        let output_dir = self
+            .config
+            .output_dir
             .join("shared/routing")
             .join(&self.config.module);
 
@@ -560,7 +612,8 @@ impl Generator {
         }
 
         // Generate route definitions
-        let routes_content = RoutingTemplates::generate_route_definitions(&entity_definitions, &self.config.module);
+        let routes_content =
+            RoutingTemplates::generate_route_definitions(&entity_definitions, &self.config.module);
         let routes_path = output_dir.join("routes.ts");
 
         if self.config.dry_run {
@@ -571,7 +624,8 @@ impl Generator {
         }
 
         // Generate route components
-        let components_content = RoutingTemplates::generate_route_components(&entity_definitions, &self.config.module);
+        let components_content =
+            RoutingTemplates::generate_route_components(&entity_definitions, &self.config.module);
         let components_path = output_dir.join("route-components.ts");
 
         if self.config.dry_run {
@@ -582,7 +636,8 @@ impl Generator {
         }
 
         // Generate route configuration
-        let config_content = RoutingTemplates::generate_route_config(&entity_definitions, &self.config.module);
+        let config_content =
+            RoutingTemplates::generate_route_config(&entity_definitions, &self.config.module);
         let config_path = output_dir.join("route-config.tsx");
 
         if self.config.dry_run {
@@ -593,7 +648,8 @@ impl Generator {
         }
 
         // Generate navigation menu
-        let nav_content = RoutingTemplates::generate_navigation_menu(&entity_definitions, &self.config.module);
+        let nav_content =
+            RoutingTemplates::generate_navigation_menu(&entity_definitions, &self.config.module);
         let nav_path = output_dir.join("navigation.tsx");
 
         if self.config.dry_run {
@@ -634,7 +690,11 @@ impl Generator {
                     all_enums.extend(schema.enums);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse model {}: {}",
+                        model_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -649,7 +709,9 @@ impl Generator {
             let entity_snake = to_snake_case(&entity.name);
 
             // Generate form components
-            let forms_dir = self.config.output_dir
+            let forms_dir = self
+                .config
+                .output_dir
                 .join("presentation/components/forms")
                 .join(&self.config.module);
 
@@ -669,7 +731,8 @@ impl Generator {
             }
 
             // Generate table columns
-            let table_columns = TableTemplates::generate_table_columns(entity, &self.config.module, &entity_snake);
+            let table_columns =
+                TableTemplates::generate_table_columns(entity, &self.config.module, &entity_snake);
             let table_path = forms_dir.join(format!("{}TableColumns.tsx", entity_pascal));
 
             if self.config.dry_run {
@@ -687,14 +750,16 @@ impl Generator {
     fn find_yaml_files(&self, dir: &PathBuf, suffix: &str) -> Result<Vec<PathBuf>> {
         let mut found = Vec::new();
 
-        let entries = fs::read_dir(dir)
-            .map_err(|e| Error::Parse(format!("Failed to read directory {}: {}", dir.display(), e)))?;
+        let entries = fs::read_dir(dir).map_err(|e| {
+            Error::Parse(format!("Failed to read directory {}: {}", dir.display(), e))
+        })?;
 
         for entry in entries.flatten() {
             let path = entry.path();
-            let is_yaml = path.extension().and_then(|s| s.to_str()) == Some("yaml") ||
-                          path.extension().and_then(|s| s.to_str()) == Some("yml");
-            let has_suffix = path.file_stem()
+            let is_yaml = path.extension().and_then(|s| s.to_str()) == Some("yaml")
+                || path.extension().and_then(|s| s.to_str()) == Some("yml");
+            let has_suffix = path
+                .file_stem()
                 .and_then(|s| s.to_str())
                 .map(|s| s.ends_with(suffix))
                 .unwrap_or(false);
@@ -709,8 +774,8 @@ impl Generator {
 
     /// Generate DDD domain layer from YAML model schemas
     fn generate_domain_layer(&self, result: &mut GenerationResult) -> Result<()> {
-        use crate::webgen::generators::DomainGenerator;
         use crate::webgen::ast::HookSchema;
+        use crate::webgen::generators::DomainGenerator;
 
         let schema_dir = self.config.schema_dir();
         let models_dir = schema_dir.join("models");
@@ -737,7 +802,11 @@ impl Generator {
                     all_enums.extend(schema.enums);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse model {}: {}",
+                        model_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -754,7 +823,11 @@ impl Generator {
                 match HookParser::parse_file(hook_file) {
                     Ok(hook) => all_hooks.push(hook),
                     Err(e) => {
-                        eprintln!("Warning: Failed to parse hook {}: {}", hook_file.display(), e);
+                        eprintln!(
+                            "Warning: Failed to parse hook {}: {}",
+                            hook_file.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -782,8 +855,8 @@ impl Generator {
     /// A slim subset of the `domain` target: entity types, Zod schemas, enums,
     /// DTOs, and repository ports only — no React/TanStack/MUI coupling.
     fn generate_contracts_layer(&self, result: &mut GenerationResult) -> Result<()> {
-        use crate::webgen::generators::ContractsGenerator;
         use crate::webgen::ast::HookSchema;
+        use crate::webgen::generators::ContractsGenerator;
 
         let schema_dir = self.config.schema_dir();
         let models_dir = schema_dir.join("models");
@@ -808,7 +881,11 @@ impl Generator {
                     all_enums.extend(schema.enums);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse model {}: {}",
+                        model_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -825,21 +902,28 @@ impl Generator {
                 match HookParser::parse_file(hook_file) {
                     Ok(hook) => all_hooks.push(hook),
                     Err(e) => {
-                        eprintln!("Warning: Failed to parse hook {}: {}", hook_file.display(), e);
+                        eprintln!(
+                            "Warning: Failed to parse hook {}: {}",
+                            hook_file.display(),
+                            e
+                        );
                     }
                 }
             }
         }
 
         let contracts_generator = ContractsGenerator::new(self.config.clone());
-        let contracts_result = contracts_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+        let contracts_result =
+            contracts_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
 
         result.entities_found = contracts_result.entity_count;
 
         if self.config.dry_run {
             result.dry_run_files.extend(contracts_result.dry_run_files);
         } else {
-            result.files_generated.extend(contracts_result.files_generated);
+            result
+                .files_generated
+                .extend(contracts_result.files_generated);
         }
 
         Ok(())
@@ -847,8 +931,8 @@ impl Generator {
 
     /// Generate presentation layer from YAML model schemas
     fn generate_presentation_layer(&self, result: &mut GenerationResult) -> Result<()> {
-        use crate::webgen::generators::PresentationGenerator;
         use crate::webgen::ast::HookSchema;
+        use crate::webgen::generators::PresentationGenerator;
 
         let schema_dir = self.config.schema_dir();
         let models_dir = schema_dir.join("models");
@@ -873,7 +957,11 @@ impl Generator {
                     all_enums.extend(schema.enums);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse model {}: {}",
+                        model_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -890,19 +978,28 @@ impl Generator {
                 match HookParser::parse_file(hook_file) {
                     Ok(hook) => all_hooks.push(hook),
                     Err(e) => {
-                        eprintln!("Warning: Failed to parse hook {}: {}", hook_file.display(), e);
+                        eprintln!(
+                            "Warning: Failed to parse hook {}: {}",
+                            hook_file.display(),
+                            e
+                        );
                     }
                 }
             }
         }
 
         let presentation_generator = PresentationGenerator::new(self.config.clone());
-        let presentation_result = presentation_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+        let presentation_result =
+            presentation_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
 
         if self.config.dry_run {
-            result.dry_run_files.extend(presentation_result.dry_run_files);
+            result
+                .dry_run_files
+                .extend(presentation_result.dry_run_files);
         } else {
-            result.files_generated.extend(presentation_result.files_generated);
+            result
+                .files_generated
+                .extend(presentation_result.files_generated);
         }
 
         Ok(())
@@ -910,8 +1007,8 @@ impl Generator {
 
     /// Generate application layer from YAML model schemas
     fn generate_application_layer(&self, result: &mut GenerationResult) -> Result<()> {
-        use crate::webgen::generators::ApplicationGenerator;
         use crate::webgen::ast::HookSchema;
+        use crate::webgen::generators::ApplicationGenerator;
 
         let schema_dir = self.config.schema_dir();
         let models_dir = schema_dir.join("models");
@@ -936,7 +1033,11 @@ impl Generator {
                     all_enums.extend(schema.enums);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse model {}: {}",
+                        model_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -953,19 +1054,28 @@ impl Generator {
                 match HookParser::parse_file(hook_file) {
                     Ok(hook) => all_hooks.push(hook),
                     Err(e) => {
-                        eprintln!("Warning: Failed to parse hook {}: {}", hook_file.display(), e);
+                        eprintln!(
+                            "Warning: Failed to parse hook {}: {}",
+                            hook_file.display(),
+                            e
+                        );
                     }
                 }
             }
         }
 
         let application_generator = ApplicationGenerator::new(self.config.clone());
-        let application_result = application_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+        let application_result =
+            application_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
 
         if self.config.dry_run {
-            result.dry_run_files.extend(application_result.dry_run_files);
+            result
+                .dry_run_files
+                .extend(application_result.dry_run_files);
         } else {
-            result.files_generated.extend(application_result.files_generated);
+            result
+                .files_generated
+                .extend(application_result.files_generated);
         }
 
         Ok(())
@@ -997,7 +1107,11 @@ impl Generator {
                     all_enums.extend(schema.enums);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse model {}: {}", model_file.display(), e);
+                    eprintln!(
+                        "Warning: Failed to parse model {}: {}",
+                        model_file.display(),
+                        e
+                    );
                 }
             }
         }
@@ -1007,12 +1121,17 @@ impl Generator {
         }
 
         let infrastructure_generator = InfrastructureGenerator::new(self.config.clone());
-        let infrastructure_result = infrastructure_generator.generate_all(&all_entities, &all_enums)?;
+        let infrastructure_result =
+            infrastructure_generator.generate_all(&all_entities, &all_enums)?;
 
         if self.config.dry_run {
-            result.dry_run_files.extend(infrastructure_result.dry_run_files);
+            result
+                .dry_run_files
+                .extend(infrastructure_result.dry_run_files);
         } else {
-            result.files_generated.extend(infrastructure_result.files_generated);
+            result
+                .files_generated
+                .extend(infrastructure_result.files_generated);
         }
 
         Ok(())

@@ -8,52 +8,33 @@
 //! - Presentation: Forms, tables, pages, detail views
 //! - Infrastructure: API clients, repository implementations
 
-pub mod domain;
-pub mod contracts;
-pub mod shared_runtime;
 pub mod application;
-pub mod presentation;
+pub mod contracts;
+pub mod domain;
 pub mod infrastructure;
+pub mod presentation;
+pub mod shared_runtime;
 
 // Domain layer re-exports
 pub use domain::{
-    DomainGenerator,
-    DomainGenerationResult,
-    EntityGenerator,
-    EntitySchemaGenerator,
-    ValueObjectGenerator,
-    RepositoryGenerator,
-    CommandGenerator,
-    QueryGenerator,
-    DomainServiceGenerator,
-    DomainEventGenerator,
-    SpecificationGenerator,
-    TypeMapper,
+    CommandGenerator, DomainEventGenerator, DomainGenerationResult, DomainGenerator,
+    DomainServiceGenerator, EntityGenerator, EntitySchemaGenerator, QueryGenerator,
+    RepositoryGenerator, SpecificationGenerator, TypeMapper, ValueObjectGenerator,
 };
 
 // Contracts layer re-export (pure, framework-free genotype)
 pub use contracts::ContractsGenerator;
 
 // Application layer re-exports
-pub use application::{
-    ApplicationGenerator,
-    UseCaseGenerator,
-    AppServiceGenerator,
-};
+pub use application::{AppServiceGenerator, ApplicationGenerator, UseCaseGenerator};
 
 // Presentation layer re-exports
 pub use presentation::{
-    PresentationGenerator,
-    FormFieldsGenerator,
+    CrudPagesGenerator, DetailViewGenerator, FormFieldsGenerator, PresentationGenerator,
     TableColumnsGenerator,
-    CrudPagesGenerator,
-    DetailViewGenerator,
 };
 
 // Infrastructure layer re-exports
 pub use infrastructure::{
-    InfrastructureGenerator,
-    GrpcClientGenerator,
-    ApiClientGenerator,
-    RepositoryImplGenerator,
+    ApiClientGenerator, GrpcClientGenerator, InfrastructureGenerator, RepositoryImplGenerator,
 };

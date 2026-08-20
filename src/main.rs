@@ -1,6 +1,6 @@
 use anyhow::Result;
-use metaphor_schema::commands::{kotlin, schema, webapp, Cli, Commands};
 use clap::Parser;
+use metaphor_schema::commands::{kotlin, schema, webapp, Cli, Commands};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -46,8 +46,17 @@ fn main() -> Result<()> {
         // arg is optional here too; the inner SchemaAction::Generate dispatch
         // applies the same auto-detect-or-error logic.
         Commands::GenerateRust {
-            module, target, output, dry_run, force, changed, base,
-            models, hooks, workflows, lenient,
+            module,
+            target,
+            output,
+            dry_run,
+            force,
+            changed,
+            base,
+            models,
+            hooks,
+            workflows,
+            lenient,
         } => {
             let action = schema::SchemaAction::Generate {
                 module,
@@ -69,7 +78,15 @@ fn main() -> Result<()> {
 
         // Shortcut: generate:kotlin → same as `kotlin generate`
         Commands::GenerateKotlin {
-            module, module_path, output, output_path, package, target, skip_existing, no_deps, verbose,
+            module,
+            module_path,
+            output,
+            output_path,
+            package,
+            target,
+            skip_existing,
+            no_deps,
+            verbose,
         } => {
             let action = kotlin::KotlinAction::Generate {
                 module,
@@ -87,11 +104,26 @@ fn main() -> Result<()> {
 
         // Shortcut: generate:webapp → delegates to metaphor-webgen binary
         Commands::GenerateWebapp {
-            module, target, entity, output, schema_dir, import_alias, with_grpc, dry_run, force,
+            module,
+            target,
+            entity,
+            output,
+            schema_dir,
+            import_alias,
+            with_grpc,
+            dry_run,
+            force,
         } => {
             webapp::run(
-                module.as_deref(), &target, entity.as_deref(), output.as_ref(), schema_dir.as_ref(),
-                import_alias.as_deref(), with_grpc, dry_run, force,
+                module.as_deref(),
+                &target,
+                entity.as_deref(),
+                output.as_ref(),
+                schema_dir.as_ref(),
+                import_alias.as_deref(),
+                with_grpc,
+                dry_run,
+                force,
             )?;
         }
     }

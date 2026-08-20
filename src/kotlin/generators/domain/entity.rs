@@ -1,11 +1,11 @@
 //! Entity (data class) generator
 
+use crate::ast::model::AttributeValue;
+use crate::ast::{Field, Model, ModuleSchema};
 use crate::kotlin::error::{MobileGenError, Result};
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::{Field, Model, ModuleSchema};
-use crate::ast::model::AttributeValue;
 use std::path::{Path, PathBuf};
 
 /// Context data for entity template rendering
@@ -75,7 +75,9 @@ impl EntityData {
             .collect::<Result<Vec<_>>>()?;
 
         // Get primary key field name (Kotlin property name)
-        let primary_key = model.primary_key().map(|f| generator.type_mapper.to_kotlin_property_name(&f.name));
+        let primary_key = model
+            .primary_key()
+            .map(|f| generator.type_mapper.to_kotlin_property_name(&f.name));
 
         // Collect imports needed
         let mut imports: Vec<String> = vec![];
@@ -90,16 +92,25 @@ impl EntityData {
             let base_type = field.kotlin_type.trim_end_matches('?');
 
             if base_type == "Instant" || base_type == "Instant?" {
-                if !imports.iter().any(|i| i.contains("kotlinx.datetime.Instant")) {
+                if !imports
+                    .iter()
+                    .any(|i| i.contains("kotlinx.datetime.Instant"))
+                {
                     imports.push("kotlinx.datetime.Instant".to_string());
                 }
             } else if base_type == "LocalDate" || base_type == "LocalDate?" {
-                if !imports.iter().any(|i| i.contains("kotlinx.datetime.LocalDate")) {
+                if !imports
+                    .iter()
+                    .any(|i| i.contains("kotlinx.datetime.LocalDate"))
+                {
                     imports.push("kotlinx.datetime.LocalDate".to_string());
                 }
             } else if base_type == "LocalTime" || base_type == "LocalTime?" {
                 #[allow(clippy::collapsible_if)]
-                if !imports.iter().any(|i| i.contains("kotlinx.datetime.LocalTime")) {
+                if !imports
+                    .iter()
+                    .any(|i| i.contains("kotlinx.datetime.LocalTime"))
+                {
                     imports.push("kotlinx.datetime.LocalTime".to_string());
                 }
             }
@@ -108,7 +119,8 @@ impl EntityData {
             // Custom enums are generated in the enums subdirectory of the same module
             if Self::is_custom_enum_type(&field.kotlin_type) {
                 // Get the base type name (strip nullable and generic parameters)
-                let type_name = field.kotlin_type
+                let type_name = field
+                    .kotlin_type
                     .trim_end_matches('?')
                     .split('<')
                     .next()
@@ -123,7 +135,10 @@ impl EntityData {
                         .strip_prefix(&format!("{}.", base_package))
                         .and_then(|rest| rest.split('.').next())
                         .unwrap_or("common");
-                    let enum_import = format!("{}.{}.domain.enums.{}", base_package, module_name, type_name);
+                    let enum_import = format!(
+                        "{}.{}.domain.enums.{}",
+                        base_package, module_name, type_name
+                    );
                     if !imports.iter().any(|i| i.ends_with(type_name)) {
                         imports.push(enum_import);
                     }
@@ -138,7 +153,9 @@ impl EntityData {
         // declaration (Conflicting declarations / overload-resolution ambiguity).
         let has_is_deleted_field = fields.iter().any(|f| f.original_name == "is_deleted");
         // Check if any field uses Map<String, Any?>
-        let has_map_any = fields.iter().any(|f| f.kotlin_type.contains("Map<String, Any?>"));
+        let has_map_any = fields
+            .iter()
+            .any(|f| f.kotlin_type.contains("Map<String, Any?>"));
 
         Ok(Self {
             base_package: base_package.to_string(),
@@ -174,7 +191,11 @@ impl EntityData {
     /// Check if a type name is a custom enum type
     /// Custom enums start with uppercase and aren't built-in types
     fn is_custom_enum_type(kotlin_type: &str) -> bool {
-        let base_type = kotlin_type.trim_end_matches('?').split('<').next().unwrap_or(kotlin_type);
+        let base_type = kotlin_type
+            .trim_end_matches('?')
+            .split('<')
+            .next()
+            .unwrap_or(kotlin_type);
 
         // Must start with uppercase letter
         let first_char = base_type.chars().next();
@@ -188,25 +209,44 @@ impl EntityData {
     fn is_builtin_type(type_name: &str) -> bool {
         matches!(
             type_name,
-            "String" | "Int" | "Long" | "Double" | "Float" |
-            "Boolean" | "ByteArray" | "Unit" | "Any" |
-            "List" | "Map" | "Set" | "Collection" |
-            "Instant" | "LocalDate" | "LocalTime" | "Duration" |
-            "UUID" | "Pair" | "Triple" | "Array" |
-            "CharSequence" | "Number" | "Comparable" |
-            "Enum" | "Throwable" | "Nothing" |
-            "JsonElement" | "JsonObject" | "JsonArray" | "JsonPrimitive"
+            "String"
+                | "Int"
+                | "Long"
+                | "Double"
+                | "Float"
+                | "Boolean"
+                | "ByteArray"
+                | "Unit"
+                | "Any"
+                | "List"
+                | "Map"
+                | "Set"
+                | "Collection"
+                | "Instant"
+                | "LocalDate"
+                | "LocalTime"
+                | "Duration"
+                | "UUID"
+                | "Pair"
+                | "Triple"
+                | "Array"
+                | "CharSequence"
+                | "Number"
+                | "Comparable"
+                | "Enum"
+                | "Throwable"
+                | "Nothing"
+                | "JsonElement"
+                | "JsonObject"
+                | "JsonArray"
+                | "JsonPrimitive"
         )
     }
 
     /// Get the relative file path for this entity
     /// Outputs to: domain/{module}/entity/{Entity}.kt
     pub fn relative_path(&self, module_name: &str) -> String {
-        format!(
-            "{}/domain/entity/{}.kt",
-            module_name,
-            self.name
-        )
+        format!("{}/domain/entity/{}.kt", module_name, self.name)
     }
 
     /// Get the file path for this entity
@@ -281,7 +321,8 @@ pub fn generate_entities(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Entities) {
+        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Entities)
+        {
             continue;
         }
         match generate_entity(generator, model, &schema.name, output_dir) {
@@ -311,7 +352,8 @@ fn generate_entity(
     let module_lower = module_name.to_lowercase();
     let base_package = &generator.package_name;
     let package_name = format!("{}.{}.domain.entity", base_package, module_lower);
-    let entity_data = EntityData::from_model_with_base(generator, model, &package_name, base_package)?;
+    let entity_data =
+        EntityData::from_model_with_base(generator, model, &package_name, base_package)?;
 
     // Render the template
     let content = generator
@@ -321,7 +363,13 @@ fn generate_entity(
 
     // Write file using helper - use base package from generator
     let relative_path = entity_data.relative_path(module_name);
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }

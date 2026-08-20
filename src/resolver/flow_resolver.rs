@@ -8,12 +8,12 @@
 //! - Unreachable step detection
 //! - Terminal step presence
 
+use super::ResolveError;
 use crate::ast::workflow::{
-    Workflow, Step, StepType, CompensationStep, CompensationType,
-    ParallelStep, LoopStep, ConditionStep, TransactionGroupStep,
+    CompensationStep, CompensationType, ConditionStep, LoopStep, ParallelStep, Step, StepType,
+    TransactionGroupStep, Workflow,
 };
 use crate::ast::ModuleSchema;
-use super::ResolveError;
 use std::collections::HashSet;
 
 /// Workflow resolver for validating workflow schemas
@@ -52,7 +52,10 @@ impl<'a> FlowResolver<'a> {
         for step in &workflow.steps {
             if !seen_names.insert(step.name.clone()) {
                 errors.push(ResolveError::ValidationError {
-                    message: format!("Duplicate step name '{}' in workflow '{}'", step.name, workflow.name),
+                    message: format!(
+                        "Duplicate step name '{}' in workflow '{}'",
+                        step.name, workflow.name
+                    ),
                 });
             }
         }
@@ -212,7 +215,11 @@ impl<'a> FlowResolver<'a> {
             }
             StepType::Subprocess(subprocess) => {
                 // Validate that referenced workflow exists
-                let workflow_exists = self.schema.workflows.iter().any(|w| w.name == subprocess.workflow);
+                let workflow_exists = self
+                    .schema
+                    .workflows
+                    .iter()
+                    .any(|w| w.name == subprocess.workflow);
                 if !workflow_exists && !subprocess.workflow.is_empty() {
                     // Note: This might be a cross-module reference, so we just warn
                     // In a full implementation, we'd check external imports
@@ -220,7 +227,11 @@ impl<'a> FlowResolver<'a> {
             }
             StepType::Transition(transition) => {
                 // Validate that referenced entity exists
-                let entity_exists = self.schema.models.iter().any(|m| m.name == transition.entity);
+                let entity_exists = self
+                    .schema
+                    .models
+                    .iter()
+                    .any(|m| m.name == transition.entity);
                 if !entity_exists && !transition.entity.is_empty() {
                     errors.push(ResolveError::ValidationError {
                         message: format!(
@@ -232,10 +243,16 @@ impl<'a> FlowResolver<'a> {
 
                 // Validate that referenced transition exists in hook
                 if entity_exists {
-                    let hook = self.schema.hooks.iter().find(|h| h.model_ref == transition.entity);
+                    let hook = self
+                        .schema
+                        .hooks
+                        .iter()
+                        .find(|h| h.model_ref == transition.entity);
                     if let Some(h) = hook {
                         if let Some(ref sm) = h.state_machine {
-                            let transition_exists = sm.transitions.iter()
+                            let transition_exists = sm
+                                .transitions
+                                .iter()
                                 .any(|t| t.name == transition.transition);
                             if !transition_exists && !transition.transition.is_empty() {
                                 errors.push(ResolveError::ValidationError {
@@ -310,10 +327,7 @@ impl<'a> FlowResolver<'a> {
         // Check that at least one branch has a condition or is an else branch
         if cond.conditions.is_empty() {
             errors.push(ResolveError::ValidationError {
-                message: format!(
-                    "Condition step in flow '{}' has no branches",
-                    workflow.name
-                ),
+                message: format!("Condition step in flow '{}' has no branches", workflow.name),
             });
         }
 
@@ -343,9 +357,12 @@ impl<'a> FlowResolver<'a> {
             for nested_step in &branch.steps {
                 // Collect names from nested steps
                 let nested_names = self.collect_step_names(&branch.steps);
-                let combined_steps: HashSet<_> = valid_steps.union(&nested_names).cloned().collect();
+                let combined_steps: HashSet<_> =
+                    valid_steps.union(&nested_names).cloned().collect();
 
-                if let Err(nested_errors) = self.validate_step(nested_step, workflow, &combined_steps) {
+                if let Err(nested_errors) =
+                    self.validate_step(nested_step, workflow, &combined_steps)
+                {
                     errors.extend(nested_errors);
                 }
             }
@@ -464,7 +481,9 @@ impl<'a> FlowResolver<'a> {
                     }
                 }
             }
-            CompensationType::Transition { entity, transition, .. } => {
+            CompensationType::Transition {
+                entity, transition, ..
+            } => {
                 let entity_exists = self.schema.models.iter().any(|m| m.name == *entity);
                 if !entity_exists && !entity.is_empty() {
                     errors.push(ResolveError::ValidationError {
@@ -480,8 +499,8 @@ impl<'a> FlowResolver<'a> {
                     let hook = self.schema.hooks.iter().find(|h| h.model_ref == *entity);
                     if let Some(h) = hook {
                         if let Some(ref sm) = h.state_machine {
-                            let transition_exists = sm.transitions.iter()
-                                .any(|t| t.name == *transition);
+                            let transition_exists =
+                                sm.transitions.iter().any(|t| t.name == *transition);
                             if !transition_exists && !transition.is_empty() {
                                 errors.push(ResolveError::ValidationError {
                                     message: format!(
@@ -574,7 +593,11 @@ impl<'a> FlowResolver<'a> {
     }
 
     /// Find unreachable steps (steps that no other step transitions to)
-    fn find_unreachable_steps(&self, workflow: &Workflow, all_steps: &HashSet<String>) -> Option<Vec<String>> {
+    fn find_unreachable_steps(
+        &self,
+        workflow: &Workflow,
+        all_steps: &HashSet<String>,
+    ) -> Option<Vec<String>> {
         if workflow.steps.is_empty() {
             return None;
         }
@@ -779,7 +802,9 @@ mod tests {
         let result = resolver.resolve();
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.to_string().contains("Duplicate step name")));
+        assert!(errors
+            .iter()
+            .any(|e| e.to_string().contains("Duplicate step name")));
     }
 
     #[test]
@@ -810,20 +835,20 @@ mod tests {
         let result = resolver.resolve();
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.to_string().contains("non-existent step")));
+        assert!(errors
+            .iter()
+            .any(|e| e.to_string().contains("non-existent step")));
     }
 
     #[test]
     fn test_no_terminal_step() {
         let workflow = Workflow {
             name: "TestWorkflow".to_string(),
-            steps: vec![
-                Step {
-                    name: "start".to_string(),
-                    step_type: StepType::Action(ActionStep::default()),
-                    ..Default::default()
-                },
-            ],
+            steps: vec![Step {
+                name: "start".to_string(),
+                step_type: StepType::Action(ActionStep::default()),
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -832,6 +857,8 @@ mod tests {
         let result = resolver.resolve();
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.to_string().contains("no terminal step")));
+        assert!(errors
+            .iter()
+            .any(|e| e.to_string().contains("no terminal step")));
     }
 }

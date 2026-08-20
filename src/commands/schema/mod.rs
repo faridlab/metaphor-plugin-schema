@@ -17,9 +17,9 @@ mod validate;
 mod validate_workspace;
 mod watch;
 
-pub(crate) use discovery::resolve_module_arg;
 use changed::execute_changed;
 use diff::execute_diff;
+pub(crate) use discovery::resolve_module_arg;
 use doctor::execute_doctor;
 use generate::execute_generate;
 use migration_cmd::{execute_migration, execute_status};
@@ -310,8 +310,22 @@ pub fn execute(action: SchemaAction) -> Result<()> {
             lenient,
         } => {
             let module = resolve_module_arg(module, "schema generate")?;
-            execute_generate(&module, &target, output, dry_run, force, split, changed, &base, validate, models.as_deref(), hooks.as_deref(), workflows.as_deref(), lenient)
-        },
+            execute_generate(
+                &module,
+                &target,
+                output,
+                dry_run,
+                force,
+                split,
+                changed,
+                &base,
+                validate,
+                models.as_deref(),
+                hooks.as_deref(),
+                workflows.as_deref(),
+                lenient,
+            )
+        }
         SchemaAction::Diff { module, base } => execute_diff(&module, &base),
         SchemaAction::Watch {
             module,
@@ -325,7 +339,14 @@ pub fn execute(action: SchemaAction) -> Result<()> {
             database_url,
             preview,
             safe_only,
-        } => execute_migration(&module, output, destructive, database_url, preview, safe_only),
+        } => execute_migration(
+            &module,
+            output,
+            destructive,
+            database_url,
+            preview,
+            safe_only,
+        ),
         SchemaAction::Changed {
             module,
             base,
@@ -344,10 +365,6 @@ pub fn execute(action: SchemaAction) -> Result<()> {
             let module = resolve_module_arg(module, "schema undeclared")?;
             execute_undeclared(&module)
         }
-        SchemaAction::OpenapiCollect { module } => {
-            openapi_collect::execute_openapi_collect(module)
-        }
+        SchemaAction::OpenapiCollect { module } => openapi_collect::execute_openapi_collect(module),
     }
 }
-
-

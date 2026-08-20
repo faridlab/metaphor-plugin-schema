@@ -3,7 +3,7 @@
 //! Defines AST nodes for model schemas including models, fields, relations, and enums.
 
 use super::{Span, TypeRef};
-use crate::utils::{to_snake_case, pluralize};
+use crate::utils::{pluralize, to_snake_case};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -123,7 +123,10 @@ impl Model {
     pub fn has_soft_delete(&self) -> bool {
         self.fields.iter().any(|f| f.name == "deleted_at")
             || self.has_attribute("soft_delete")
-            || self.fields.iter().any(|f| f.name == "metadata" && f.has_attribute("audit_metadata"))
+            || self
+                .fields
+                .iter()
+                .any(|f| f.name == "metadata" && f.has_attribute("audit_metadata"))
     }
 
     /// Check if model has a specific attribute
@@ -1601,7 +1604,10 @@ mod tests {
 
         m.read_only = true;
         assert!(m.has_read_only());
-        assert_eq!(m.default_route_fn(), "create_compensation_change_read_routes");
+        assert_eq!(
+            m.default_route_fn(),
+            "create_compensation_change_read_routes"
+        );
     }
 
     #[test]

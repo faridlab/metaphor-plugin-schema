@@ -128,7 +128,9 @@ impl<'a> SchemaValidator<'a> {
 
         for model in &self.schema.models {
             for field in &model.fields {
-                let Some(lifecycle) = &field.lifecycle else { continue };
+                let Some(lifecycle) = &field.lifecycle else {
+                    continue;
+                };
                 let declared = format!(
                     "model '{}' field '{}' (lifecycle shape '{}')",
                     model.name,
@@ -267,11 +269,12 @@ impl<'a> SchemaValidator<'a> {
         }
 
         // Collect known model names for relation validation
-        let known_models: HashSet<_> = self.schema.models.iter()
-            .map(|m| m.name.as_str())
-            .collect();
+        let known_models: HashSet<_> = self.schema.models.iter().map(|m| m.name.as_str()).collect();
 
-        let known_types: HashSet<_> = self.schema.enums.iter()
+        let known_types: HashSet<_> = self
+            .schema
+            .enums
+            .iter()
             .map(|e| e.name.as_str())
             .chain(self.schema.type_defs.iter().map(|t| t.name.as_str()))
             .collect();
@@ -289,7 +292,8 @@ impl<'a> SchemaValidator<'a> {
             // PHASE 2: Check that fields ending with _id have @foreign_key attribute
             // Skip check if @exclude_from_foreign_key_check attribute is present
             let skip_fk_check = field.has_attribute("exclude_from_foreign_key_check");
-            if field.name.ends_with("_id") && !field.has_attribute("foreign_key") && !skip_fk_check {
+            if field.name.ends_with("_id") && !field.has_attribute("foreign_key") && !skip_fk_check
+            {
                 errors.push(ResolveError::validation(format!(
                     "Model '{}' field '{}' ends with '_id' but missing @foreign_key(Model.field) attribute (use @exclude_from_foreign_key_check for non-reference IDs)",
                     model.name, field.name
@@ -312,7 +316,11 @@ impl<'a> SchemaValidator<'a> {
                 // `@foreign_key(Entity.id)` is written unquoted, so the parser yields `Ident`, not
                 // `String`. Matching only `String` here made this check a silent no-op on every real
                 // schema; `fk_target` accepts both.
-                if let Some(target) = fk.args.first().and_then(|(_, v)| crate::resolver::cross_module_fk::fk_target(v)) {
+                if let Some(target) = fk
+                    .args
+                    .first()
+                    .and_then(|(_, v)| crate::resolver::cross_module_fk::fk_target(v))
+                {
                     let parts: Vec<&str> = target.split('.').collect();
                     // `Entity.column` = intra-module (2 parts). `module.Entity.column` = cross (3).
                     if parts.len() == 2 {
@@ -391,17 +399,28 @@ impl<'a> SchemaValidator<'a> {
     }
 
     /// Validate that index fields reference actual columns or valid JSONB expressions
-    fn validate_indexes(&self, model: &crate::ast::Model, field_names: &HashSet<&String>) -> Vec<ResolveError> {
+    fn validate_indexes(
+        &self,
+        model: &crate::ast::Model,
+        field_names: &HashSet<&String>,
+    ) -> Vec<ResolveError> {
         let mut errors = Vec::new();
 
         // Known sub-keys of audit_metadata JSONB fields
         const AUDIT_METADATA_KEYS: &[&str] = &[
-            "created_at", "updated_at", "deleted_at",
-            "created_by", "updated_by", "deleted_by",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "created_by",
+            "updated_by",
+            "deleted_by",
         ];
 
         // Collect JSONB field info for sub-key resolution
-        let has_audit_metadata = model.fields.iter().any(|f| f.has_attribute("audit_metadata"));
+        let has_audit_metadata = model
+            .fields
+            .iter()
+            .any(|f| f.has_attribute("audit_metadata"));
 
         // Collect JSONB default keys for data fields
         let jsonb_data_keys: HashSet<String> = model.fields.iter()
@@ -477,7 +496,12 @@ impl<'a> SchemaValidator<'a> {
                      Available columns: {}",
                     model.name,
                     field_name,
-                    model.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
+                    model
+                        .fields
+                        .iter()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )));
             }
         }
@@ -497,7 +521,9 @@ impl<'a> SchemaValidator<'a> {
         }
 
         // PHASE 2: Check for at least one default variant
-        let has_default = enum_def.variants.iter()
+        let has_default = enum_def
+            .variants
+            .iter()
             .any(|v| v.attributes.iter().any(|a| a.name == "default"));
         if !has_default && !enum_def.variants.is_empty() {
             errors.push(ResolveError::validation(format!(
@@ -540,7 +566,12 @@ impl<'a> SchemaValidator<'a> {
             // paths with no DB backstop — the justification is what makes that
             // risk a reviewed decision instead of an accident.
             if rule.enforcement == Enforcement::Service
-                && rule.justification.as_deref().unwrap_or("").trim().is_empty()
+                && rule
+                    .justification
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
             {
                 errors.push(ResolveError::validation(format!(
                     "Rule '{}' in hook '{}' declares enforcement: service without a \
@@ -762,9 +793,8 @@ mod fk_target_tests {
 
     fn fk_field(name: &str, target: &str) -> Field {
         let mut f = Field::new(name, TypeRef::Primitive(PrimitiveType::Uuid));
-        f.attributes.push(
-            Attribute::new("foreign_key").with_arg(AttributeValue::String(target.into())),
-        );
+        f.attributes
+            .push(Attribute::new("foreign_key").with_arg(AttributeValue::String(target.into())));
         f
     }
 
@@ -788,7 +818,8 @@ mod fk_target_tests {
         child.fields = vec![id_field(), fk_field("organization_id", "Organization.id")];
         let errs = errors_of(&schema_with(vec![child]));
         assert!(
-            errs.iter().any(|e| e.contains("no model 'Organization' exists")),
+            errs.iter()
+                .any(|e| e.contains("no model 'Organization' exists")),
             "a same-module FK to a nonexistent model must be rejected, got: {errs:?}"
         );
     }
@@ -812,7 +843,10 @@ mod fk_target_tests {
         // error on it (that would break every legitimate cross-module logical FK). It is the
         // workspace-level pass's job, noted in the validator.
         let mut child = Model::new("OrgUser");
-        child.fields = vec![id_field(), fk_field("organization_id", "corpus.Organization.id")];
+        child.fields = vec![
+            id_field(),
+            fk_field("organization_id", "corpus.Organization.id"),
+        ];
         let errs = errors_of(&schema_with(vec![child]));
         assert!(
             !errs.iter().any(|e| e.contains("@foreign_key")),
@@ -890,7 +924,12 @@ mod company_fence_tests {
 
     #[test]
     fn undeclared_and_fenced_declarations_are_fine() {
-        for fence in [None, Some(CompanyFence::Strict), Some(CompanyFence::SharedBlank), Some(CompanyFence::SharedTree)] {
+        for fence in [
+            None,
+            Some(CompanyFence::Strict),
+            Some(CompanyFence::SharedBlank),
+            Some(CompanyFence::SharedTree),
+        ] {
             let s = schema_with_fence(vec![company_model(false)], fence);
             assert!(
                 errors_of(&s).is_empty(),
@@ -914,9 +953,7 @@ mod company_fence_tests {
     #[test]
     fn warns_when_shared_blank_null_arm_is_dead() {
         let mut required = company_model(false);
-        required.fields[1].type_ref = TypeRef::optional(
-            TypeRef::Primitive(PrimitiveType::Uuid),
-        );
+        required.fields[1].type_ref = TypeRef::optional(TypeRef::Primitive(PrimitiveType::Uuid));
         // make it non-optional again — the dead-arm case
         let mut not_null = company_model(false);
         not_null.fields[1].type_ref = TypeRef::Primitive(PrimitiveType::Uuid);
@@ -929,7 +966,9 @@ mod company_fence_tests {
         // and a nullable company_id under shared_blank is the healthy shape
         let s = schema_with_fence(vec![required], Some(CompanyFence::SharedBlank));
         assert!(
-            !declaration_warnings(&s).iter().any(|w| w.contains("NOT NULL")),
+            !declaration_warnings(&s)
+                .iter()
+                .any(|w| w.contains("NOT NULL")),
             "nullable company_id must not warn"
         );
     }
@@ -1000,12 +1039,24 @@ mod enforcement_tests {
 
     #[test]
     fn service_with_justification_and_other_modes_are_fine() {
-        let s = schema_with_hook(rule_with(Enforcement::Service, Some("cross-model check; needs both rows in memory")));
-        assert!(errors_of(&s).is_empty(), "justified service rule must validate");
+        let s = schema_with_hook(rule_with(
+            Enforcement::Service,
+            Some("cross-model check; needs both rows in memory"),
+        ));
+        assert!(
+            errors_of(&s).is_empty(),
+            "justified service rule must validate"
+        );
         let s = schema_with_hook(rule_with(Enforcement::Db, None));
-        assert!(errors_of(&s).is_empty(), "db (default) needs no justification");
+        assert!(
+            errors_of(&s).is_empty(),
+            "db (default) needs no justification"
+        );
         let s = schema_with_hook(rule_with(Enforcement::Both, None));
-        assert!(errors_of(&s).is_empty(), "both needs no justification — the DB backstop exists");
+        assert!(
+            errors_of(&s).is_empty(),
+            "both needs no justification — the DB backstop exists"
+        );
     }
 
     #[test]
@@ -1065,11 +1116,15 @@ mod lifecycle_tests {
         let mut m = stage_model();
         m.fields.push(lifecycle_field(
             "sub_state",
-            Lifecycle { shape: LifecycleShape::Split, ..Default::default() },
+            Lifecycle {
+                shape: LifecycleShape::Split,
+                ..Default::default()
+            },
         ));
         let errs = errors_of(&schema_with(m));
         assert!(
-            errs.iter().any(|e| e.contains("split requires a 'driver:'")),
+            errs.iter()
+                .any(|e| e.contains("split requires a 'driver:'")),
             "split must demand a driver, got: {errs:?}"
         );
     }
@@ -1077,7 +1132,10 @@ mod lifecycle_tests {
     #[test]
     fn split_with_unknown_driver_is_fatal_but_known_driver_passes() {
         let mut m = stage_model();
-        m.fields.push(Field::new("stage", TypeRef::Primitive(PrimitiveType::String)));
+        m.fields.push(Field::new(
+            "stage",
+            TypeRef::Primitive(PrimitiveType::String),
+        ));
         m.fields.push(lifecycle_field(
             "sub_state",
             Lifecycle {
@@ -1088,12 +1146,16 @@ mod lifecycle_tests {
         ));
         let errs = errors_of(&schema_with(m));
         assert!(
-            errs.iter().any(|e| e.contains("driver 'ghost' is not a field")),
+            errs.iter()
+                .any(|e| e.contains("driver 'ghost' is not a field")),
             "driver must resolve to a same-model field, got: {errs:?}"
         );
 
         let mut m = stage_model();
-        m.fields.push(Field::new("stage", TypeRef::Primitive(PrimitiveType::String)));
+        m.fields.push(Field::new(
+            "stage",
+            TypeRef::Primitive(PrimitiveType::String),
+        ));
         m.fields.push(lifecycle_field(
             "sub_state",
             Lifecycle {
@@ -1102,7 +1164,10 @@ mod lifecycle_tests {
                 ..Default::default()
             },
         ));
-        assert!(errors_of(&schema_with(m)).is_empty(), "split with a real driver must validate");
+        assert!(
+            errors_of(&schema_with(m)).is_empty(),
+            "split with a real driver must validate"
+        );
     }
 
     #[test]
@@ -1118,7 +1183,8 @@ mod lifecycle_tests {
         ));
         let errs = errors_of(&schema_with(m));
         assert!(
-            errs.iter().any(|e| e.contains("cannot drive its own lifecycle")),
+            errs.iter()
+                .any(|e| e.contains("cannot drive its own lifecycle")),
             "self-driving driver must be rejected, got: {errs:?}"
         );
     }
@@ -1128,11 +1194,15 @@ mod lifecycle_tests {
         let mut m = stage_model();
         m.fields.push(lifecycle_field(
             "stage_id",
-            Lifecycle { shape: LifecycleShape::StageRef, ..Default::default() },
+            Lifecycle {
+                shape: LifecycleShape::StageRef,
+                ..Default::default()
+            },
         ));
         let errs = errors_of(&schema_with(m));
         assert!(
-            errs.iter().any(|e| e.contains("stage_ref requires a relation")),
+            errs.iter()
+                .any(|e| e.contains("stage_ref requires a relation")),
             "stage_ref on a plain column must be rejected, got: {errs:?}"
         );
 
@@ -1144,9 +1214,13 @@ mod lifecycle_tests {
         let mut m = stage_model();
         let mut f = lifecycle_field(
             "stage_id",
-            Lifecycle { shape: LifecycleShape::StageRef, ..Default::default() },
+            Lifecycle {
+                shape: LifecycleShape::StageRef,
+                ..Default::default()
+            },
         );
-        f.attributes.push(Attribute::new("exclude_from_foreign_key_check"));
+        f.attributes
+            .push(Attribute::new("exclude_from_foreign_key_check"));
         m.fields.push(f);
         m.relations.push(Relation {
             name: "stage".to_string(),
@@ -1177,7 +1251,10 @@ mod lifecycle_tests {
 
     fn hook_guarding(field: &str) -> Hook {
         let mut h = Hook::new("FestivalHook", "Festival");
-        let mut sm = StateMachine { field: field.to_string(), ..Default::default() };
+        let mut sm = StateMachine {
+            field: field.to_string(),
+            ..Default::default()
+        };
         sm.states = vec![
             crate::ast::hook::State::new("draft").initial(),
             crate::ast::hook::State::new("done").final_state(),
@@ -1190,7 +1267,9 @@ mod lifecycle_tests {
     fn hand_set_with_missing_machine_is_fatal() {
         let mut s = schema_with(hand_set_model(Some("ghost_machine")));
         assert!(
-            errors_of(&s).iter().any(|e| e.contains("'ghost_machine' does not exist")),
+            errors_of(&s)
+                .iter()
+                .any(|e| e.contains("'ghost_machine' does not exist")),
             "hand_set must name a real machine, got: {:?}",
             errors_of(&s)
         );
@@ -1228,15 +1307,29 @@ mod lifecycle_tests {
 
     #[test]
     fn shape_names_round_trip_the_declared_vocabulary() {
-        assert_eq!(LifecycleShape::from_name("hand_set"), Some(LifecycleShape::HandSet));
-        assert_eq!(LifecycleShape::from_name("stage_ref"), Some(LifecycleShape::StageRef));
+        assert_eq!(
+            LifecycleShape::from_name("hand_set"),
+            Some(LifecycleShape::HandSet)
+        );
+        assert_eq!(
+            LifecycleShape::from_name("stage_ref"),
+            Some(LifecycleShape::StageRef)
+        );
         assert_eq!(LifecycleShape::from_name("nope"), None);
         for name in [
-            "projection", "hand_set", "hybrid", "split", "stage_ref", "window", "virtual",
-            "label", "inert", "none",
+            "projection",
+            "hand_set",
+            "hybrid",
+            "split",
+            "stage_ref",
+            "window",
+            "virtual",
+            "label",
+            "inert",
+            "none",
         ] {
-            let shape = LifecycleShape::from_name(name)
-                .unwrap_or_else(|| panic!("'{name}' must parse"));
+            let shape =
+                LifecycleShape::from_name(name).unwrap_or_else(|| panic!("'{name}' must parse"));
             assert_eq!(shape.shape_name(), name, "shape_name must round-trip");
         }
     }
@@ -1247,7 +1340,11 @@ mod scheduled_job_tests {
     use super::*;
     use crate::ast::{CommitPolicy, JobPosture, ModuleSchema, ScheduledJob};
 
-    fn job_with(posture: Option<JobPosture>, triggers: Vec<String>, pickup_lock: bool) -> ScheduledJob {
+    fn job_with(
+        posture: Option<JobPosture>,
+        triggers: Vec<String>,
+        pickup_lock: bool,
+    ) -> ScheduledJob {
         ScheduledJob {
             name: "nightly_gc".to_string(),
             schedule: "0 3 * * *".to_string(),
@@ -1279,11 +1376,16 @@ mod scheduled_job_tests {
         let job = job_with(None, vec![], false);
         let warns = warnings_of(vec![job.clone()]);
         assert!(
-            warns.iter().any(|w| w.contains("'nightly_gc' declares no posture")),
+            warns
+                .iter()
+                .any(|w| w.contains("'nightly_gc' declares no posture")),
             "absent posture must warn, got: {warns:?}"
         );
         // Legacy jobs (all 49 backbone indexes today) never fail validation.
-        assert!(errors_of(vec![job]).is_empty(), "absent posture must not error");
+        assert!(
+            errors_of(vec![job]).is_empty(),
+            "absent posture must not error"
+        );
     }
 
     #[test]
@@ -1294,15 +1396,26 @@ mod scheduled_job_tests {
             JobPosture::HostRiding,
             JobPosture::AutovacuumRide,
         ] {
-            let errs = errors_of(vec![job_with(Some(posture), vec!["mail.created".to_string()], false)]);
+            let errs = errors_of(vec![job_with(
+                Some(posture),
+                vec!["mail.created".to_string()],
+                false,
+            )]);
             assert!(
                 errs.iter()
                     .any(|e| e.contains("without pickup_lock: true") && e.contains("MMB-4")),
                 "{posture:?} without pickup_lock must be a hard error, got: {errs:?}"
             );
 
-            let ok = errors_of(vec![job_with(Some(posture), vec!["mail.created".to_string()], true)]);
-            assert!(ok.is_empty(), "{posture:?} with pickup_lock must validate, got: {ok:?}");
+            let ok = errors_of(vec![job_with(
+                Some(posture),
+                vec!["mail.created".to_string()],
+                true,
+            )]);
+            assert!(
+                ok.is_empty(),
+                "{posture:?} with pickup_lock must validate, got: {ok:?}"
+            );
         }
     }
 
@@ -1321,7 +1434,8 @@ mod scheduled_job_tests {
     fn self_arming_without_triggers_is_fatal() {
         let errs = errors_of(vec![job_with(Some(JobPosture::SelfArming), vec![], true)]);
         assert!(
-            errs.iter().any(|e| e.contains("self_arming with no triggers")),
+            errs.iter()
+                .any(|e| e.contains("self_arming with no triggers")),
             "self_arming must name its re-arming events, got: {errs:?}"
         );
 
@@ -1330,12 +1444,18 @@ mod scheduled_job_tests {
             vec!["registration.confirmed".to_string()],
             true,
         )]);
-        assert!(ok.is_empty(), "self_arming with triggers and a lock must validate, got: {ok:?}");
+        assert!(
+            ok.is_empty(),
+            "self_arming with triggers and a lock must validate, got: {ok:?}"
+        );
     }
 
     #[test]
     fn posture_names_match_the_declared_vocabulary() {
         assert_eq!(job_posture_name(JobPosture::SelfArming), "self_arming");
-        assert_eq!(job_posture_name(JobPosture::InactiveThenIcp), "inactive_then_icp");
+        assert_eq!(
+            job_posture_name(JobPosture::InactiveThenIcp),
+            "inactive_then_icp"
+        );
     }
 }

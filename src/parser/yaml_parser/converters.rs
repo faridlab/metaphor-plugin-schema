@@ -1,47 +1,37 @@
 //! YAML-to-AST conversion: impl blocks for all YamlXxx types
 
-use crate::ast::model::{
-    Attribute, AttributeValue, EnumDef, EnumVariant, Field, Index, IndexType, Model, Relation,
-    RelationType,
-    Entity, EntityMethod, ValueObject, ValueObjectMethod,
-    DomainService, ServiceDependency, ServiceMethod,
-    EventSourcedConfig, SnapshotConfig,
-    UseCase,
-    DomainEvent, EventStorage, EventField,
-    Projection, ProjectionStorage, SourceEvent, ProjectionField, ProjectionIndex,
-    AppService, AppServiceMethod,
-    Handler, HandlerRetryPolicy, Subscription,
-    Integration, IntegrationMethod,
-    Presentation, HttpConfig, RouteGroup, Endpoint, GrpcConfig, GrpcService, GrpcMethod,
-    Dto, DtoField, ComputedDtoField,
-    Versioning,
-    RepositoryTrait, TraitMethod,
-};
-use crate::ast::types::{TypeRef, PrimitiveType};
 use crate::ast::authorization::{
-    AuthorizationConfig, RoleDefinition, PolicyDefinition, PolicyType, PolicyRule,
-    ResourcePolicy, ResourcePolicyRule, AbacAttributes, AbacPolicy,
-};
-use crate::ast::hook::{
-    Action, ActionKind, ActionType, ComputedField, FieldRestriction, Permission, PermissionAction,
-    Rule, RuleWhen, State, StateMachine, Transition, Trigger, TriggerEvent, Hook,
-};
-use crate::ast::workflow::{
-    Workflow, WorkflowTrigger, WorkflowConfig, TransactionMode, Step, StepType,
-    ActionStep, WaitStep, WaitEvent, ConditionStep, ParallelStep, LoopStep,
-    SubprocessStep, HumanTaskStep, TransitionStep, TerminalStep,
-    TransactionGroupStep, CompensationStep, CompensationType,
-    RetryPolicy, BackoffStrategy, TimeoutAction, ContextVariable,
-    StepOutcome, StepFailure, ConditionBranch, ParallelBranch,
-    JoinStrategy, TaskConfig, TaskForm, TaskFormField, TaskTimeoutAction,
-    TaskTimeoutActionType, TerminalStatus, EmitConfig, LogConfig, LogLevel,
-    CompensationAction, WorkflowHandler,
+    AbacAttributes, AbacPolicy, AuthorizationConfig, PolicyDefinition, PolicyRule, PolicyType,
+    ResourcePolicy, ResourcePolicyRule, RoleDefinition,
 };
 use crate::ast::expressions::Expression;
+use crate::ast::hook::{
+    Action, ActionKind, ActionType, ComputedField, FieldRestriction, Hook, Permission,
+    PermissionAction, Rule, RuleWhen, State, StateMachine, Transition, Trigger, TriggerEvent,
+};
+use crate::ast::model::{
+    AppService, AppServiceMethod, Attribute, AttributeValue, ComputedDtoField, DomainEvent,
+    DomainService, Dto, DtoField, Endpoint, Entity, EntityMethod, EnumDef, EnumVariant, EventField,
+    EventSourcedConfig, EventStorage, Field, GrpcConfig, GrpcMethod, GrpcService, Handler,
+    HandlerRetryPolicy, HttpConfig, Index, IndexType, Integration, IntegrationMethod, Model,
+    Presentation, Projection, ProjectionField, ProjectionIndex, ProjectionStorage, Relation,
+    RelationType, RepositoryTrait, RouteGroup, ServiceDependency, ServiceMethod, SnapshotConfig,
+    SourceEvent, Subscription, TraitMethod, UseCase, ValueObject, ValueObjectMethod, Versioning,
+};
+use crate::ast::types::{PrimitiveType, TypeRef};
+use crate::ast::workflow::{
+    ActionStep, BackoffStrategy, CompensationAction, CompensationStep, CompensationType,
+    ConditionBranch, ConditionStep, ContextVariable, EmitConfig, HumanTaskStep, JoinStrategy,
+    LogConfig, LogLevel, LoopStep, ParallelBranch, ParallelStep, RetryPolicy, Step, StepFailure,
+    StepOutcome, StepType, SubprocessStep, TaskConfig, TaskForm, TaskFormField, TaskTimeoutAction,
+    TaskTimeoutActionType, TerminalStatus, TerminalStep, TimeoutAction, TransactionGroupStep,
+    TransactionMode, TransitionStep, WaitEvent, WaitStep, Workflow, WorkflowConfig,
+    WorkflowHandler, WorkflowTrigger,
+};
 use indexmap::IndexMap;
 
-use super::types::*;
 use super::helpers::*;
+use super::types::*;
 
 // ============================================================================
 // Conversion to AST
@@ -192,9 +182,10 @@ impl YamlModel {
                     if !self.fields.contains_key(field_name) {
                         let mut field = yaml_field.clone().into_field(field_name.clone())?;
                         // Mark field as inherited from shared type
-                        field.attributes.push(Attribute::new("inherited").with_arg(
-                            AttributeValue::String(type_name.clone())
-                        ));
+                        field.attributes.push(
+                            Attribute::new("inherited")
+                                .with_arg(AttributeValue::String(type_name.clone())),
+                        );
                         model.fields.push(field);
                     }
                 }
@@ -224,7 +215,8 @@ impl YamlModel {
 
         // Auto-create relations from fields with @foreign_key attribute
         // This handles cases where a field has @foreign_key but no explicit relation defined
-        let mut existing_relation_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut existing_relation_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for rel in &model.relations {
             existing_relation_names.insert(rel.name.clone());
         }
@@ -282,9 +274,8 @@ impl YamlModel {
                                 name: rel_name.to_string(),
                                 target,
                                 relation_type,
-                                attributes: vec![
-                                    Attribute::new("foreign_key").with_arg(AttributeValue::String(field.name.clone())),
-                                ],
+                                attributes: vec![Attribute::new("foreign_key")
+                                    .with_arg(AttributeValue::String(field.name.clone()))],
                                 ..Default::default()
                             };
 
@@ -320,15 +311,21 @@ impl YamlModel {
         // Auto-inject metadata field for models with soft_delete but no explicit @audit_metadata field.
         // This ensures the SQL generator creates the metadata JSONB column and audit triggers
         // even when the model doesn't explicitly extend [Metadata] or declare a metadata field.
-        let has_audit_metadata = model.fields.iter().any(|f| f.has_attribute("audit_metadata"));
+        let has_audit_metadata = model
+            .fields
+            .iter()
+            .any(|f| f.has_attribute("audit_metadata"));
         let has_soft_delete = model.has_attribute("soft_delete");
         if has_soft_delete && !has_audit_metadata {
             use crate::ast::{Attribute, PrimitiveType, TypeRef};
-            let mut metadata_field = Field::new("metadata", TypeRef::Primitive(PrimitiveType::Json));
-            metadata_field.attributes.push(Attribute::new("audit_metadata"));
-            metadata_field.attributes.push(
-                Attribute::new("default").with_arg(AttributeValue::String("{}".to_string()))
-            );
+            let mut metadata_field =
+                Field::new("metadata", TypeRef::Primitive(PrimitiveType::Json));
+            metadata_field
+                .attributes
+                .push(Attribute::new("audit_metadata"));
+            metadata_field
+                .attributes
+                .push(Attribute::new("default").with_arg(AttributeValue::String("{}".to_string())));
             model.fields.push(metadata_field);
         }
 
@@ -387,8 +384,7 @@ impl YamlField {
 
         // Mark this field as a structured JSONB type with the type name
         attrs.push(
-            Attribute::new("jsonb_type")
-                .with_arg(AttributeValue::String(type_name.to_string())),
+            Attribute::new("jsonb_type").with_arg(AttributeValue::String(type_name.to_string())),
         );
 
         // Collect validation attributes from the type definition fields
@@ -424,8 +420,7 @@ impl YamlField {
                 // Store field schema for validation generation
                 let schema_json = serialize_type_fields_to_json(type_fields);
                 attrs.push(
-                    Attribute::new("jsonb_schema")
-                        .with_arg(AttributeValue::String(schema_json)),
+                    Attribute::new("jsonb_schema").with_arg(AttributeValue::String(schema_json)),
                 );
             }
         } else {
@@ -442,14 +437,21 @@ impl YamlField {
         }
 
         // Add any additional attributes from the field definition itself
-        if let YamlField::Full { attributes, description, .. } = &self {
+        if let YamlField::Full {
+            attributes,
+            description,
+            ..
+        } = &self
+        {
             for attr_str in attributes {
                 if let Some(attr) = parse_attribute_string(attr_str) {
                     attrs.push(attr);
                 }
             }
             if let Some(desc) = description {
-                attrs.push(Attribute::new("description").with_arg(AttributeValue::String(desc.clone())));
+                attrs.push(
+                    Attribute::new("description").with_arg(AttributeValue::String(desc.clone())),
+                );
             }
         }
 
@@ -487,7 +489,8 @@ impl YamlField {
                 }
                 // Add description if present
                 if let Some(desc) = description {
-                    attrs.push(Attribute::new("description").with_arg(AttributeValue::String(desc)));
+                    attrs
+                        .push(Attribute::new("description").with_arg(AttributeValue::String(desc)));
                 }
                 let mut field = Field::new(name, type_ref);
                 field.attributes = attrs;
@@ -542,7 +545,9 @@ impl YamlIndex {
             attrs.push(Attribute::new("name").with_arg(AttributeValue::String(name.clone())));
         }
         if let Some(where_clause) = &self.where_clause {
-            attrs.push(Attribute::new("where").with_arg(AttributeValue::String(where_clause.clone())));
+            attrs.push(
+                Attribute::new("where").with_arg(AttributeValue::String(where_clause.clone())),
+            );
         }
 
         Index {
@@ -584,7 +589,8 @@ impl YamlEnumVariant {
             } => {
                 let mut attrs = Vec::new();
                 if let Some(desc) = description {
-                    attrs.push(Attribute::new("description").with_arg(AttributeValue::String(desc)));
+                    attrs
+                        .push(Attribute::new("description").with_arg(AttributeValue::String(desc)));
                 }
                 if default == Some(true) {
                     attrs.push(Attribute::new("default"));
@@ -808,7 +814,10 @@ impl YamlAction {
                     ..Default::default()
                 }
             }
-            YamlAction::Full { action_type, params } => Action {
+            YamlAction::Full {
+                action_type,
+                params,
+            } => Action {
                 action_type: ActionKind::from_str(&action_type),
                 args: params
                     .into_iter()
@@ -843,22 +852,37 @@ impl YamlWorkflowSchema {
 
         // Convert context
         for (name, value) in self.context {
-            workflow.context.insert(name.clone(), ContextVariable {
-                name,
-                initial_value: Some(yaml_value_to_expr(value)),
-                type_hint: None,
-            });
+            workflow.context.insert(
+                name.clone(),
+                ContextVariable {
+                    name,
+                    initial_value: Some(yaml_value_to_expr(value)),
+                    type_hint: None,
+                },
+            );
         }
 
         // Convert steps
         workflow.steps = self.steps.into_iter().map(|s| s.into_step()).collect();
 
         // Convert handlers
-        workflow.on_success = self.on_success.into_iter().map(|h| h.into_handler()).collect();
-        workflow.on_failure = self.on_failure.into_iter().map(|h| h.into_handler()).collect();
+        workflow.on_success = self
+            .on_success
+            .into_iter()
+            .map(|h| h.into_handler())
+            .collect();
+        workflow.on_failure = self
+            .on_failure
+            .into_iter()
+            .map(|h| h.into_handler())
+            .collect();
 
         // Convert compensation
-        workflow.compensation = self.compensation.into_iter().map(|c| c.into_compensation()).collect();
+        workflow.compensation = self
+            .compensation
+            .into_iter()
+            .map(|c| c.into_compensation())
+            .collect();
 
         workflow
     }
@@ -882,7 +906,8 @@ impl YamlWorkflowConfig {
     pub fn into_config(self) -> WorkflowConfig {
         WorkflowConfig {
             timeout: self.timeout,
-            transaction_mode: self.transaction_mode
+            transaction_mode: self
+                .transaction_mode
                 .map(|m| match m.to_lowercase().as_str() {
                     "atomic" => TransactionMode::Atomic,
                     "hybrid" => TransactionMode::Hybrid,
@@ -890,7 +915,8 @@ impl YamlWorkflowConfig {
                 })
                 .unwrap_or_default(),
             retry_policy: self.retry_policy.map(|r| r.into_policy()),
-            on_timeout: self.on_timeout
+            on_timeout: self
+                .on_timeout
                 .map(|t| match t.to_lowercase().as_str() {
                     "compensate" => TimeoutAction::Compensate,
                     "continue" => TimeoutAction::Continue,
@@ -917,25 +943,29 @@ impl YamlBackoff {
     pub fn into_backoff(self) -> BackoffStrategy {
         match self {
             YamlBackoff::Simple(s) => match s.to_lowercase().as_str() {
-                "linear" => BackoffStrategy::Linear { initial: "1s".to_string() },
+                "linear" => BackoffStrategy::Linear {
+                    initial: "1s".to_string(),
+                },
                 "exponential" => BackoffStrategy::Exponential {
                     initial: "1s".to_string(),
                     max: "1m".to_string(),
                 },
                 _ => BackoffStrategy::Fixed(s),
             },
-            YamlBackoff::Full { backoff_type, initial, max } => {
-                match backoff_type.to_lowercase().as_str() {
-                    "linear" => BackoffStrategy::Linear {
-                        initial: initial.unwrap_or_else(|| "1s".to_string()),
-                    },
-                    "exponential" => BackoffStrategy::Exponential {
-                        initial: initial.unwrap_or_else(|| "1s".to_string()),
-                        max: max.unwrap_or_else(|| "1m".to_string()),
-                    },
-                    _ => BackoffStrategy::Fixed(initial.unwrap_or_else(|| "1s".to_string())),
-                }
-            }
+            YamlBackoff::Full {
+                backoff_type,
+                initial,
+                max,
+            } => match backoff_type.to_lowercase().as_str() {
+                "linear" => BackoffStrategy::Linear {
+                    initial: initial.unwrap_or_else(|| "1s".to_string()),
+                },
+                "exponential" => BackoffStrategy::Exponential {
+                    initial: initial.unwrap_or_else(|| "1s".to_string()),
+                    max: max.unwrap_or_else(|| "1m".to_string()),
+                },
+                _ => BackoffStrategy::Fixed(initial.unwrap_or_else(|| "1s".to_string())),
+            },
         }
     }
 }
@@ -967,7 +997,9 @@ impl YamlStep {
                 "subprocess" => return StepType::Subprocess(self.clone().into_subprocess_step()),
                 "human_task" => return StepType::HumanTask(self.clone().into_human_task_step()),
                 "transition" => return StepType::Transition(self.clone().into_transition_step()),
-                "transaction_group" => return StepType::TransactionGroup(self.clone().into_transaction_group()),
+                "transaction_group" => {
+                    return StepType::TransactionGroup(self.clone().into_transaction_group())
+                }
                 "terminal" => return StepType::Terminal(self.clone().into_terminal_step()),
                 _ => {}
             }
@@ -1015,7 +1047,14 @@ impl YamlStep {
             idempotency_key: self.idempotency_key.map(Expression::Raw),
             compensation: self.compensation.map(|c| CompensationAction {
                 action: c.action,
-                params: c.params.map(|p| p.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+                params: c
+                    .params
+                    .map(|p| {
+                        p.into_iter()
+                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             }),
         }
     }
@@ -1029,7 +1068,9 @@ impl YamlStep {
         });
 
         // Convert multi-event format to AST events array
-        let events = wait_for.events.unwrap_or_default()
+        let events = wait_for
+            .events
+            .unwrap_or_default()
             .into_iter()
             .map(|e| {
                 let mut set = std::collections::HashMap::new();
@@ -1058,7 +1099,8 @@ impl YamlStep {
     }
 
     fn into_condition_step(self) -> ConditionStep {
-        let mut conditions: Vec<ConditionBranch> = self.conditions
+        let mut conditions: Vec<ConditionBranch> = self
+            .conditions
             .unwrap_or_default()
             .into_iter()
             .map(|c| c.into_branch())
@@ -1069,18 +1111,21 @@ impl YamlStep {
             let default_branch = match default_value {
                 // Simple string: just the next step name
                 serde_yaml::Value::String(next) => ConditionBranch {
-                    condition: None,  // No condition = else branch
+                    condition: None, // No condition = else branch
                     next,
                     set: std::collections::HashMap::new(),
                 },
                 // Object with next and optional set
                 serde_yaml::Value::Mapping(map) => {
-                    let next = map.get(serde_yaml::Value::String("next".to_string()))
+                    let next = map
+                        .get(serde_yaml::Value::String("next".to_string()))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_default();
                     let mut set = std::collections::HashMap::new();
-                    if let Some(serde_yaml::Value::Mapping(set_map)) = map.get(serde_yaml::Value::String("set".to_string())) {
+                    if let Some(serde_yaml::Value::Mapping(set_map)) =
+                        map.get(serde_yaml::Value::String("set".to_string()))
+                    {
                         for (k, v) in set_map {
                             if let serde_yaml::Value::String(key) = k {
                                 set.insert(key.clone(), yaml_value_to_expr(v.clone()));
@@ -1092,7 +1137,7 @@ impl YamlStep {
                         next,
                         set,
                     }
-                },
+                }
                 _ => ConditionBranch::default(),
             };
             conditions.push(default_branch);
@@ -1103,16 +1148,20 @@ impl YamlStep {
 
     fn into_parallel_step(self) -> ParallelStep {
         ParallelStep {
-            branches: self.branches
+            branches: self
+                .branches
                 .unwrap_or_default()
                 .into_iter()
                 .map(|b| b.into_branch())
                 .collect(),
-            join: self.join.map(|j| match j.to_lowercase().as_str() {
-                "any" => JoinStrategy::Any,
-                "all" => JoinStrategy::All,
-                _ => JoinStrategy::All,
-            }).unwrap_or_default(),
+            join: self
+                .join
+                .map(|j| match j.to_lowercase().as_str() {
+                    "any" => JoinStrategy::Any,
+                    "all" => JoinStrategy::All,
+                    _ => JoinStrategy::All,
+                })
+                .unwrap_or_default(),
             on_complete: self.on_complete.map(|o| o.into_outcome()),
         }
     }
@@ -1122,7 +1171,12 @@ impl YamlStep {
             foreach: Expression::Raw(self.foreach.unwrap_or_default()),
             as_var: self.as_var.unwrap_or_else(|| "item".to_string()),
             index_var: self.index_var,
-            steps: self.steps.unwrap_or_default().into_iter().map(|s| s.into_step()).collect(),
+            steps: self
+                .steps
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.into_step())
+                .collect(),
             on_complete: self.on_complete.map(|o| o.into_outcome()),
         }
     }
@@ -1165,15 +1219,23 @@ impl YamlStep {
                 timeout: task.timeout,
                 reminder: task.reminder,
             },
-            on_complete: self.conditions.unwrap_or_default().into_iter().map(|c| c.into_branch()).collect(),
+            on_complete: self
+                .conditions
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| c.into_branch())
+                .collect(),
             on_timeout: self.on_timeout.map(|o| TaskTimeoutAction {
-                action: o.action.map(|a| match a.to_lowercase().as_str() {
-                    "escalate" => TaskTimeoutActionType::Escalate,
-                    "reassign" => TaskTimeoutActionType::Reassign,
-                    "auto_approve" => TaskTimeoutActionType::AutoApprove,
-                    "auto_reject" => TaskTimeoutActionType::AutoReject,
-                    _ => TaskTimeoutActionType::Cancel,
-                }).unwrap_or_default(),
+                action: o
+                    .action
+                    .map(|a| match a.to_lowercase().as_str() {
+                        "escalate" => TaskTimeoutActionType::Escalate,
+                        "reassign" => TaskTimeoutActionType::Reassign,
+                        "auto_approve" => TaskTimeoutActionType::AutoApprove,
+                        "auto_reject" => TaskTimeoutActionType::AutoReject,
+                        _ => TaskTimeoutActionType::Cancel,
+                    })
+                    .unwrap_or_default(),
                 params: std::collections::HashMap::new(),
                 next: o.next,
             }),
@@ -1198,25 +1260,45 @@ impl YamlStep {
 
     fn into_transaction_group(self) -> TransactionGroupStep {
         TransactionGroupStep {
-            steps: self.steps.unwrap_or_default().into_iter().map(|s| s.into_step()).collect(),
+            steps: self
+                .steps
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.into_step())
+                .collect(),
         }
     }
 
     fn into_terminal_step(self) -> TerminalStep {
         TerminalStep {
-            status: self.status.map(|s| match s.to_lowercase().as_str() {
-                "success" => TerminalStatus::Success,
-                "failed" => TerminalStatus::Failed,
-                "cancelled" => TerminalStatus::Cancelled,
-                "timed_out" => TerminalStatus::TimedOut,
-                _ => TerminalStatus::Success,
-            }).unwrap_or_default(),
+            status: self
+                .status
+                .map(|s| match s.to_lowercase().as_str() {
+                    "success" => TerminalStatus::Success,
+                    "failed" => TerminalStatus::Failed,
+                    "cancelled" => TerminalStatus::Cancelled,
+                    "timed_out" => TerminalStatus::TimedOut,
+                    _ => TerminalStatus::Success,
+                })
+                .unwrap_or_default(),
             reason: self.reason.map(Expression::Raw),
             emit: self.emit.map(|e| EmitConfig {
                 event: e.event,
-                data: e.data.map(|d| d.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+                data: e
+                    .data
+                    .map(|d| {
+                        d.into_iter()
+                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             }),
-            actions: self.actions.unwrap_or_default().into_iter().map(|s| s.into_action_step()).collect(),
+            actions: self
+                .actions
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.into_action_step())
+                .collect(),
             compensate: self.compensate.unwrap_or(false),
         }
     }
@@ -1226,15 +1308,25 @@ impl YamlStepOutcome {
     /// Convert to AST StepOutcome
     pub fn into_outcome(self) -> StepOutcome {
         StepOutcome {
-            set: self.set.map(|s| s.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+            set: self
+                .set
+                .map(|s| {
+                    s.into_iter()
+                        .map(|(k, v)| (k, Expression::Raw(v)))
+                        .collect()
+                })
+                .unwrap_or_default(),
             next: self.next,
             log: self.log.map(|l| LogConfig {
-                level: l.level.map(|lv| match lv.to_lowercase().as_str() {
-                    "debug" => LogLevel::Debug,
-                    "warn" | "warning" => LogLevel::Warn,
-                    "error" => LogLevel::Error,
-                    _ => LogLevel::Info,
-                }).unwrap_or_default(),
+                level: l
+                    .level
+                    .map(|lv| match lv.to_lowercase().as_str() {
+                        "debug" => LogLevel::Debug,
+                        "warn" | "warning" => LogLevel::Warn,
+                        "error" => LogLevel::Error,
+                        _ => LogLevel::Info,
+                    })
+                    .unwrap_or_default(),
                 message: Expression::Raw(l.message),
             }),
         }
@@ -1247,8 +1339,13 @@ impl YamlStepFailure {
         StepFailure {
             retry: self.retry,
             backoff: self.backoff.map(|b| match b.to_lowercase().as_str() {
-                "linear" => BackoffStrategy::Linear { initial: "1s".to_string() },
-                "exponential" => BackoffStrategy::Exponential { initial: "1s".to_string(), max: "1m".to_string() },
+                "linear" => BackoffStrategy::Linear {
+                    initial: "1s".to_string(),
+                },
+                "exponential" => BackoffStrategy::Exponential {
+                    initial: "1s".to_string(),
+                    max: "1m".to_string(),
+                },
                 _ => BackoffStrategy::Fixed(b),
             }),
             on_exhausted: self.on_exhausted.map(|o| o.into_outcome()),
@@ -1263,7 +1360,14 @@ impl YamlConditionBranch {
         ConditionBranch {
             condition: self.condition.map(Expression::Raw),
             next: self.next.unwrap_or_default(),
-            set: self.set.map(|s| s.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+            set: self
+                .set
+                .map(|s| {
+                    s.into_iter()
+                        .map(|(k, v)| (k, Expression::Raw(v)))
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -1283,14 +1387,18 @@ impl YamlTaskForm {
     /// Convert to AST TaskForm
     pub fn into_form(self) -> TaskForm {
         TaskForm {
-            fields: self.fields.into_iter().map(|f| TaskFormField {
-                name: f.name,
-                field_type: f.field_type,
-                required: f.required.unwrap_or(false),
-                default: f.default.map(yaml_value_to_expr),
-                label: f.label,
-                validation: f.validation.unwrap_or_default(),
-            }).collect(),
+            fields: self
+                .fields
+                .into_iter()
+                .map(|f| TaskFormField {
+                    name: f.name,
+                    field_type: f.field_type,
+                    required: f.required.unwrap_or(false),
+                    default: f.default.map(yaml_value_to_expr),
+                    label: f.label,
+                    validation: f.validation.unwrap_or_default(),
+                })
+                .collect(),
         }
     }
 }
@@ -1303,20 +1411,39 @@ impl YamlCompensation {
                 entity: self.entity.unwrap_or_default(),
                 id: Expression::Raw(self.id.unwrap_or_default()),
                 transition: self.transition.unwrap_or_default(),
-                params: self.params.map(|p| p.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+                params: self
+                    .params
+                    .map(|p| {
+                        p.into_iter()
+                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             }
         } else if self.foreach.is_some() {
             CompensationType::Loop {
                 foreach: Expression::Raw(self.foreach.unwrap_or_default()),
                 as_var: self.as_var.unwrap_or_else(|| "item".to_string()),
-                steps: self.steps.unwrap_or_default().into_iter().map(|s| s.into_compensation()).collect(),
+                steps: self
+                    .steps
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|s| s.into_compensation())
+                    .collect(),
             }
         } else {
             CompensationType::Action {
                 action: self.action.unwrap_or_default(),
                 entity: self.entity,
                 id: self.id.map(Expression::Raw),
-                params: self.params.map(|p| p.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+                params: self
+                    .params
+                    .map(|p| {
+                        p.into_iter()
+                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 where_clause: self.where_clause.map(Expression::Raw),
             }
         };
@@ -1335,7 +1462,11 @@ impl YamlWorkflowHandler {
         if let Some(emit) = self.emit {
             WorkflowHandler::Emit {
                 emit,
-                data: self.data.map(|d| d.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()),
+                data: self.data.map(|d| {
+                    d.into_iter()
+                        .map(|(k, v)| (k, Expression::Raw(v)))
+                        .collect()
+                }),
             }
         } else if let Some(notify) = self.notify {
             WorkflowHandler::Notify {
@@ -1345,7 +1476,14 @@ impl YamlWorkflowHandler {
         } else {
             WorkflowHandler::Action {
                 action: self.action.unwrap_or_default(),
-                params: self.params.map(|p| p.into_iter().map(|(k, v)| (k, Expression::Raw(v))).collect()).unwrap_or_default(),
+                params: self
+                    .params
+                    .map(|p| {
+                        p.into_iter()
+                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             }
         }
     }
@@ -1379,7 +1517,11 @@ impl YamlEntityMethod {
             description: self.description,
             mutates: self.mutates.unwrap_or(false),
             is_async: self.is_async.unwrap_or(false),
-            params: self.params.into_iter().map(|(k, v)| (k, parse_type_ref(&v))).collect(),
+            params: self
+                .params
+                .into_iter()
+                .map(|(k, v)| (k, parse_type_ref(&v)))
+                .collect(),
             returns: self.returns.map(|r| parse_type_ref(&r)),
             ..Default::default()
         }
@@ -1415,8 +1557,15 @@ impl YamlValueObjectMethod {
         ValueObjectMethod {
             name: self.name,
             description: self.description,
-            returns: self.returns.map(|r| parse_type_ref(&r)).unwrap_or_else(|| TypeRef::Primitive(PrimitiveType::String)),
-            params: self.params.into_iter().map(|(k, v)| (k, parse_type_ref(&v))).collect(),
+            returns: self
+                .returns
+                .map(|r| parse_type_ref(&r))
+                .unwrap_or_else(|| TypeRef::Primitive(PrimitiveType::String)),
+            params: self
+                .params
+                .into_iter()
+                .map(|(k, v)| (k, parse_type_ref(&v)))
+                .collect(),
             is_const: self.is_const.unwrap_or(false),
             ..Default::default()
         }
@@ -1430,7 +1579,11 @@ impl YamlDomainService {
             name,
             description: self.description,
             stateless: self.stateless.unwrap_or(true),
-            dependencies: self.dependencies.into_iter().map(|d| d.into_dependency()).collect(),
+            dependencies: self
+                .dependencies
+                .into_iter()
+                .map(|d| d.into_dependency())
+                .collect(),
             methods: self.methods.into_iter().map(|m| m.into_method()).collect(),
             ..Default::default()
         }
@@ -1471,7 +1624,11 @@ impl YamlServiceMethod {
             name: self.name,
             description: self.description,
             is_async: self.is_async.unwrap_or(true),
-            params: self.params.into_iter().map(|(k, v)| (k, parse_type_ref(&v))).collect(),
+            params: self
+                .params
+                .into_iter()
+                .map(|(k, v)| (k, parse_type_ref(&v)))
+                .collect(),
             returns: self.returns.map(|r| parse_type_ref(&r)),
             error_type: self.error,
             ..Default::default()
@@ -1512,7 +1669,11 @@ impl YamlUseCase {
             name,
             description: self.description,
             actor: self.actor,
-            input: self.input.into_iter().map(|(k, v)| (k, parse_type_ref(&v))).collect(),
+            input: self
+                .input
+                .into_iter()
+                .map(|(k, v)| (k, parse_type_ref(&v)))
+                .collect(),
             output: self.output.map(|o| parse_type_ref(&o)),
             steps: self.steps,
             is_async: self.is_async.unwrap_or(true),
@@ -1530,7 +1691,11 @@ impl YamlDomainEvent {
             aggregate: self.aggregate,
             version: self.version.unwrap_or(1),
             storage: self.storage.map(|s| s.into_event_storage()),
-            fields: self.fields.into_iter().map(|f| f.into_event_field()).collect(),
+            fields: self
+                .fields
+                .into_iter()
+                .map(|f| f.into_event_field())
+                .collect(),
             migrations: self.migrations,
             ..Default::default()
         }
@@ -1565,11 +1730,27 @@ impl YamlAuthorization {
     pub fn into_authorization(self) -> AuthorizationConfig {
         AuthorizationConfig {
             permissions: self.permissions,
-            roles: self.roles.into_iter().map(|(name, r)| r.into_role(name)).collect(),
-            policies: self.policies.into_iter().map(|(name, p)| p.into_policy(name)).collect(),
-            resource_policies: self.resource_policies.into_iter().map(|(name, rp)| (name, rp.into_resource_policy())).collect(),
+            roles: self
+                .roles
+                .into_iter()
+                .map(|(name, r)| r.into_role(name))
+                .collect(),
+            policies: self
+                .policies
+                .into_iter()
+                .map(|(name, p)| p.into_policy(name))
+                .collect(),
+            resource_policies: self
+                .resource_policies
+                .into_iter()
+                .map(|(name, rp)| (name, rp.into_resource_policy()))
+                .collect(),
             attributes: self.attributes.map(|a| a.into_attributes()),
-            abac_policies: self.abac_policies.into_iter().map(|(name, ap)| ap.into_abac_policy(name)).collect(),
+            abac_policies: self
+                .abac_policies
+                .into_iter()
+                .map(|(name, ap)| ap.into_abac_policy(name))
+                .collect(),
             ..Default::default()
         }
     }
@@ -1596,7 +1777,10 @@ impl YamlPolicy {
         PolicyDefinition {
             name,
             description: self.description,
-            policy_type: self.policy_type.map(|t| PolicyType::from_str(&t)).unwrap_or_default(),
+            policy_type: self
+                .policy_type
+                .map(|t| PolicyType::from_str(&t))
+                .unwrap_or_default(),
             rules: self.rules.into_iter().map(|r| r.into_rule()).collect(),
             ..Default::default()
         }
@@ -1608,7 +1792,15 @@ impl YamlPolicyRule {
     pub fn into_rule(self) -> PolicyRule {
         match self {
             YamlPolicyRule::Simple(s) => PolicyRule::Permission(s),
-            YamlPolicyRule::Full { permission, role, owner, condition, message, not, policy } => {
+            YamlPolicyRule::Full {
+                permission,
+                role,
+                owner,
+                condition,
+                message,
+                not,
+                policy,
+            } => {
                 if let Some(perm) = permission {
                     PolicyRule::Permission(perm)
                 } else if let Some(r) = role {
@@ -1644,7 +1836,11 @@ impl YamlResourcePolicy {
             create: self.create.into_iter().map(|r| r.into_rule()).collect(),
             update: self.update.into_iter().map(|r| r.into_rule()).collect(),
             delete: self.delete.into_iter().map(|r| r.into_rule()).collect(),
-            custom: self.custom.into_iter().map(|(k, v)| (k, v.into_iter().map(|r| r.into_rule()).collect())).collect(),
+            custom: self
+                .custom
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().map(|r| r.into_rule()).collect()))
+                .collect(),
             ..Default::default()
         }
     }
@@ -1662,7 +1858,13 @@ impl YamlResourcePolicyRule {
                     ResourcePolicyRule::Policy(s)
                 }
             }
-            YamlResourcePolicyRule::Full { policy, permission, owner, condition, message } => {
+            YamlResourcePolicyRule::Full {
+                policy,
+                permission,
+                owner,
+                condition,
+                message,
+            } => {
                 if let Some(p) = policy {
                     ResourcePolicyRule::Policy(p)
                 } else if let Some(perm) = permission {
@@ -1718,8 +1920,16 @@ impl YamlProjection {
             aggregation: self.aggregation.unwrap_or(false),
             partition_by: self.partition_by,
             storage: self.storage.map(|s| s.into_storage()),
-            source_events: self.source_events.into_iter().map(|e| e.into_source_event()).collect(),
-            external_events: self.external_events.into_iter().map(|e| e.into_source_event()).collect(),
+            source_events: self
+                .source_events
+                .into_iter()
+                .map(|e| e.into_source_event())
+                .collect(),
+            external_events: self
+                .external_events
+                .into_iter()
+                .map(|e| e.into_source_event())
+                .collect(),
             fields: self.fields.into_iter().map(|f| f.into_field()).collect(),
             indexes: self.indexes.into_iter().map(|i| i.into_index()).collect(),
             ..Default::default()
@@ -1800,7 +2010,11 @@ impl YamlAppService {
             name,
             description: self.description,
             is_async: self.is_async.unwrap_or(true),
-            dependencies: self.dependencies.into_iter().map(|d| d.into_tuple()).collect(),
+            dependencies: self
+                .dependencies
+                .into_iter()
+                .map(|d| d.into_tuple())
+                .collect(),
             methods: self.methods.into_iter().map(|m| m.into_method()).collect(),
             ..Default::default()
         }
@@ -1819,9 +2033,10 @@ impl YamlServiceDep {
                     (s.clone(), s)
                 }
             }
-            YamlServiceDep::Map(map) => {
-                map.into_iter().next().unwrap_or((String::new(), String::new()))
-            }
+            YamlServiceDep::Map(map) => map
+                .into_iter()
+                .next()
+                .unwrap_or((String::new(), String::new())),
         }
     }
 }
@@ -1829,7 +2044,8 @@ impl YamlServiceDep {
 impl YamlAppServiceMethod {
     /// Convert to AST AppServiceMethod
     pub fn into_method(self) -> AppServiceMethod {
-        let params: IndexMap<String, TypeRef> = self.params
+        let params: IndexMap<String, TypeRef> = self
+            .params
             .into_iter()
             .flat_map(|m| m.into_iter())
             .map(|(k, v)| (k, parse_type_ref(&v)))
@@ -1855,7 +2071,11 @@ impl YamlHandler {
             name,
             description: self.description,
             event: self.event,
-            dependencies: self.dependencies.into_iter().map(|d| d.into_tuple()).collect(),
+            dependencies: self
+                .dependencies
+                .into_iter()
+                .map(|d| d.into_tuple())
+                .collect(),
             retry: self.retry.map(|r| r.into_retry()),
             async_dispatch: self.async_dispatch.unwrap_or(true),
             transaction: self.transaction,
@@ -1909,7 +2129,8 @@ impl YamlIntegration {
 impl YamlIntegrationMethod {
     /// Convert to AST IntegrationMethod
     pub fn into_method(self) -> IntegrationMethod {
-        let params: IndexMap<String, TypeRef> = self.params
+        let params: IndexMap<String, TypeRef> = self
+            .params
             .into_iter()
             .flat_map(|m| m.into_iter())
             .map(|(k, v)| (k, parse_type_ref(&v)))
@@ -1942,7 +2163,11 @@ impl YamlHttpConfig {
     pub fn into_http_config(self) -> HttpConfig {
         HttpConfig {
             prefix: self.prefix,
-            routes: self.routes.into_iter().map(|(k, v)| (k, v.into_route_group())).collect(),
+            routes: self
+                .routes
+                .into_iter()
+                .map(|(k, v)| (k, v.into_route_group()))
+                .collect(),
         }
     }
 }
@@ -1953,7 +2178,11 @@ impl YamlRouteGroup {
         RouteGroup {
             prefix: self.prefix,
             middleware: self.middleware,
-            endpoints: self.endpoints.into_iter().map(|e| e.into_endpoint()).collect(),
+            endpoints: self
+                .endpoints
+                .into_iter()
+                .map(|e| e.into_endpoint())
+                .collect(),
         }
     }
 }
@@ -1978,7 +2207,11 @@ impl YamlGrpcConfig {
     pub fn into_grpc_config(self) -> GrpcConfig {
         GrpcConfig {
             package: self.package,
-            services: self.services.into_iter().map(|(k, v)| (k, v.into_grpc_service())).collect(),
+            services: self
+                .services
+                .into_iter()
+                .map(|(k, v)| (k, v.into_grpc_service()))
+                .collect(),
         }
     }
 }
@@ -1988,7 +2221,11 @@ impl YamlGrpcService {
     pub fn into_grpc_service(self) -> GrpcService {
         GrpcService {
             description: self.description,
-            methods: self.methods.into_iter().map(|m| m.into_grpc_method()).collect(),
+            methods: self
+                .methods
+                .into_iter()
+                .map(|m| m.into_grpc_method())
+                .collect(),
         }
     }
 }
@@ -2017,9 +2254,17 @@ impl YamlDto {
             description: self.description,
             generic: self.generic.unwrap_or(false),
             from_entity: self.from_entity,
-            fields: self.fields.into_iter().map(|f| f.into_dto_field()).collect(),
+            fields: self
+                .fields
+                .into_iter()
+                .map(|f| f.into_dto_field())
+                .collect(),
             exclude: self.exclude,
-            computed: self.computed.into_iter().map(|c| c.into_computed()).collect(),
+            computed: self
+                .computed
+                .into_iter()
+                .map(|c| c.into_computed())
+                .collect(),
             ..Default::default()
         }
     }
@@ -2030,7 +2275,12 @@ impl YamlDtoField {
     pub fn into_dto_field(self) -> DtoField {
         match self {
             YamlDtoField::Simple(name) => DtoField::Simple(name),
-            YamlDtoField::Full { name, field_type, optional, .. } => DtoField::Full {
+            YamlDtoField::Full {
+                name,
+                field_type,
+                optional,
+                ..
+            } => DtoField::Full {
                 name,
                 field_type: parse_type_ref(&field_type),
                 optional: optional.unwrap_or(false),
@@ -2090,7 +2340,8 @@ impl YamlRepositoryTrait {
 impl YamlTraitMethod {
     /// Convert to AST TraitMethod
     pub fn into_method(self) -> TraitMethod {
-        let params: IndexMap<String, TypeRef> = self.params
+        let params: IndexMap<String, TypeRef> = self
+            .params
             .into_iter()
             .flat_map(|m| m.into_iter())
             .map(|(k, v)| (k, parse_type_ref(&v)))
@@ -2103,4 +2354,3 @@ impl YamlTraitMethod {
         }
     }
 }
-

@@ -1,10 +1,10 @@
 //! Theme generator (Material 3)
 
+use crate::ast::ModuleSchema;
 use crate::kotlin::error::Result;
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::ModuleSchema;
 use std::path::Path;
 
 /// Generate Material 3 theme files
@@ -35,10 +35,7 @@ pub fn generate_theme(
 }
 
 /// Generate Color.kt with material color scheme
-fn generate_colors(
-    generator: &MobileGenerator,
-    output_dir: &Path,
-) -> Result<std::path::PathBuf> {
+fn generate_colors(generator: &MobileGenerator, output_dir: &Path) -> Result<std::path::PathBuf> {
     let base_package = &generator.package_name;
     let package_name = format!("{}.presentation.ui.theme", base_package);
 
@@ -136,8 +133,15 @@ object DarkAppColors {{
     );
 
     let relative_path = "presentation/ui/theme/Color.kt";
-    match write_generated_file(output_dir, base_package, relative_path, &content, generator.skip_existing)? {
-        crate::kotlin::generators::WriteOutcome::Written(p) | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
+    match write_generated_file(
+        output_dir,
+        base_package,
+        relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
+        crate::kotlin::generators::WriteOutcome::Written(p)
+        | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
     }
 }
 
@@ -243,16 +247,20 @@ fun AppTheme(
     );
 
     let relative_path = "presentation/ui/theme/Theme.kt";
-    match write_generated_file(output_dir, base_package, relative_path, &content, generator.skip_existing)? {
-        crate::kotlin::generators::WriteOutcome::Written(p) | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
+    match write_generated_file(
+        output_dir,
+        base_package,
+        relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
+        crate::kotlin::generators::WriteOutcome::Written(p)
+        | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
     }
 }
 
 /// Generate Type.kt with typography definitions
-fn generate_type(
-    generator: &MobileGenerator,
-    output_dir: &Path,
-) -> Result<std::path::PathBuf> {
+fn generate_type(generator: &MobileGenerator, output_dir: &Path) -> Result<std::path::PathBuf> {
     let base_package = &generator.package_name;
     let package_name = format!("{}.presentation.ui.theme", base_package);
 
@@ -382,16 +390,20 @@ val Typography = Typography(
     );
 
     let relative_path = "presentation/ui/theme/Type.kt";
-    match write_generated_file(output_dir, base_package, relative_path, &content, generator.skip_existing)? {
-        crate::kotlin::generators::WriteOutcome::Written(p) | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
+    match write_generated_file(
+        output_dir,
+        base_package,
+        relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
+        crate::kotlin::generators::WriteOutcome::Written(p)
+        | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
     }
 }
 
 /// Generate Shape.kt with shape definitions
-fn generate_shape(
-    generator: &MobileGenerator,
-    output_dir: &Path,
-) -> Result<std::path::PathBuf> {
+fn generate_shape(generator: &MobileGenerator, output_dir: &Path) -> Result<std::path::PathBuf> {
     let base_package = &generator.package_name;
     let package_name = format!("{}.presentation.ui.theme", base_package);
 
@@ -419,7 +431,14 @@ val Shapes = Shapes(
     );
 
     let relative_path = "presentation/ui/theme/Shape.kt";
-    match write_generated_file(output_dir, base_package, relative_path, &content, generator.skip_existing)? {
-        crate::kotlin::generators::WriteOutcome::Written(p) | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
+    match write_generated_file(
+        output_dir,
+        base_package,
+        relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
+        crate::kotlin::generators::WriteOutcome::Written(p)
+        | crate::kotlin::generators::WriteOutcome::Skipped(p) => Ok(p),
     }
 }

@@ -63,7 +63,11 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
         };
         // A parse error in one module shouldn't hide dangling FKs in the rest — record and continue.
         if !parse_errors.is_empty() {
-            parse_failures.push(format!("{}: {} parse error(s)", project.name, parse_errors.len()));
+            parse_failures.push(format!(
+                "{}: {} parse error(s)",
+                project.name,
+                parse_errors.len()
+            ));
         }
 
         // ADR-0014 sweep gate — an undeclared posture is a hard failure, not a warning: the fence

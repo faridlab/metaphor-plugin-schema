@@ -1,8 +1,8 @@
 //! Proto file parser
 
+use crate::webgen::{Error, Result};
 use std::fs;
 use std::path::PathBuf;
-use crate::webgen::{Error, Result};
 
 /// Proto entity information
 #[derive(Debug, Clone)]
@@ -33,7 +33,10 @@ pub struct ProtoParser;
 
 impl ProtoParser {
     /// Find all proto entities in a module's proto directory
-    pub fn find_entities(proto_dir: &PathBuf, entity_filter: Option<&str>) -> Result<Vec<ProtoEntity>> {
+    pub fn find_entities(
+        proto_dir: &PathBuf,
+        entity_filter: Option<&str>,
+    ) -> Result<Vec<ProtoEntity>> {
         if !proto_dir.exists() {
             return Err(Error::ProtoNotFound(proto_dir.clone()));
         }
@@ -42,8 +45,9 @@ impl ProtoParser {
         let mut entities = Vec::new();
 
         for proto_file in proto_files {
-            let content = fs::read_to_string(&proto_file)
-                .map_err(|e| Error::Parse(format!("Failed to read {}: {}", proto_file.display(), e)))?;
+            let content = fs::read_to_string(&proto_file).map_err(|e| {
+                Error::Parse(format!("Failed to read {}: {}", proto_file.display(), e))
+            })?;
 
             // Find message definitions (simplified proto parsing)
             for line in content.lines() {
@@ -68,7 +72,8 @@ impl ProtoParser {
                             {
                                 entities.push(ProtoEntity {
                                     name: name.to_string(),
-                                    proto_file: proto_file.file_name()
+                                    proto_file: proto_file
+                                        .file_name()
                                         .unwrap_or_default()
                                         .to_string_lossy()
                                         .to_string(),
@@ -78,7 +83,8 @@ impl ProtoParser {
                         } else {
                             entities.push(ProtoEntity {
                                 name: name.to_string(),
-                                proto_file: proto_file.file_name()
+                                proto_file: proto_file
+                                    .file_name()
                                     .unwrap_or_default()
                                     .to_string_lossy()
                                     .to_string(),
@@ -98,10 +104,11 @@ impl ProtoParser {
         let mut proto_files = Vec::new();
 
         if dir.is_dir() {
-            for entry in fs::read_dir(dir)
-                .map_err(|e| Error::Parse(format!("Failed to read directory {}: {}", dir.display(), e)))?
-            {
-                let entry = entry.map_err(|e| Error::Parse(format!("Failed to read entry: {}", e)))?;
+            for entry in fs::read_dir(dir).map_err(|e| {
+                Error::Parse(format!("Failed to read directory {}: {}", dir.display(), e))
+            })? {
+                let entry =
+                    entry.map_err(|e| Error::Parse(format!("Failed to read entry: {}", e)))?;
                 let path = entry.path();
 
                 if path.is_dir() {
@@ -144,7 +151,10 @@ pub fn to_snake_case(s: &str) -> String {
                 // 2. Previous char is digit (e.g., "OAuth2T" -> "oauth2_t")
                 // 3. This is the start of a new word after acronym (e.g., "MFADevice" -> "mfa_device")
                 //    detected when prev is uppercase AND next is lowercase
-                if prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_is_lower) {
+                if prev.is_lowercase()
+                    || prev.is_ascii_digit()
+                    || (prev.is_uppercase() && next_is_lower)
+                {
                     result.push('_');
                 }
             }
@@ -195,9 +205,18 @@ pub fn to_kebab_case(s: &str) -> String {
 
 /// Pluralize a word (simple English rules)
 pub fn pluralize(word: &str) -> String {
-    if word.ends_with('y') && !word.ends_with("ey") && !word.ends_with("ay") && !word.ends_with("oy") && !word.ends_with("uy") {
+    if word.ends_with('y')
+        && !word.ends_with("ey")
+        && !word.ends_with("ay")
+        && !word.ends_with("oy")
+        && !word.ends_with("uy")
+    {
         format!("{}ies", &word[..word.len() - 1])
-    } else if word.ends_with('s') || word.ends_with('x') || word.ends_with("ch") || word.ends_with("sh") {
+    } else if word.ends_with('s')
+        || word.ends_with('x')
+        || word.ends_with("ch")
+        || word.ends_with("sh")
+    {
         format!("{}es", word)
     } else {
         format!("{}s", word)

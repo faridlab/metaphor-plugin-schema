@@ -5,8 +5,8 @@
 //! - Updates generated content
 //! - Handles overrides from `*.openapi.yaml` files
 
+use super::section_markers::{parse_sections, SectionMarker, SectionType};
 use super::{MergeResult, MergeStrategy};
-use super::section_markers::{SectionMarker, SectionType, parse_sections};
 use indexmap::IndexMap;
 use std::fmt;
 
@@ -76,13 +76,25 @@ impl OpenApiMerger {
         custom_sections: &[&super::section_markers::ParsedSection],
     ) {
         if line.contains("[/PATHS:GENERATED]") {
-            self.insert_custom_block(result, "PATHS:CUSTOM", "paths", custom_sections,
-                SectionMarker::PATHS_CUSTOM_START, SectionMarker::PATHS_CUSTOM_END);
+            self.insert_custom_block(
+                result,
+                "PATHS:CUSTOM",
+                "paths",
+                custom_sections,
+                SectionMarker::PATHS_CUSTOM_START,
+                SectionMarker::PATHS_CUSTOM_END,
+            );
         }
 
         if line.contains("[/SCHEMAS:GENERATED]") {
-            self.insert_custom_block(result, "SCHEMAS:CUSTOM", "schemas", custom_sections,
-                SectionMarker::SCHEMAS_CUSTOM_START, SectionMarker::SCHEMAS_CUSTOM_END);
+            self.insert_custom_block(
+                result,
+                "SCHEMAS:CUSTOM",
+                "schemas",
+                custom_sections,
+                SectionMarker::SCHEMAS_CUSTOM_START,
+                SectionMarker::SCHEMAS_CUSTOM_END,
+            );
         }
     }
 
@@ -130,7 +142,13 @@ impl OpenApiMerger {
     }
 
     /// Process a single line for marker insertion
-    fn process_marker_line(&self, result: &mut String, state: &mut MarkerState, line: &str, trimmed: &str) {
+    fn process_marker_line(
+        &self,
+        result: &mut String,
+        state: &mut MarkerState,
+        line: &str,
+        trimmed: &str,
+    ) {
         // Handle section transitions
         if trimmed == "paths:" {
             result.push_str(&format!("{}\n", SectionMarker::PATHS_GENERATED_START));

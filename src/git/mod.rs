@@ -113,9 +113,7 @@ impl GitChangeDetector {
             anyhow::bail!("Not a git repository");
         }
 
-        let path = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         Ok(PathBuf::from(path))
     }
@@ -212,8 +210,7 @@ impl GitChangeDetector {
                 continue;
             }
 
-            let change_type = ChangeType::from_git_status(parts[0])
-                .unwrap_or(ChangeType::Modified);
+            let change_type = ChangeType::from_git_status(parts[0]).unwrap_or(ChangeType::Modified);
 
             // Handle renames (R100 old_path new_path)
             let file_path = if change_type == ChangeType::Renamed && parts.len() >= 3 {
@@ -264,7 +261,9 @@ impl GitChangeDetector {
         let mut outputs = Vec::new();
 
         // Extract entity name from filename
-        let filename = schema.path.file_stem()
+        let filename = schema
+            .path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
 
@@ -284,7 +283,10 @@ impl GitChangeDetector {
                     target: "rust".to_string(),
                 });
                 outputs.push(AffectedOutput {
-                    path: PathBuf::from(format!("src/infrastructure/persistence/{}_repository.rs", snake_case)),
+                    path: PathBuf::from(format!(
+                        "src/infrastructure/persistence/{}_repository.rs",
+                        snake_case
+                    )),
                     target: "repository".to_string(),
                 });
                 outputs.push(AffectedOutput {
@@ -533,7 +535,13 @@ mod tests {
         assert_eq!(ChangeType::from_git_status("M"), Some(ChangeType::Modified));
         assert_eq!(ChangeType::from_git_status("A"), Some(ChangeType::Added));
         assert_eq!(ChangeType::from_git_status("D"), Some(ChangeType::Deleted));
-        assert_eq!(ChangeType::from_git_status("R100"), Some(ChangeType::Renamed));
-        assert_eq!(ChangeType::from_git_status("?"), Some(ChangeType::Untracked));
+        assert_eq!(
+            ChangeType::from_git_status("R100"),
+            Some(ChangeType::Renamed)
+        );
+        assert_eq!(
+            ChangeType::from_git_status("?"),
+            Some(ChangeType::Untracked)
+        );
     }
 }

@@ -25,8 +25,8 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::commands::workspace::Workspace;
 use super::manifest;
+use crate::commands::workspace::Workspace;
 
 /// Collect composed modules' OpenAPI specs into the consumer app declared by
 /// `module` (or auto-detected from the current directory).
@@ -70,10 +70,7 @@ pub(super) fn execute_openapi_collect(module: Option<String>) -> Result<()> {
     fs::create_dir_all(&dest_dir)
         .with_context(|| format!("failed to create dest dir {}", dest_dir.display()))?;
 
-    println!(
-        "Collecting module OpenAPI specs into {}:",
-        vendor.dest
-    );
+    println!("Collecting module OpenAPI specs into {}:", vendor.dest);
 
     let mut copied = 0usize;
     let mut skipped = 0usize;
@@ -98,7 +95,10 @@ pub(super) fn execute_openapi_collect(module: Option<String>) -> Result<()> {
             .with_context(|| format!("failed to copy {} -> {}", src.display(), dest.display()))?;
         let shown = dest.strip_prefix(&app_path).unwrap_or(&dest);
         let bytes = fs::metadata(&dest).map(|md| md.len()).unwrap_or(0);
-        println!("  \u{2713} {m} \u{2192} {} ({bytes} bytes)", shown.display());
+        println!(
+            "  \u{2713} {m} \u{2192} {} ({bytes} bytes)",
+            shown.display()
+        );
         copied += 1;
     }
 

@@ -31,8 +31,11 @@ impl ServiceInitGenerator {
     ) -> Result<DomainGenerationResult> {
         let mut result = DomainGenerationResult::new();
 
-        let init_dir = self.config.output_dir
-            .join(&self.config.module).join("infrastructure");
+        let init_dir = self
+            .config
+            .output_dir
+            .join(&self.config.module)
+            .join("infrastructure");
 
         if !self.config.dry_run {
             fs::create_dir_all(&init_dir).ok();
@@ -70,7 +73,11 @@ impl ServiceInitGenerator {
     }
 
     /// Generate the init file content
-    fn generate_init_content(&self, entities: &[EntityDefinition], existing_custom: Option<String>) -> String {
+    fn generate_init_content(
+        &self,
+        entities: &[EntityDefinition],
+        existing_custom: Option<String>,
+    ) -> String {
         let module = &self.config.module;
         let root = &self.config.import_root;
 
@@ -88,7 +95,8 @@ impl ServiceInitGenerator {
             .collect();
 
         // Generate imports for API clients
-        let api_client_imports: Vec<String> = entities.iter()
+        let api_client_imports: Vec<String> = entities
+            .iter()
             .map(|e| {
                 let pascal = to_pascal_case(&e.name);
                 format!(
@@ -99,7 +107,8 @@ impl ServiceInitGenerator {
             .collect();
 
         // Generate service registration calls
-        let service_registrations: Vec<String> = entities.iter()
+        let service_registrations: Vec<String> = entities
+            .iter()
             .map(|e| {
                 let pascal = to_pascal_case(&e.name);
                 format!(
@@ -112,7 +121,7 @@ impl ServiceInitGenerator {
         let custom_section = existing_custom.unwrap_or_default();
 
         format!(
-r#"/**
+            r#"/**
  * Service Initialization for {module} module
  *
  * This file initializes all domain services with their API client implementations.

@@ -4,10 +4,10 @@
 //! Creates type-safe workflow execution with saga pattern support, compensation,
 //! and human task handling.
 
-use super::{GenerateError, GeneratedOutput, Generator, build_generated_path, build_subdirectory_mod};
-use crate::ast::workflow::{
-    Workflow, StepType,
+use super::{
+    build_generated_path, build_subdirectory_mod, GenerateError, GeneratedOutput, Generator,
 };
+use crate::ast::workflow::{StepType, Workflow};
 use crate::resolver::ResolvedSchema;
 use crate::utils::{to_pascal_case, to_snake_case};
 use std::fmt::Write;
@@ -22,7 +22,7 @@ pub struct FlowGenerator {
 impl FlowGenerator {
     pub fn new() -> Self {
         Self {
-            group_by_domain: false,  // Keep flat - only one file per entity
+            group_by_domain: false, // Keep flat - only one file per entity
         }
     }
 
@@ -39,7 +39,11 @@ impl FlowGenerator {
 
         // Flow status enum
         writeln!(output, "/// Execution status for {} flow", name).unwrap();
-        writeln!(output, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]").unwrap();
+        writeln!(
+            output,
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]"
+        )
+        .unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
         writeln!(output, "pub enum {}FlowStatus {{", name).unwrap();
         writeln!(output, "    /// Flow is pending execution").unwrap();
@@ -61,7 +65,11 @@ impl FlowGenerator {
 
         // Step enum
         writeln!(output, "/// Steps in {} flow", name).unwrap();
-        writeln!(output, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]").unwrap();
+        writeln!(
+            output,
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]"
+        )
+        .unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
         writeln!(output, "pub enum {}FlowStep {{", name).unwrap();
 
@@ -119,7 +127,12 @@ impl FlowGenerator {
         writeln!(output, "    pub fn is_complete(&self) -> bool {{").unwrap();
         writeln!(output, "        matches!(").unwrap();
         writeln!(output, "            self.status,").unwrap();
-        writeln!(output, "            {}FlowStatus::Completed | {}FlowStatus::Failed | {}FlowStatus::Cancelled", name, name, name).unwrap();
+        writeln!(
+            output,
+            "            {}FlowStatus::Completed | {}FlowStatus::Failed | {}FlowStatus::Cancelled",
+            name, name, name
+        )
+        .unwrap();
         writeln!(output, "        )").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -128,14 +141,27 @@ impl FlowGenerator {
         writeln!(output, "    pub fn is_running(&self) -> bool {{").unwrap();
         writeln!(output, "        matches!(").unwrap();
         writeln!(output, "            self.status,").unwrap();
-        writeln!(output, "            {}FlowStatus::Running | {}FlowStatus::Waiting", name, name).unwrap();
+        writeln!(
+            output,
+            "            {}FlowStatus::Running | {}FlowStatus::Waiting",
+            name, name
+        )
+        .unwrap();
         writeln!(output, "        )").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    /// Set a context variable").unwrap();
-        writeln!(output, "    pub fn set_context(&mut self, key: &str, value: serde_json::Value) {{").unwrap();
-        writeln!(output, "        if let serde_json::Value::Object(ref mut map) = self.context {{").unwrap();
+        writeln!(
+            output,
+            "    pub fn set_context(&mut self, key: &str, value: serde_json::Value) {{"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        if let serde_json::Value::Object(ref mut map) = self.context {{"
+        )
+        .unwrap();
         writeln!(output, "            map.insert(key.to_string(), value);").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "        self.updated_at = chrono::Utc::now();").unwrap();
@@ -143,8 +169,16 @@ impl FlowGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "    /// Get a context variable").unwrap();
-        writeln!(output, "    pub fn get_context(&self, key: &str) -> Option<&serde_json::Value> {{").unwrap();
-        writeln!(output, "        if let serde_json::Value::Object(ref map) = self.context {{").unwrap();
+        writeln!(
+            output,
+            "    pub fn get_context(&self, key: &str) -> Option<&serde_json::Value> {{"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        if let serde_json::Value::Object(ref map) = self.context {{"
+        )
+        .unwrap();
         writeln!(output, "            map.get(key)").unwrap();
         writeln!(output, "        }} else {{").unwrap();
         writeln!(output, "            None").unwrap();
@@ -158,16 +192,47 @@ impl FlowGenerator {
         // The entity field is not present on FlowInstance (it stores JSON context),
         // so we satisfy the interface by returning a todo placeholder — implementors
         // can add an entity field in the CUSTOM section.
-        writeln!(output, "// Phase 1: FlowInstance satisfies backbone_core::flow::WorkflowContext.").unwrap();
-        writeln!(output, "// The entity() accessor requires the entity to be carried in the instance;").unwrap();
-        writeln!(output, "// add `pub entity: {name}` in the // <<< CUSTOM section and remove the todo!.", name = name).unwrap();
+        writeln!(
+            output,
+            "// Phase 1: FlowInstance satisfies backbone_core::flow::WorkflowContext."
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "// The entity() accessor requires the entity to be carried in the instance;"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "// add `pub entity: {name}` in the // <<< CUSTOM section and remove the todo!.",
+            name = name
+        )
+        .unwrap();
         writeln!(output, "#[allow(unused_variables)]").unwrap();
-        writeln!(output, "impl WorkflowContext<{name}FlowInstance> for {name}FlowInstance {{", name = name).unwrap();
-        writeln!(output, "    fn entity(&self) -> &{name}FlowInstance {{ self }}", name = name).unwrap();
-        writeln!(output, "    fn set_var(&mut self, key: &str, value: serde_json::Value) {{").unwrap();
+        writeln!(
+            output,
+            "impl WorkflowContext<{name}FlowInstance> for {name}FlowInstance {{",
+            name = name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    fn entity(&self) -> &{name}FlowInstance {{ self }}",
+            name = name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    fn set_var(&mut self, key: &str, value: serde_json::Value) {{"
+        )
+        .unwrap();
         writeln!(output, "        self.set_context(key, value);").unwrap();
         writeln!(output, "    }}").unwrap();
-        writeln!(output, "    fn get_var(&self, key: &str) -> Option<&serde_json::Value> {{").unwrap();
+        writeln!(
+            output,
+            "    fn get_var(&self, key: &str) -> Option<&serde_json::Value> {{"
+        )
+        .unwrap();
         writeln!(output, "        self.get_context(key)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
@@ -194,15 +259,30 @@ impl FlowGenerator {
                     writeln!(output, "    async fn handle_{}(", method_name).unwrap();
                     writeln!(output, "        &self,").unwrap();
                     writeln!(output, "        instance: &mut {}FlowInstance,", name).unwrap();
-                    writeln!(output, "    ) -> Result<Option<{}FlowStep>, FlowError>;", name).unwrap();
+                    writeln!(
+                        output,
+                        "    ) -> Result<Option<{}FlowStep>, FlowError>;",
+                        name
+                    )
+                    .unwrap();
                     writeln!(output).unwrap();
                 }
                 StepType::Wait(_) => {
-                    writeln!(output, "    /// Handle wait step {} (returns when event received or timeout)", step.name).unwrap();
+                    writeln!(
+                        output,
+                        "    /// Handle wait step {} (returns when event received or timeout)",
+                        step.name
+                    )
+                    .unwrap();
                     writeln!(output, "    async fn handle_{}(", method_name).unwrap();
                     writeln!(output, "        &self,").unwrap();
                     writeln!(output, "        instance: &mut {}FlowInstance,", name).unwrap();
-                    writeln!(output, "    ) -> Result<Option<{}FlowStep>, FlowError>;", name).unwrap();
+                    writeln!(
+                        output,
+                        "    ) -> Result<Option<{}FlowStep>, FlowError>;",
+                        name
+                    )
+                    .unwrap();
                     writeln!(output).unwrap();
                 }
                 StepType::Condition(_) => {
@@ -218,7 +298,11 @@ impl FlowGenerator {
                     writeln!(output, "    async fn create_task_{}(", method_name).unwrap();
                     writeln!(output, "        &self,").unwrap();
                     writeln!(output, "        instance: &mut {}FlowInstance,", name).unwrap();
-                    writeln!(output, "    ) -> Result<String, FlowError>; // Returns task ID").unwrap();
+                    writeln!(
+                        output,
+                        "    ) -> Result<String, FlowError>; // Returns task ID"
+                    )
+                    .unwrap();
                     writeln!(output).unwrap();
                     writeln!(output, "    /// Handle task completion for {}", step.name).unwrap();
                     writeln!(output, "    async fn complete_task_{}(", method_name).unwrap();
@@ -226,7 +310,12 @@ impl FlowGenerator {
                     writeln!(output, "        instance: &mut {}FlowInstance,", name).unwrap();
                     writeln!(output, "        decision: &str,").unwrap();
                     writeln!(output, "        form_data: serde_json::Value,").unwrap();
-                    writeln!(output, "    ) -> Result<Option<{}FlowStep>, FlowError>;", name).unwrap();
+                    writeln!(
+                        output,
+                        "    ) -> Result<Option<{}FlowStep>, FlowError>;",
+                        name
+                    )
+                    .unwrap();
                     writeln!(output).unwrap();
                 }
                 StepType::Terminal(_) => {
@@ -242,7 +331,12 @@ impl FlowGenerator {
                     writeln!(output, "    async fn handle_{}(", method_name).unwrap();
                     writeln!(output, "        &self,").unwrap();
                     writeln!(output, "        instance: &mut {}FlowInstance,", name).unwrap();
-                    writeln!(output, "    ) -> Result<Option<{}FlowStep>, FlowError>;", name).unwrap();
+                    writeln!(
+                        output,
+                        "    ) -> Result<Option<{}FlowStep>, FlowError>;",
+                        name
+                    )
+                    .unwrap();
                     writeln!(output).unwrap();
                 }
             }
@@ -270,13 +364,23 @@ impl FlowGenerator {
 
         // Flow executor struct
         writeln!(output, "/// Executor for {} flow", name).unwrap();
-        writeln!(output, "pub struct {}FlowExecutor<H: {}StepHandler> {{", name, name).unwrap();
+        writeln!(
+            output,
+            "pub struct {}FlowExecutor<H: {}StepHandler> {{",
+            name, name
+        )
+        .unwrap();
         writeln!(output, "    handler: Arc<H>,").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
         // Implementation
-        writeln!(output, "impl<H: {}StepHandler> {}FlowExecutor<H> {{", name, name).unwrap();
+        writeln!(
+            output,
+            "impl<H: {}StepHandler> {}FlowExecutor<H> {{",
+            name, name
+        )
+        .unwrap();
         writeln!(output, "    /// Create a new flow executor").unwrap();
         writeln!(output, "    pub fn new(handler: Arc<H>) -> Self {{").unwrap();
         writeln!(output, "        Self {{ handler }}").unwrap();
@@ -285,12 +389,28 @@ impl FlowGenerator {
 
         writeln!(output, "    /// Start a new flow instance").unwrap();
         writeln!(output, "    pub async fn start(&self, instance_id: impl Into<String>) -> Result<{}FlowInstance, FlowError> {{", name).unwrap();
-        writeln!(output, "        let mut instance = {}FlowInstance::new(instance_id);", name).unwrap();
-        writeln!(output, "        instance.status = {}FlowStatus::Running;", name).unwrap();
+        writeln!(
+            output,
+            "        let mut instance = {}FlowInstance::new(instance_id);",
+            name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        instance.status = {}FlowStatus::Running;",
+            name
+        )
+        .unwrap();
 
         // Set initial step
         if let Some(first_step) = flow.steps.first() {
-            writeln!(output, "        instance.current_step = Some({}FlowStep::{});", name, to_pascal_case(&first_step.name)).unwrap();
+            writeln!(
+                output,
+                "        instance.current_step = Some({}FlowStep::{});",
+                name,
+                to_pascal_case(&first_step.name)
+            )
+            .unwrap();
         }
 
         writeln!(output, "        Ok(instance)").unwrap();
@@ -300,9 +420,17 @@ impl FlowGenerator {
         // Execute step method
         writeln!(output, "    /// Execute the current step").unwrap();
         writeln!(output, "    pub async fn execute_step(&self, instance: &mut {}FlowInstance) -> Result<(), FlowError> {{", name).unwrap();
-        writeln!(output, "        let current_step = match instance.current_step {{").unwrap();
+        writeln!(
+            output,
+            "        let current_step = match instance.current_step {{"
+        )
+        .unwrap();
         writeln!(output, "            Some(step) => step,").unwrap();
-        writeln!(output, "            None => return Err(FlowError::NoCurrentStep),").unwrap();
+        writeln!(
+            output,
+            "            None => return Err(FlowError::NoCurrentStep),"
+        )
+        .unwrap();
         writeln!(output, "        }};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        let next_step = match current_step {{").unwrap();
@@ -313,20 +441,50 @@ impl FlowGenerator {
 
             match &step.step_type {
                 StepType::Condition(_) => {
-                    writeln!(output, "            {}FlowStep::{} => {{", name, step_variant).unwrap();
-                    writeln!(output, "                let next = self.handler.evaluate_{}(instance).await?;", method_name).unwrap();
+                    writeln!(
+                        output,
+                        "            {}FlowStep::{} => {{",
+                        name, step_variant
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "                let next = self.handler.evaluate_{}(instance).await?;",
+                        method_name
+                    )
+                    .unwrap();
                     writeln!(output, "                Some(next)").unwrap();
                     writeln!(output, "            }}").unwrap();
                 }
                 StepType::Terminal(_) => {
-                    writeln!(output, "            {}FlowStep::{} => {{", name, step_variant).unwrap();
-                    writeln!(output, "                self.handler.handle_{}(instance).await?;", method_name).unwrap();
+                    writeln!(
+                        output,
+                        "            {}FlowStep::{} => {{",
+                        name, step_variant
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "                self.handler.handle_{}(instance).await?;",
+                        method_name
+                    )
+                    .unwrap();
                     writeln!(output, "                None // Terminal step").unwrap();
                     writeln!(output, "            }}").unwrap();
                 }
                 _ => {
-                    writeln!(output, "            {}FlowStep::{} => {{", name, step_variant).unwrap();
-                    writeln!(output, "                self.handler.handle_{}(instance).await?", method_name).unwrap();
+                    writeln!(
+                        output,
+                        "            {}FlowStep::{} => {{",
+                        name, step_variant
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "                self.handler.handle_{}(instance).await?",
+                        method_name
+                    )
+                    .unwrap();
                     writeln!(output, "            }}").unwrap();
                 }
             }
@@ -335,16 +493,29 @@ impl FlowGenerator {
         writeln!(output, "        }};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        // Mark current step as completed").unwrap();
-        writeln!(output, "        instance.completed_steps.push(current_step);").unwrap();
+        writeln!(
+            output,
+            "        instance.completed_steps.push(current_step);"
+        )
+        .unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        // Move to next step").unwrap();
         writeln!(output, "        match next_step {{").unwrap();
         writeln!(output, "            Some(next) => {{").unwrap();
-        writeln!(output, "                instance.current_step = Some(next);").unwrap();
+        writeln!(
+            output,
+            "                instance.current_step = Some(next);"
+        )
+        .unwrap();
         writeln!(output, "            }}").unwrap();
         writeln!(output, "            None => {{").unwrap();
         writeln!(output, "                instance.current_step = None;").unwrap();
-        writeln!(output, "                instance.status = {}FlowStatus::Completed;", name).unwrap();
+        writeln!(
+            output,
+            "                instance.status = {}FlowStatus::Completed;",
+            name
+        )
+        .unwrap();
         writeln!(output, "            }}").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
@@ -356,7 +527,12 @@ impl FlowGenerator {
         // Run to completion method
         writeln!(output, "    /// Run the flow to completion").unwrap();
         writeln!(output, "    pub async fn run(&self, instance: &mut {}FlowInstance) -> Result<(), FlowError> {{", name).unwrap();
-        writeln!(output, "        while !instance.is_complete() && instance.status != {}FlowStatus::Waiting {{", name).unwrap();
+        writeln!(
+            output,
+            "        while !instance.is_complete() && instance.status != {}FlowStatus::Waiting {{",
+            name
+        )
+        .unwrap();
         writeln!(output, "            self.execute_step(instance).await?;").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "        Ok(())").unwrap();
@@ -365,16 +541,36 @@ impl FlowGenerator {
 
         // Cancel method
         writeln!(output, "    /// Cancel the flow").unwrap();
-        writeln!(output, "    pub fn cancel(&self, instance: &mut {}FlowInstance) {{", name).unwrap();
-        writeln!(output, "        instance.status = {}FlowStatus::Cancelled;", name).unwrap();
+        writeln!(
+            output,
+            "    pub fn cancel(&self, instance: &mut {}FlowInstance) {{",
+            name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        instance.status = {}FlowStatus::Cancelled;",
+            name
+        )
+        .unwrap();
         writeln!(output, "        instance.updated_at = chrono::Utc::now();").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Fail method
         writeln!(output, "    /// Mark flow as failed").unwrap();
-        writeln!(output, "    pub fn fail(&self, instance: &mut {}FlowInstance, error: impl Into<String>) {{", name).unwrap();
-        writeln!(output, "        instance.status = {}FlowStatus::Failed;", name).unwrap();
+        writeln!(
+            output,
+            "    pub fn fail(&self, instance: &mut {}FlowInstance, error: impl Into<String>) {{",
+            name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        instance.status = {}FlowStatus::Failed;",
+            name
+        )
+        .unwrap();
         writeln!(output, "        instance.error = Some(error.into());").unwrap();
         writeln!(output, "        instance.updated_at = chrono::Utc::now();").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -406,7 +602,11 @@ impl FlowGenerator {
         writeln!(output, "use serde::{{Deserialize, Serialize}};").unwrap();
         writeln!(output, "use std::sync::Arc;").unwrap();
         writeln!(output, "use chrono;").unwrap();
-        writeln!(output, "use backbone_core::flow::{{WorkflowStep, WorkflowContext}};").unwrap();
+        writeln!(
+            output,
+            "use backbone_core::flow::{{WorkflowStep, WorkflowContext}};"
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Error type
@@ -419,7 +619,11 @@ impl FlowGenerator {
         writeln!(output, "    #[error(\"Step execution failed: {{0}}\")]").unwrap();
         writeln!(output, "    StepFailed(String),").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "    #[error(\"Condition evaluation failed: {{0}}\")]").unwrap();
+        writeln!(
+            output,
+            "    #[error(\"Condition evaluation failed: {{0}}\")]"
+        )
+        .unwrap();
         writeln!(output, "    ConditionFailed(String),").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "    #[error(\"Compensation failed: {{0}}\")]").unwrap();
@@ -431,8 +635,16 @@ impl FlowGenerator {
         writeln!(output, "    #[error(\"Flow cancelled\")]").unwrap();
         writeln!(output, "    Cancelled,").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "    #[error(\"Invalid state transition: {{from}} -> {{to}}\")]").unwrap();
-        writeln!(output, "    InvalidTransition {{ from: String, to: String }},").unwrap();
+        writeln!(
+            output,
+            "    #[error(\"Invalid state transition: {{from}} -> {{to}}\")]"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    InvalidTransition {{ from: String, to: String }},"
+        )
+        .unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -468,32 +680,70 @@ impl FlowGenerator {
 
         writeln!(output, "    #[test]").unwrap();
         writeln!(output, "    fn test_flow_instance_creation() {{").unwrap();
-        writeln!(output, "        let instance = {}FlowInstance::new(\"test-1\");", name).unwrap();
+        writeln!(
+            output,
+            "        let instance = {}FlowInstance::new(\"test-1\");",
+            name
+        )
+        .unwrap();
         writeln!(output, "        assert_eq!(instance.id, \"test-1\");").unwrap();
-        writeln!(output, "        assert_eq!(instance.status, {}FlowStatus::Pending);", name).unwrap();
+        writeln!(
+            output,
+            "        assert_eq!(instance.status, {}FlowStatus::Pending);",
+            name
+        )
+        .unwrap();
         writeln!(output, "        assert!(!instance.is_complete());").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    #[test]").unwrap();
         writeln!(output, "    fn test_flow_context() {{").unwrap();
-        writeln!(output, "        let mut instance = {}FlowInstance::new(\"test-2\");", name).unwrap();
-        writeln!(output, "        instance.set_context(\"key\", serde_json::json!(\"value\"));").unwrap();
+        writeln!(
+            output,
+            "        let mut instance = {}FlowInstance::new(\"test-2\");",
+            name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        instance.set_context(\"key\", serde_json::json!(\"value\"));"
+        )
+        .unwrap();
         writeln!(output, "        let value = instance.get_context(\"key\");").unwrap();
-        writeln!(output, "        assert_eq!(value, Some(&serde_json::json!(\"value\")));").unwrap();
+        writeln!(
+            output,
+            "        assert_eq!(value, Some(&serde_json::json!(\"value\")));"
+        )
+        .unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    #[test]").unwrap();
         writeln!(output, "    fn test_flow_status_transitions() {{").unwrap();
-        writeln!(output, "        let mut instance = {}FlowInstance::new(\"test-3\");", name).unwrap();
+        writeln!(
+            output,
+            "        let mut instance = {}FlowInstance::new(\"test-3\");",
+            name
+        )
+        .unwrap();
         writeln!(output, "        assert!(!instance.is_running());").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        instance.status = {}FlowStatus::Running;", name).unwrap();
+        writeln!(
+            output,
+            "        instance.status = {}FlowStatus::Running;",
+            name
+        )
+        .unwrap();
         writeln!(output, "        assert!(instance.is_running());").unwrap();
         writeln!(output, "        assert!(!instance.is_complete());").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        instance.status = {}FlowStatus::Completed;", name).unwrap();
+        writeln!(
+            output,
+            "        instance.status = {}FlowStatus::Completed;",
+            name
+        )
+        .unwrap();
         writeln!(output, "        assert!(instance.is_complete());").unwrap();
         writeln!(output, "        assert!(!instance.is_running());").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -518,13 +768,22 @@ impl Generator for FlowGenerator {
         for workflow in &schema.schema.workflows {
             let file_name = format!("{}_workflow.rs", to_snake_case(&workflow.name));
             let content = self.generate_flow_file(workflow)?;
-            let path = build_generated_path("src/application/workflows", &workflow.name, &file_name, self.group_by_domain);
+            let path = build_generated_path(
+                "src/application/workflows",
+                &workflow.name,
+                &file_name,
+                self.group_by_domain,
+            );
             output.add_file(path, content);
 
             // Generate subdirectory mod.rs if grouping by domain
             if self.group_by_domain {
-                let mod_path = PathBuf::from(format!("src/application/workflows/{}/mod.rs", to_snake_case(&workflow.name)));
-                let sub_mod_content = build_subdirectory_mod(&workflow.name, &file_name.replace(".rs", ""));
+                let mod_path = PathBuf::from(format!(
+                    "src/application/workflows/{}/mod.rs",
+                    to_snake_case(&workflow.name)
+                ));
+                let sub_mod_content =
+                    build_subdirectory_mod(&workflow.name, &file_name.replace(".rs", ""));
                 output.add_file(mod_path, sub_mod_content);
             }
         }
@@ -606,7 +865,9 @@ mod tests {
     fn create_test_workflow() -> Workflow {
         Workflow {
             name: "OrderProcessing".to_string(),
-            description: Some("Process an order through validation, payment, and fulfillment".to_string()),
+            description: Some(
+                "Process an order through validation, payment, and fulfillment".to_string(),
+            ),
             steps: vec![
                 Step {
                     name: "validate_order".to_string(),

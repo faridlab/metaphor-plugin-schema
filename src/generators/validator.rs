@@ -27,9 +27,11 @@
 //! pub type OrderValidator = EntityValidator<Order>;
 //! ```
 
-use super::{GenerateError, GeneratedOutput, Generator, build_generated_path, build_subdirectory_mod};
-use crate::ast::model::{Field, Model};
+use super::{
+    build_generated_path, build_subdirectory_mod, GenerateError, GeneratedOutput, Generator,
+};
 use crate::ast::hook::Hook;
+use crate::ast::model::{Field, Model};
 use crate::ast::PrimitiveType;
 use crate::ast::TypeRef;
 use crate::resolver::ResolvedSchema;
@@ -44,7 +46,9 @@ pub struct ValidatorGenerator {
 
 impl ValidatorGenerator {
     pub fn new() -> Self {
-        Self { group_by_domain: false }
+        Self {
+            group_by_domain: false,
+        }
     }
 
     pub fn with_group_by_domain(mut self, group: bool) -> Self {
@@ -57,7 +61,9 @@ impl ValidatorGenerator {
         let mut imports: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
         for field in &model.fields {
-            if field.is_primary_key() { continue; }
+            if field.is_primary_key() {
+                continue;
+            }
 
             let is_optional = field.type_ref.is_optional();
             let inner = self.unwrap_optional(&field.type_ref);
@@ -68,7 +74,9 @@ impl ValidatorGenerator {
                     // because `RequiredUuid` operates on `&str`.
                     TypeRef::Primitive(PrimitiveType::String)
                     | TypeRef::Primitive(PrimitiveType::Email)
-                    | TypeRef::Primitive(PrimitiveType::Url) => { imports.insert("RequiredString"); }
+                    | TypeRef::Primitive(PrimitiveType::Url) => {
+                        imports.insert("RequiredString");
+                    }
                     _ => {}
                 }
             }
@@ -90,10 +98,18 @@ impl ValidatorGenerator {
         if let Some(h) = hook {
             for rule in &h.rules {
                 match rule.name.as_str() {
-                    "max_length" => { imports.insert("MaxLength"); }
-                    "min_length" => { imports.insert("MaxLength"); } // no MinLength yet, skip
-                    "required"   => { imports.insert("RequiredString"); }
-                    "pattern"    => { imports.insert("Regex"); }
+                    "max_length" => {
+                        imports.insert("MaxLength");
+                    }
+                    "min_length" => {
+                        imports.insert("MaxLength");
+                    } // no MinLength yet, skip
+                    "required" => {
+                        imports.insert("RequiredString");
+                    }
+                    "pattern" => {
+                        imports.insert("Regex");
+                    }
                     _ => {}
                 }
             }
@@ -112,10 +128,11 @@ impl ValidatorGenerator {
     }
 
     fn is_string_inner(&self, t: &TypeRef) -> bool {
-        matches!(t,
+        matches!(
+            t,
             TypeRef::Primitive(PrimitiveType::String)
-            | TypeRef::Primitive(PrimitiveType::Email)
-            | TypeRef::Primitive(PrimitiveType::Url)
+                | TypeRef::Primitive(PrimitiveType::Email)
+                | TypeRef::Primitive(PrimitiveType::Url)
         )
     }
 
@@ -165,7 +182,10 @@ impl ValidatorGenerator {
                     if let Some(n) = attr.first_arg().and_then(|v| v.as_int()) {
                         if self.is_string_inner(inner) {
                             let accessor = if is_optional {
-                                format!("e.{}.as_deref().unwrap_or(\"\")", escape_rust_keyword(fname))
+                                format!(
+                                    "e.{}.as_deref().unwrap_or(\"\")",
+                                    escape_rust_keyword(fname)
+                                )
                             } else {
                                 format!("e.{}.as_str()", escape_rust_keyword(fname))
                             };
@@ -185,7 +205,8 @@ impl ValidatorGenerator {
                         // `Int` and `Int32` both map to Rust `i32`; only `Int64` is native `i64`.
                         let cast = match inner {
                             TypeRef::Primitive(PrimitiveType::Int64) => Some(""),
-                            TypeRef::Primitive(PrimitiveType::Int) | TypeRef::Primitive(PrimitiveType::Int32) => Some(" as i64"),
+                            TypeRef::Primitive(PrimitiveType::Int)
+                            | TypeRef::Primitive(PrimitiveType::Int32) => Some(" as i64"),
                             _ => None,
                         };
                         if let Some(cast) = cast {
@@ -202,7 +223,10 @@ impl ValidatorGenerator {
                 "pattern" => {
                     if let Some(pat) = attr.first_arg().and_then(|v| v.as_str()) {
                         let accessor = if is_optional {
-                            format!("e.{}.as_deref().unwrap_or(\"\")", escape_rust_keyword(fname))
+                            format!(
+                                "e.{}.as_deref().unwrap_or(\"\")",
+                                escape_rust_keyword(fname)
+                            )
                         } else {
                             format!("e.{}.as_str()", escape_rust_keyword(fname))
                         };
@@ -220,36 +244,76 @@ impl ValidatorGenerator {
     }
 
     /// Generate a validator constructor function for one entity.
-    fn generate_validator(&self, model: &Model, hook: Option<&Hook>) -> Result<String, GenerateError> {
+    fn generate_validator(
+        &self,
+        model: &Model,
+        hook: Option<&Hook>,
+    ) -> Result<String, GenerateError> {
         let mut output = String::new();
         let name = &model.name;
         let snake_name = to_snake_case(name);
 
         writeln!(output, "//! Validator for {} entity", name).unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+        writeln!(
+            output,
+            "//! Generated by metaphor-schema. Do not edit manually."
+        )
+        .unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Returns an `EntityValidator<{name}>` pre-loaded with schema-derived").unwrap();
-        writeln!(output, "//! field rules. Extend in the `// <<< CUSTOM` zone.").unwrap();
+        writeln!(
+            output,
+            "//! Returns an `EntityValidator<{name}>` pre-loaded with schema-derived"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "//! field rules. Extend in the `// <<< CUSTOM` zone."
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Imports
         let rule_imports = self.collect_rule_imports(model, hook);
-        writeln!(output, "use backbone_core::{{EntityValidator, ValidationErrors, ValidationError}};").unwrap();
+        writeln!(
+            output,
+            "use backbone_core::{{EntityValidator, ValidationErrors, ValidationError}};"
+        )
+        .unwrap();
         if !rule_imports.is_empty() {
-            writeln!(output, "use backbone_core::{{{}}};", rule_imports.join(", ")).unwrap();
+            writeln!(
+                output,
+                "use backbone_core::{{{}}};",
+                rule_imports.join(", ")
+            )
+            .unwrap();
         }
         writeln!(output, "use crate::domain::entity::{};", name).unwrap();
         writeln!(output).unwrap();
 
         // Type alias
         writeln!(output, "/// Validator type alias for {} entities.", name).unwrap();
-        writeln!(output, "pub type {}Validator = EntityValidator<{}>;", name, name).unwrap();
+        writeln!(
+            output,
+            "pub type {}Validator = EntityValidator<{}>;",
+            name, name
+        )
+        .unwrap();
         writeln!(output).unwrap();
 
         // Constructor function
-        writeln!(output, "/// Build a validator for {} with all schema-defined field rules.", name).unwrap();
-        writeln!(output, "pub fn {}_validator() -> {}Validator {{", snake_name, name).unwrap();
+        writeln!(
+            output,
+            "/// Build a validator for {} with all schema-defined field rules.",
+            name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "pub fn {}_validator() -> {}Validator {{",
+            snake_name, name
+        )
+        .unwrap();
         writeln!(output, "    EntityValidator::new()").unwrap();
 
         // Emit field rules
@@ -265,13 +329,22 @@ impl ValidatorGenerator {
         writeln!(output, "    // <<< CUSTOM RULES").unwrap();
         if let Some(hook) = hook {
             for rule in &hook.rules {
-                writeln!(output, "    // hook rule: {} (implement in CUSTOM zone)", rule.name).unwrap();
+                writeln!(
+                    output,
+                    "    // hook rule: {} (implement in CUSTOM zone)",
+                    rule.name
+                )
+                .unwrap();
             }
         }
         writeln!(output, "    // END CUSTOM RULES").unwrap();
 
         if !any_rules {
-            writeln!(output, "        // No schema-derived rules — add custom rules above.").unwrap();
+            writeln!(
+                output,
+                "        // No schema-derived rules — add custom rules above."
+            )
+            .unwrap();
         }
 
         writeln!(output, "}}").unwrap();
@@ -285,17 +358,37 @@ impl ValidatorGenerator {
     /// Generate the shared validation types module (re-export from backbone-core).
     fn generate_shared_types(&self) -> String {
         let mut output = String::new();
-        writeln!(output, "//! Shared validation types — re-exported from backbone-core.").unwrap();
+        writeln!(
+            output,
+            "//! Shared validation types — re-exported from backbone-core."
+        )
+        .unwrap();
         writeln!(output, "//!").unwrap();
-        writeln!(output, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+        writeln!(
+            output,
+            "//! Generated by metaphor-schema. Do not edit manually."
+        )
+        .unwrap();
         writeln!(output).unwrap();
         writeln!(output, "pub use backbone_core::{{").unwrap();
-        writeln!(output, "    ValidationError, ValidationErrors, EntityValidator,").unwrap();
-        writeln!(output, "    RequiredString, MaxLength, NonNegative, OptionalNotBlank, Regex, RequiredUuid,").unwrap();
+        writeln!(
+            output,
+            "    ValidationError, ValidationErrors, EntityValidator,"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    RequiredString, MaxLength, NonNegative, OptionalNotBlank, Regex, RequiredUuid,"
+        )
+        .unwrap();
         writeln!(output, "}};").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "/// Convenience result type for validation.").unwrap();
-        writeln!(output, "pub type ValidationResult = Result<(), ValidationErrors>;").unwrap();
+        writeln!(
+            output,
+            "pub type ValidationResult = Result<(), ValidationErrors>;"
+        )
+        .unwrap();
         output
     }
 }
@@ -309,7 +402,10 @@ impl Default for ValidatorGenerator {
 impl Generator for ValidatorGenerator {
     fn generate(&self, schema: &ResolvedSchema) -> Result<GeneratedOutput, GenerateError> {
         let mut output = GeneratedOutput::new();
-        let model_names: Vec<String> = schema.schema.models.iter()
+        let model_names: Vec<String> = schema
+            .schema
+            .models
+            .iter()
             .map(|m| m.name.clone())
             .collect();
 
@@ -336,13 +432,10 @@ impl Generator for ValidatorGenerator {
                 );
                 output.add_file(path, content);
 
-                let sub_mod_path = PathBuf::from(format!(
-                    "src/application/validator/{}/mod.rs", snake_name
-                ));
-                let sub_mod = build_subdirectory_mod(
-                    &model.name,
-                    &format!("{}_validator", snake_name),
-                );
+                let sub_mod_path =
+                    PathBuf::from(format!("src/application/validator/{}/mod.rs", snake_name));
+                let sub_mod =
+                    build_subdirectory_mod(&model.name, &format!("{}_validator", snake_name));
                 output.add_file(sub_mod_path, sub_mod);
             } else {
                 let path = PathBuf::from(format!(
@@ -358,7 +451,11 @@ impl Generator for ValidatorGenerator {
             let mut mod_content = String::new();
             writeln!(mod_content, "//! Entity validators").unwrap();
             writeln!(mod_content, "//!").unwrap();
-            writeln!(mod_content, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+            writeln!(
+                mod_content,
+                "//! Generated by metaphor-schema. Do not edit manually."
+            )
+            .unwrap();
             writeln!(mod_content).unwrap();
             writeln!(mod_content, "pub mod shared_types;").unwrap();
             writeln!(mod_content, "pub use shared_types::{{ValidationError, ValidationErrors, ValidationResult, EntityValidator}};").unwrap();
@@ -369,13 +466,21 @@ impl Generator for ValidatorGenerator {
             writeln!(mod_content).unwrap();
             for name in &model_names {
                 let snake = to_snake_case(name);
-                writeln!(mod_content, "pub use {snake}_validator::{{{name}Validator, {snake}_validator}};",
-                    snake = snake, name = name).unwrap();
+                writeln!(
+                    mod_content,
+                    "pub use {snake}_validator::{{{name}Validator, {snake}_validator}};",
+                    snake = snake,
+                    name = name
+                )
+                .unwrap();
             }
             writeln!(mod_content).unwrap();
             writeln!(mod_content, "// <<< CUSTOM").unwrap();
             writeln!(mod_content, "// END CUSTOM").unwrap();
-            output.add_file(PathBuf::from("src/application/validator/mod.rs"), mod_content);
+            output.add_file(
+                PathBuf::from("src/application/validator/mod.rs"),
+                mod_content,
+            );
         }
 
         Ok(output)
@@ -409,10 +514,8 @@ mod tests {
             Field {
                 name: "notes".to_string(),
                 type_ref: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::String))),
-                attributes: vec![
-                    Attribute::new("max_length")
-                        .with_arg(crate::ast::model::AttributeValue::Int(500))
-                ],
+                attributes: vec![Attribute::new("max_length")
+                    .with_arg(crate::ast::model::AttributeValue::Int(500))],
                 ..Default::default()
             },
         ];
@@ -431,9 +534,15 @@ mod tests {
         let gen = ValidatorGenerator::new();
         let out = gen.generate(&schema).unwrap();
 
-        assert!(out.files.contains_key(&PathBuf::from("src/application/validator/order_validator.rs")));
-        assert!(out.files.contains_key(&PathBuf::from("src/application/validator/shared_types.rs")));
-        assert!(out.files.contains_key(&PathBuf::from("src/application/validator/mod.rs")));
+        assert!(out.files.contains_key(&PathBuf::from(
+            "src/application/validator/order_validator.rs"
+        )));
+        assert!(out
+            .files
+            .contains_key(&PathBuf::from("src/application/validator/shared_types.rs")));
+        assert!(out
+            .files
+            .contains_key(&PathBuf::from("src/application/validator/mod.rs")));
     }
 
     #[test]
@@ -442,8 +551,11 @@ mod tests {
         let gen = ValidatorGenerator::new();
         let out = gen.generate(&schema).unwrap();
 
-        let content = out.files
-            .get(&PathBuf::from("src/application/validator/order_validator.rs"))
+        let content = out
+            .files
+            .get(&PathBuf::from(
+                "src/application/validator/order_validator.rs",
+            ))
             .unwrap();
 
         assert!(content.contains("pub fn order_validator()"));
@@ -458,7 +570,8 @@ mod tests {
         let gen = ValidatorGenerator::new();
         let out = gen.generate(&schema).unwrap();
 
-        let content = out.files
+        let content = out
+            .files
             .get(&PathBuf::from("src/application/validator/shared_types.rs"))
             .unwrap();
 

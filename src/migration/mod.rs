@@ -2,19 +2,19 @@
 //!
 //! Provides schema comparison, safety analysis, and migration generation for PostgreSQL.
 
-mod schema_diff;
 mod pipeline;
+mod schema_diff;
 
 #[cfg(feature = "database")]
 mod database_introspector;
 
 pub use schema_diff::{
-    ColumnChange, ColumnSnapshot, EnumChange, EnumSnapshot, IndexChange, IndexSnapshot,
-    RenameCandidate, SchemaDiff, SchemaSnapshot, TableChange, TableSnapshot,
-    diff_schemas, generate_migration, generate_up_migration, generate_down_migration,
+    diff_schemas, generate_down_migration, generate_migration, generate_up_migration, ColumnChange,
+    ColumnSnapshot, EnumChange, EnumSnapshot, IndexChange, IndexSnapshot, RenameCandidate,
+    SchemaDiff, SchemaSnapshot, TableChange, TableSnapshot,
 };
 
-pub use pipeline::{SafetyAnalysis, MigrationResult, is_safe_type_widening};
+pub use pipeline::{is_safe_type_widening, MigrationResult, SafetyAnalysis};
 
 #[cfg(feature = "database")]
-pub use database_introspector::{DatabaseIntrospector, normalize_pg_type};
+pub use database_introspector::{normalize_pg_type, DatabaseIntrospector};

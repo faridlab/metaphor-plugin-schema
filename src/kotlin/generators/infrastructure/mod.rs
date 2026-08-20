@@ -1,11 +1,11 @@
 //! Infrastructure layer generators (API clients, database, sync)
 
+use crate::ast::{Model, ModuleSchema};
 use crate::kotlin::error::{MobileGenError, Result};
-use serde::Serialize;
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::{Model, ModuleSchema};
+use serde::Serialize;
 use std::path::Path;
 
 /// Generate Ktor API clients for all models in a schema
@@ -17,7 +17,9 @@ pub fn generate_api_clients(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::ApiClients) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::ApiClients)
+        {
             continue;
         }
         match generate_api_client(generator, model, &schema.name, output_dir) {
@@ -26,7 +28,9 @@ pub fn generate_api_clients(
                 result.api_clients_count += 1;
             }
             Ok(None) => {
-                result.skipped_files.push(format!("{}ApiClient.kt", model.name).into());
+                result
+                    .skipped_files
+                    .push(format!("{}ApiClient.kt", model.name).into());
             }
             Err(e) => return Err(e),
         }
@@ -44,7 +48,8 @@ pub fn generate_database(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Database) {
+        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Database)
+        {
             continue;
         }
         match generate_sqldelight_schema(generator, model, &schema.name, output_dir) {
@@ -77,7 +82,10 @@ pub fn generate_offline_repositories(
     let mut result = GenerationResult::default();
 
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::OfflineRepositories) {
+        if generator.is_disabled_for_model(
+            model,
+            crate::kotlin::config::GenerationTarget::OfflineRepositories,
+        ) {
             continue;
         }
         match generate_offline_repository(generator, model, &schema.name, output_dir) {
@@ -86,7 +94,9 @@ pub fn generate_offline_repositories(
                 result.offline_repositories_count += 1;
             }
             Ok(None) => {
-                result.skipped_files.push(format!("Offline{}Repository.kt", model.name).into());
+                result
+                    .skipped_files
+                    .push(format!("Offline{}Repository.kt", model.name).into());
             }
             Err(e) => return Err(e),
         }
@@ -115,9 +125,9 @@ pub fn generate_sync(
                 result.generated_files.push(path);
             }
             Ok(None) => {
-                result.skipped_files.push(
-                    format!("{}SyncHandler.kt", model.name).into(),
-                );
+                result
+                    .skipped_files
+                    .push(format!("{}SyncHandler.kt", model.name).into());
             }
             Err(e) => return Err(e),
         }
@@ -140,7 +150,10 @@ fn generate_offline_repository(
 
     // Offline repos live at <module>/infrastructure/repository/offline/ so the
     // whole generated tree is grouped module-first.
-    let package = format!("{}.{}.infrastructure.repository.offline", base_package, module_lower);
+    let package = format!(
+        "{}.{}.infrastructure.repository.offline",
+        base_package, module_lower
+    );
     let entity_package = format!("{}.{}.domain.entity", base_package, module_lower);
     let api_package = format!("{}.{}.infrastructure.api", base_package, module_lower);
 
@@ -156,14 +169,22 @@ fn generate_offline_repository(
     let content = generator
         .handlebars
         .render("offline_repository", &data)
-        .map_err(|e| MobileGenError::template(format!("OfflineRepository template error: {}", e)))?;
+        .map_err(|e| {
+            MobileGenError::template(format!("OfflineRepository template error: {}", e))
+        })?;
 
     let relative_path = format!(
         "{}/infrastructure/repository/offline/Offline{}Repository.kt",
         module_lower, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -209,7 +230,13 @@ fn generate_sync_handler(
         module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -251,11 +278,16 @@ fn generate_api_client(
     // Create output path: infrastructure/{module}/api/{Entity}ApiClient.kt
     let relative_path = format!(
         "{}/infrastructure/api/{}ApiClient.kt",
-        module_name,
-        entity_name
+        module_name, entity_name
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -272,10 +304,14 @@ fn generate_sqldelight_schema(
     let collection = model.collection_name();
 
     // Get fields for SQLDelight schema
-    let fields: Vec<SqlField> = model.fields.iter().map(|f| SqlField {
-        name: f.name.clone(),
-        sql_type: to_sqldelight_type(&generator.type_mapper, &f.type_ref),
-    }).collect();
+    let fields: Vec<SqlField> = model
+        .fields
+        .iter()
+        .map(|f| SqlField {
+            name: f.name.clone(),
+            sql_type: to_sqldelight_type(&generator.type_mapper, &f.type_ref),
+        })
+        .collect();
 
     // Prepare template data
     let entity_name_lower = entity_name.to_lowercase();
@@ -293,13 +329,15 @@ fn generate_sqldelight_schema(
         .map_err(|e| MobileGenError::template(format!("SQLDelight template error: {}", e)))?;
 
     // Create output path: sqldelight/{module}/{entity_lower}.sq
-    let relative_path = format!(
-        "sqldelight/{}/{}.sq",
-        module_name,
-        entity_name_lower
-    );
+    let relative_path = format!("sqldelight/{}/{}.sq", module_name, entity_name_lower);
 
-    match write_generated_file(output_dir, &generator.package_name, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        &generator.package_name,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -307,7 +345,10 @@ fn generate_sqldelight_schema(
 
 /// Map backbone TypeRef to SQLDelight type
 /// Extends KotlinTypeMapper::to_sqldelight_type to handle full TypeRef
-fn to_sqldelight_type(mapper: &crate::kotlin::lang::KotlinTypeMapper, type_ref: &crate::ast::TypeRef) -> String {
+fn to_sqldelight_type(
+    mapper: &crate::kotlin::lang::KotlinTypeMapper,
+    type_ref: &crate::ast::TypeRef,
+) -> String {
     use crate::ast::TypeRef;
 
     match type_ref {
@@ -391,10 +432,7 @@ mod tests {
     #[test]
     fn generates_offline_repository_for_each_model() {
         let generator = MobileGenerator::new("com.test").unwrap();
-        let schema = make_schema("widgets", vec![
-            Model::new("Widget"),
-            Model::new("Gadget"),
-        ]);
+        let schema = make_schema("widgets", vec![Model::new("Widget"), Model::new("Gadget")]);
         let dir = tempdir().unwrap();
 
         let result = generate_offline_repositories(&generator, &schema, dir.path()).unwrap();
@@ -419,33 +457,43 @@ mod tests {
         // Class declaration
         assert!(
             content.contains("class OfflineWidgetRepository("),
-            "expected class declaration; got:\n{}", content
+            "expected class declaration; got:\n{}",
+            content
         );
         // Extends the framework base class
         assert!(
             content.contains(": OfflineFirstRepository<Widget>("),
-            "expected to extend OfflineFirstRepository; got:\n{}", content
+            "expected to extend OfflineFirstRepository; got:\n{}",
+            content
         );
         // Cache-aware delete is wired (this is the whole point of generation)
         assert!(
-            content.contains("override suspend fun deleteFromApi(id: String): Result<Unit> = api.delete(id)"),
-            "expected deleteFromApi override; got:\n{}", content
+            content.contains(
+                "override suspend fun deleteFromApi(id: String): Result<Unit> = api.delete(id)"
+            ),
+            "expected deleteFromApi override; got:\n{}",
+            content
         );
         // entityType comes from collection_name (snake_case_plural)
         assert!(
             content.contains("entityType = \"widgets\""),
-            "expected entityType matches collection name; got:\n{}", content
+            "expected entityType matches collection name; got:\n{}",
+            content
         );
         // We do NOT emit a fetchListSinceFromApi *override* — delta-sync is opt-in
         // via a *RepositoryCustom.kt file. (The KDoc may *mention* the name to
         // tell consumers how to opt in; that's expected.)
         assert!(
             !content.contains("override suspend fun fetchListSinceFromApi"),
-            "should not emit delta-sync override (opt-in via *RepositoryCustom.kt); got:\n{}", content
+            "should not emit delta-sync override (opt-in via *RepositoryCustom.kt); got:\n{}",
+            content
         );
         // Imports line up with the consumer convention
-        assert!(content.contains("import com.test.generated.widgets.infrastructure.api.WidgetApiClient"));
-        assert!(content.contains("import com.test.infrastructure.repository.OfflineFirstRepository"));
+        assert!(content
+            .contains("import com.test.generated.widgets.infrastructure.api.WidgetApiClient"));
+        assert!(
+            content.contains("import com.test.infrastructure.repository.OfflineFirstRepository")
+        );
         assert!(content.contains("import com.test.infrastructure.cache.CacheTTL"));
         // Default TTL keeps the generator decoupled from per-entity tuning
         assert!(content.contains("ttl = CacheTTL.DEFAULT"));
@@ -455,7 +503,9 @@ mod tests {
     fn skips_models_with_offlinerepositories_disabled() {
         let generator = MobileGenerator::new("com.test").unwrap();
         let mut model = Model::new("Widget");
-        model.disabled_generators.push("offlinerepositories".to_string());
+        model
+            .disabled_generators
+            .push("offlinerepositories".to_string());
         let schema = make_schema("widgets", vec![model]);
         let dir = tempdir().unwrap();
 
@@ -470,7 +520,9 @@ mod tests {
         let generator = MobileGenerator::new("com.test").unwrap();
         let mut model = Model::new("Widget");
         // Whitelist: only offlinerepositories runs for this model
-        model.enabled_generators.push("offlinerepositories".to_string());
+        model
+            .enabled_generators
+            .push("offlinerepositories".to_string());
         let schema = make_schema("widgets", vec![model]);
         let dir = tempdir().unwrap();
 
@@ -490,8 +542,10 @@ mod tests {
 
         // Module-first layout: <module>/infrastructure/repository/offline/<file>.kt
         assert!(
-            path_str.contains("widgets/infrastructure/repository/offline/OfflineWidgetRepository.kt"),
-            "expected module-first offline path; got: {}", path_str
+            path_str
+                .contains("widgets/infrastructure/repository/offline/OfflineWidgetRepository.kt"),
+            "expected module-first offline path; got: {}",
+            path_str
         );
     }
 }

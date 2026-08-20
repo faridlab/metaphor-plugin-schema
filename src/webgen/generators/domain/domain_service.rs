@@ -7,11 +7,11 @@
 
 use std::fs;
 
+use super::DomainGenerationResult;
 use crate::webgen::ast::entity::EntityDefinition;
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
 use crate::webgen::parser::to_pascal_case;
-use super::DomainGenerationResult;
 
 /// Generator for the pure domain service port.
 pub struct DomainServiceGenerator {

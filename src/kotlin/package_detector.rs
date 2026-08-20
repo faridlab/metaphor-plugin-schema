@@ -4,8 +4,8 @@
 //! by analyzing the existing project structure and configuration files.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Detected package information
 #[derive(Debug, Clone)]
@@ -68,7 +68,11 @@ pub fn detect_package(project_dir: &Path) -> PackageInfo {
     if !kotlin_base.exists() {
         // If kotlin/ doesn't exist here, we might be in commonMain directly
         let kotlin_base_alt = project_dir.join("../kotlin");
-        if let Some(pkg) = kotlin_base_alt.exists().then(|| scan_kotlin_packages(&kotlin_base_alt)).flatten() {
+        if let Some(pkg) = kotlin_base_alt
+            .exists()
+            .then(|| scan_kotlin_packages(&kotlin_base_alt))
+            .flatten()
+        {
             return PackageInfo {
                 base_package: pkg,
                 source: PackageSource::ExistingKotlinFiles,
@@ -128,8 +132,8 @@ fn parse_android_namespace(content: &str) -> Option<String> {
     // Module/platform qualifier segments that sit on top of the shared base package
     // in a KMP gradle setup (e.g. `com.example.shared`, `com.example.mobile`).
     const MODULE_SUFFIXES: &[&str] = &[
-        ".shared", ".android", ".mobile", ".ios", ".desktop",
-        ".web", ".jvm", ".js", ".native", ".common",
+        ".shared", ".android", ".mobile", ".ios", ".desktop", ".web", ".jvm", ".js", ".native",
+        ".common",
     ];
 
     namespace_pattern.captures(content).map(|caps| {
@@ -320,8 +324,14 @@ mod tests {
 
     #[test]
     fn test_base_package_from() {
-        assert_eq!(base_package_from("com.bersihir.domain.auth.entity"), "com.bersihir");
-        assert_eq!(base_package_from("id.startapp.domain.sapiens"), "id.startapp");
+        assert_eq!(
+            base_package_from("com.bersihir.domain.auth.entity"),
+            "com.bersihir"
+        );
+        assert_eq!(
+            base_package_from("id.startapp.domain.sapiens"),
+            "id.startapp"
+        );
         assert_eq!(base_package_from("single"), "single");
     }
 

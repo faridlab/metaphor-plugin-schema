@@ -17,8 +17,8 @@
 //! - Computed properties
 
 use super::{GenerateError, GeneratedOutput, Generator};
-use crate::ast::{AttributeValue, EnumDef, Entity, EntityMethod, Model, PrimitiveType, TypeRef};
 use crate::ast::hook::StateMachine;
+use crate::ast::{AttributeValue, Entity, EntityMethod, EnumDef, Model, PrimitiveType, TypeRef};
 use crate::resolver::ResolvedSchema;
 use crate::utils::{escape_rust_keyword, to_pascal_case, to_snake_case};
 use std::fmt::Write;
@@ -35,7 +35,10 @@ impl RustGenerator {
     /// Check if model has audit metadata JSONB field (new pattern)
     /// Only checks for @audit_metadata attribute to avoid ambiguity with non-audit metadata fields
     fn has_audit_metadata(&self, model: &Model) -> bool {
-        model.fields.iter().any(|f| f.has_attribute("audit_metadata"))
+        model
+            .fields
+            .iter()
+            .any(|f| f.has_attribute("audit_metadata"))
     }
 
     /// Check if model has a created_at field (legacy pattern)
@@ -60,7 +63,9 @@ impl RustGenerator {
 
     /// Check if a specific field is optional (wrapped in Option<>)
     fn is_field_optional(&self, model: &Model, field_name: &str) -> bool {
-        model.fields.iter()
+        model
+            .fields
+            .iter()
             .find(|f| f.name == field_name)
             .map(|f| matches!(f.type_ref, TypeRef::Optional(_)))
             .unwrap_or(false)
@@ -68,14 +73,19 @@ impl RustGenerator {
 
     /// Get the Rust type for a specific field (planned for future validation)
     fn _get_field_type(&self, model: &Model, field_name: &str) -> Option<String> {
-        model.fields.iter()
+        model
+            .fields
+            .iter()
             .find(|f| f.name == field_name)
             .map(|f| self.type_to_rust(&f.type_ref))
     }
 
     /// Check if model has a status field (planned for future status handling)
     fn _has_status_field(&self, model: &Model) -> bool {
-        model.fields.iter().any(|f| f.name == "status" || f.name.ends_with("_status"))
+        model
+            .fields
+            .iter()
+            .any(|f| f.name == "status" || f.name.ends_with("_status"))
     }
 
     /// Check if model has a field with @hashed attribute (for password hashing)
@@ -85,14 +95,18 @@ impl RustGenerator {
 
     /// Get the hashed field name (e.g., "password_hash")
     fn get_hashed_field_name<'a>(&self, model: &'a Model) -> Option<&'a str> {
-        model.fields.iter()
+        model
+            .fields
+            .iter()
             .find(|f| f.has_attribute("hashed"))
             .map(|f| f.name.as_str())
     }
 
     /// Check if hashed field is optional
     fn is_hashed_field_optional(&self, model: &Model) -> bool {
-        model.fields.iter()
+        model
+            .fields
+            .iter()
             .find(|f| f.has_attribute("hashed"))
             .map(|f| f.type_ref.is_optional())
             .unwrap_or(false)
@@ -107,21 +121,31 @@ impl RustGenerator {
     /// `StateMachineGenerator::generate_hook_file`), so every entity-side
     /// reference must use the hook name too — deriving them from the model
     /// name breaks whenever the two differ.
-    fn find_state_machine_hook<'a>(&self, model: &Model, schema: &'a ResolvedSchema) -> Option<&'a crate::ast::hook::Hook> {
-        schema.schema.hooks
-            .iter()
-            .find(|h| (h.model_ref == model.name || h.name == model.name) && h.state_machine.is_some())
+    fn find_state_machine_hook<'a>(
+        &self,
+        model: &Model,
+        schema: &'a ResolvedSchema,
+    ) -> Option<&'a crate::ast::hook::Hook> {
+        schema.schema.hooks.iter().find(|h| {
+            (h.model_ref == model.name || h.name == model.name) && h.state_machine.is_some()
+        })
     }
 
     /// Return the `StateMachine` config for this model if its hook defines one.
-    fn find_state_machine_field<'a>(&self, model: &Model, schema: &'a ResolvedSchema) -> Option<&'a StateMachine> {
+    fn find_state_machine_field<'a>(
+        &self,
+        model: &Model,
+        schema: &'a ResolvedSchema,
+    ) -> Option<&'a StateMachine> {
         self.find_state_machine_hook(model, schema)
             .and_then(|h| h.state_machine.as_ref())
     }
 
     /// Get the primary key field name
     fn get_pk_field<'a>(&self, model: &'a Model) -> &'a str {
-        model.fields.iter()
+        model
+            .fields
+            .iter()
             .find(|f| f.is_primary_key())
             .map(|f| f.name.as_str())
             .unwrap_or("id")
@@ -129,7 +153,9 @@ impl RustGenerator {
 
     /// Get the primary key type
     fn get_pk_type(&self, model: &Model) -> String {
-        model.fields.iter()
+        model
+            .fields
+            .iter()
             .find(|f| f.is_primary_key())
             .map(|f| self.type_to_rust(&f.type_ref))
             .unwrap_or_else(|| "Uuid".to_string())
@@ -140,25 +166,41 @@ impl RustGenerator {
         let id_type = format!("{}Id", entity_name);
 
         writeln!(output, "/// Strongly-typed ID for {}", entity_name).unwrap();
-        writeln!(output, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]").unwrap();
+        writeln!(
+            output,
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]"
+        )
+        .unwrap();
         writeln!(output, "#[serde(transparent)]").unwrap();
         writeln!(output, "pub struct {}(pub Uuid);", id_type).unwrap();
         writeln!(output).unwrap();
         writeln!(output, "impl {} {{", id_type).unwrap();
         writeln!(output, "    pub fn new(id: Uuid) -> Self {{ Self(id) }}").unwrap();
-        writeln!(output, "    pub fn generate() -> Self {{ Self(Uuid::new_v4()) }}").unwrap();
+        writeln!(
+            output,
+            "    pub fn generate() -> Self {{ Self(Uuid::new_v4()) }}"
+        )
+        .unwrap();
         writeln!(output, "    pub fn into_inner(self) -> Uuid {{ self.0 }}").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "impl std::fmt::Display for {} {{", id_type).unwrap();
-        writeln!(output, "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{").unwrap();
+        writeln!(
+            output,
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{"
+        )
+        .unwrap();
         writeln!(output, "        write!(f, \"{{}}\", self.0)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "impl std::str::FromStr for {} {{", id_type).unwrap();
         writeln!(output, "    type Err = uuid::Error;").unwrap();
-        writeln!(output, "    fn from_str(s: &str) -> Result<Self, Self::Err> {{").unwrap();
+        writeln!(
+            output,
+            "    fn from_str(s: &str) -> Result<Self, Self::Err> {{"
+        )
+        .unwrap();
         writeln!(output, "        Ok(Self(Uuid::parse_str(s)?))").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
@@ -186,16 +228,30 @@ impl RustGenerator {
     }
 
     /// Find the Entity definition for a model (if exists)
-    fn find_entity_for_model<'a>(&self, model: &Model, schema: &'a ResolvedSchema) -> Option<&'a Entity> {
-        schema.schema.entities.iter().find(|e| e.model_ref == model.name)
+    fn find_entity_for_model<'a>(
+        &self,
+        model: &Model,
+        schema: &'a ResolvedSchema,
+    ) -> Option<&'a Entity> {
+        schema
+            .schema
+            .entities
+            .iter()
+            .find(|e| e.model_ref == model.name)
     }
 
     /// Check if a field is an audit/system field that should be auto-defaulted in constructors
     fn is_system_field(&self, field: &crate::ast::Field, model: &Model) -> bool {
         let pk_field = self.get_pk_field(model);
-        let system_names = ["created_at", "updated_at", "deleted_at",
-                           "created_by", "updated_by", "deleted_by",
-                           "is_deleted"];
+        let system_names = [
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "created_by",
+            "updated_by",
+            "deleted_by",
+            "is_deleted",
+        ];
         field.name == pk_field
             || field.has_attribute("audit_metadata")
             || system_names.contains(&field.name.as_str())
@@ -248,9 +304,11 @@ impl RustGenerator {
                     "false" => Some("false".to_string()),
                     _ => {
                         // Check if field type is a schema-defined enum
-                        let is_enum = schema.schema.enums.iter().any(|e| {
-                            to_pascal_case(&e.name) == rust_type
-                        });
+                        let is_enum = schema
+                            .schema
+                            .enums
+                            .iter()
+                            .any(|e| to_pascal_case(&e.name) == rust_type);
                         if is_enum {
                             // Use Default::default() — generated enums always impl Default
                             Some(format!("{}::default()", rust_type))
@@ -288,7 +346,14 @@ impl RustGenerator {
     }
 
     /// Generate entity methods implementation block
-    fn generate_entity_methods(&self, model: &Model, entity: Option<&Entity>, state_machine: Option<&StateMachine>, sm_type_name: Option<&str>, output: &mut String) {
+    fn generate_entity_methods(
+        &self,
+        model: &Model,
+        entity: Option<&Entity>,
+        state_machine: Option<&StateMachine>,
+        sm_type_name: Option<&str>,
+        output: &mut String,
+    ) {
         let name = &model.name;
         let pk_field = self.get_pk_field(model);
         let pk_type = self.get_pk_type(model);
@@ -308,16 +373,21 @@ impl RustGenerator {
         // Constructor: new() with required fields
         {
             // Collect constructor params (required, non-system fields)
-            let param_fields: Vec<&crate::ast::Field> = model.fields.iter()
+            let param_fields: Vec<&crate::ast::Field> = model
+                .fields
+                .iter()
                 .filter(|f| !self.is_system_field(f, model) && !f.type_ref.is_optional())
                 .collect();
 
             // Build parameter list
-            let params: Vec<String> = param_fields.iter().map(|f| {
-                let rust_type = self.type_to_rust(&f.type_ref);
-                let field_name = escape_rust_keyword(&f.name);
-                format!("{}: {}", field_name, rust_type)
-            }).collect();
+            let params: Vec<String> = param_fields
+                .iter()
+                .map(|f| {
+                    let rust_type = self.type_to_rust(&f.type_ref);
+                    let field_name = escape_rust_keyword(&f.name);
+                    format!("{}: {}", field_name, rust_type)
+                })
+                .collect();
 
             writeln!(output, "    /// Create a new {} with required fields", name).unwrap();
             writeln!(output, "    pub fn new({}) -> Self {{", params.join(", ")).unwrap();
@@ -326,7 +396,13 @@ impl RustGenerator {
             for field in &model.fields {
                 let field_name = escape_rust_keyword(&field.name);
                 if self.is_system_field(field, model) || field.type_ref.is_optional() {
-                    writeln!(output, "            {}: {},", field_name, self.field_default_expr(field, model)).unwrap();
+                    writeln!(
+                        output,
+                        "            {}: {},",
+                        field_name,
+                        self.field_default_expr(field, model)
+                    )
+                    .unwrap();
                 } else {
                     writeln!(output, "            {},", field_name).unwrap();
                 }
@@ -339,9 +415,19 @@ impl RustGenerator {
 
         // ID accessor
         writeln!(output, "    /// Get the entity's unique identifier").unwrap();
-        writeln!(output, "    pub fn id(&self) -> &{} {{", pk_type.trim_start_matches("Option<").trim_end_matches('>')).unwrap();
+        writeln!(
+            output,
+            "    pub fn id(&self) -> &{} {{",
+            pk_type.trim_start_matches("Option<").trim_end_matches('>')
+        )
+        .unwrap();
         if pk_type.starts_with("Option<") {
-            writeln!(output, "        self.{}.as_ref().expect(\"Entity must have an ID\")", pk_field).unwrap();
+            writeln!(
+                output,
+                "        self.{}.as_ref().expect(\"Entity must have an ID\")",
+                pk_field
+            )
+            .unwrap();
         } else {
             writeln!(output, "        &self.{}", pk_field).unwrap();
         }
@@ -359,7 +445,11 @@ impl RustGenerator {
 
         // is_new check (if id is optional)
         if pk_type.starts_with("Option<") {
-            writeln!(output, "    /// Check if this is a new entity (not yet persisted)").unwrap();
+            writeln!(
+                output,
+                "    /// Check if this is a new entity (not yet persisted)"
+            )
+            .unwrap();
             writeln!(output, "    pub fn is_new(&self) -> bool {{").unwrap();
             writeln!(output, "        self.{}.is_none()", pk_field).unwrap();
             writeln!(output, "    }}").unwrap();
@@ -370,14 +460,22 @@ impl RustGenerator {
         if self.has_audit_metadata(model) {
             // created_at accessor
             writeln!(output, "    /// Get when this entity was created").unwrap();
-            writeln!(output, "    pub fn created_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
+            writeln!(
+                output,
+                "    pub fn created_at(&self) -> Option<&DateTime<Utc>> {{"
+            )
+            .unwrap();
             writeln!(output, "        self.metadata.created_at.as_ref()").unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
             // updated_at accessor
             writeln!(output, "    /// Get when this entity was last updated").unwrap();
-            writeln!(output, "    pub fn updated_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
+            writeln!(
+                output,
+                "    pub fn updated_at(&self) -> Option<&DateTime<Utc>> {{"
+            )
+            .unwrap();
             writeln!(output, "        self.metadata.updated_at.as_ref()").unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
@@ -390,7 +488,11 @@ impl RustGenerator {
             writeln!(output).unwrap();
 
             // is_active accessor
-            writeln!(output, "    /// Check if this entity is active (not deleted)").unwrap();
+            writeln!(
+                output,
+                "    /// Check if this entity is active (not deleted)"
+            )
+            .unwrap();
             writeln!(output, "    pub fn is_active(&self) -> bool {{").unwrap();
             writeln!(output, "        self.metadata.deleted_at.is_none()").unwrap();
             writeln!(output, "    }}").unwrap();
@@ -398,7 +500,11 @@ impl RustGenerator {
 
             // deleted_at accessor
             writeln!(output, "    /// Get when this entity was deleted").unwrap();
-            writeln!(output, "    pub fn deleted_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
+            writeln!(
+                output,
+                "    pub fn deleted_at(&self) -> Option<&DateTime<Utc>> {{"
+            )
+            .unwrap();
             writeln!(output, "        self.metadata.deleted_at.as_ref()").unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
@@ -428,7 +534,11 @@ impl RustGenerator {
         else if self.has_created_at(model) {
             writeln!(output, "    /// Get when this entity was created").unwrap();
             if self.is_field_optional(model, "created_at") {
-                writeln!(output, "    pub fn created_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
+                writeln!(
+                    output,
+                    "    pub fn created_at(&self) -> Option<&DateTime<Utc>> {{"
+                )
+                .unwrap();
                 writeln!(output, "        self.created_at.as_ref()").unwrap();
             } else {
                 writeln!(output, "    pub fn created_at(&self) -> &DateTime<Utc> {{").unwrap();
@@ -442,7 +552,11 @@ impl RustGenerator {
         if !self.has_audit_metadata(model) && self.has_updated_at(model) {
             writeln!(output, "    /// Get when this entity was last updated").unwrap();
             if self.is_field_optional(model, "updated_at") {
-                writeln!(output, "    pub fn updated_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
+                writeln!(
+                    output,
+                    "    pub fn updated_at(&self) -> Option<&DateTime<Utc>> {{"
+                )
+                .unwrap();
                 writeln!(output, "        self.updated_at.as_ref()").unwrap();
             } else {
                 writeln!(output, "    pub fn updated_at(&self) -> &DateTime<Utc> {{").unwrap();
@@ -473,7 +587,11 @@ impl RustGenerator {
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
-            writeln!(output, "    /// Check if this entity is active (not deleted)").unwrap();
+            writeln!(
+                output,
+                "    /// Check if this entity is active (not deleted)"
+            )
+            .unwrap();
             writeln!(output, "    pub fn is_active(&self) -> bool {{").unwrap();
             if has_is_deleted {
                 writeln!(output, "        !self.is_deleted").unwrap();
@@ -487,12 +605,24 @@ impl RustGenerator {
 
             writeln!(output, "    /// Get when this entity was deleted").unwrap();
             if deleted_at_optional {
-                writeln!(output, "    pub fn deleted_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
+                writeln!(
+                    output,
+                    "    pub fn deleted_at(&self) -> Option<&DateTime<Utc>> {{"
+                )
+                .unwrap();
                 writeln!(output, "        self.deleted_at.as_ref()").unwrap();
             } else if has_is_deleted {
                 // Non-optional deleted_at with is_deleted flag - return Option based on flag
-                writeln!(output, "    pub fn deleted_at(&self) -> Option<&DateTime<Utc>> {{").unwrap();
-                writeln!(output, "        if self.is_deleted {{ Some(&self.deleted_at) }} else {{ None }}").unwrap();
+                writeln!(
+                    output,
+                    "    pub fn deleted_at(&self) -> Option<&DateTime<Utc>> {{"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "        if self.is_deleted {{ Some(&self.deleted_at) }} else {{ None }}"
+                )
+                .unwrap();
             } else {
                 // Non-optional deleted_at without is_deleted - return direct reference
                 writeln!(output, "    pub fn deleted_at(&self) -> &DateTime<Utc> {{").unwrap();
@@ -506,11 +636,18 @@ impl RustGenerator {
         for field in &model.fields {
             if field.name == "status" {
                 let status_type = self.type_to_rust(&field.type_ref);
-                let inner_type = status_type.trim_start_matches("Option<").trim_end_matches('>');
+                let inner_type = status_type
+                    .trim_start_matches("Option<")
+                    .trim_end_matches('>');
 
                 writeln!(output, "    /// Get the current status").unwrap();
                 if status_type.starts_with("Option<") {
-                    writeln!(output, "    pub fn status(&self) -> Option<&{}> {{", inner_type).unwrap();
+                    writeln!(
+                        output,
+                        "    pub fn status(&self) -> Option<&{}> {{",
+                        inner_type
+                    )
+                    .unwrap();
                     writeln!(output, "        self.status.as_ref()").unwrap();
                 } else {
                     writeln!(output, "    pub fn status(&self) -> &{} {{", inner_type).unwrap();
@@ -531,35 +668,72 @@ impl RustGenerator {
                 writeln!(output).unwrap();
                 writeln!(output, "    /// Verify a password against the stored hash").unwrap();
                 writeln!(output, "    ///").unwrap();
-                writeln!(output, "    /// Uses argon2 for secure password verification.").unwrap();
+                writeln!(
+                    output,
+                    "    /// Uses argon2 for secure password verification."
+                )
+                .unwrap();
                 if is_optional {
                     writeln!(output, "    /// Returns true if no password is set (hash is None) and no password is provided.").unwrap();
-                    writeln!(output, "    pub fn verify_password(&self, password: Option<&str>) -> bool {{").unwrap();
+                    writeln!(
+                        output,
+                        "    pub fn verify_password(&self, password: Option<&str>) -> bool {{"
+                    )
+                    .unwrap();
                     writeln!(output, "        match (&self.{}, password) {{", hash_field).unwrap();
                     writeln!(output, "            (Some(hash), Some(pwd)) => {{").unwrap();
                     writeln!(output, "                use argon2::PasswordVerifier;").unwrap();
-                    writeln!(output, "                use argon2::password_hash::PasswordHash;").unwrap();
-                    writeln!(output, "                let parsed_hash = PasswordHash::new(hash);").unwrap();
+                    writeln!(
+                        output,
+                        "                use argon2::password_hash::PasswordHash;"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "                let parsed_hash = PasswordHash::new(hash);"
+                    )
+                    .unwrap();
                     writeln!(output, "                match parsed_hash {{").unwrap();
                     writeln!(output, "                    Ok(h) => {{").unwrap();
-                    writeln!(output, "                        let argon2 = argon2::Argon2::default();").unwrap();
+                    writeln!(
+                        output,
+                        "                        let argon2 = argon2::Argon2::default();"
+                    )
+                    .unwrap();
                     writeln!(output, "                        argon2.verify_password(pwd.as_bytes(), &h).is_ok()").unwrap();
                     writeln!(output, "                    }}").unwrap();
                     writeln!(output, "                    Err(_) => false,").unwrap();
                     writeln!(output, "                }}").unwrap();
                     writeln!(output, "            }}").unwrap();
-                    writeln!(output, "            (None, _) => true,  // No password required").unwrap();
+                    writeln!(
+                        output,
+                        "            (None, _) => true,  // No password required"
+                    )
+                    .unwrap();
                     writeln!(output, "            (Some(_), None) => false,  // Password required but not provided").unwrap();
                     writeln!(output, "        }}").unwrap();
                     writeln!(output, "    }}").unwrap();
                 } else {
-                    writeln!(output, "    pub fn verify_password(&self, password: &str) -> bool {{").unwrap();
+                    writeln!(
+                        output,
+                        "    pub fn verify_password(&self, password: &str) -> bool {{"
+                    )
+                    .unwrap();
                     writeln!(output, "        use argon2::PasswordVerifier;").unwrap();
                     writeln!(output, "        use argon2::password_hash::PasswordHash;").unwrap();
-                    writeln!(output, "        let parsed_hash = PasswordHash::new(&self.{});", hash_field).unwrap();
+                    writeln!(
+                        output,
+                        "        let parsed_hash = PasswordHash::new(&self.{});",
+                        hash_field
+                    )
+                    .unwrap();
                     writeln!(output, "        match parsed_hash {{").unwrap();
                     writeln!(output, "            Ok(hash) => {{").unwrap();
-                    writeln!(output, "                let argon2 = argon2::Argon2::default();").unwrap();
+                    writeln!(
+                        output,
+                        "                let argon2 = argon2::Argon2::default();"
+                    )
+                    .unwrap();
                     writeln!(output, "                argon2.verify_password(password.as_bytes(), &hash).is_ok()").unwrap();
                     writeln!(output, "            }}").unwrap();
                     writeln!(output, "            Err(_) => false,").unwrap();
@@ -572,12 +746,28 @@ impl RustGenerator {
                 writeln!(output, "    /// Hash a password for storage").unwrap();
                 writeln!(output, "    ///").unwrap();
                 writeln!(output, "    /// Uses argon2 with default parameters.").unwrap();
-                writeln!(output, "    pub fn hash_password(password: &str) -> Result<String, String> {{").unwrap();
+                writeln!(
+                    output,
+                    "    pub fn hash_password(password: &str) -> Result<String, String> {{"
+                )
+                .unwrap();
                 writeln!(output, "        use argon2::PasswordHasher;").unwrap();
-                writeln!(output, "        use argon2::password_hash::{{SaltString, rand_core::OsRng}};").unwrap();
+                writeln!(
+                    output,
+                    "        use argon2::password_hash::{{SaltString, rand_core::OsRng}};"
+                )
+                .unwrap();
                 writeln!(output, "        let argon2 = argon2::Argon2::default();").unwrap();
-                writeln!(output, "        let salt = SaltString::generate(&mut OsRng);").unwrap();
-                writeln!(output, "        argon2.hash_password(password.as_bytes(), &salt)").unwrap();
+                writeln!(
+                    output,
+                    "        let salt = SaltString::generate(&mut OsRng);"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "        argon2.hash_password(password.as_bytes(), &salt)"
+                )
+                .unwrap();
                 writeln!(output, "            .map(|hash| hash.to_string())").unwrap();
                 writeln!(output, "            .map_err(|e| e.to_string())").unwrap();
                 writeln!(output, "    }}").unwrap();
@@ -589,22 +779,37 @@ impl RustGenerator {
         // FLUENT SETTERS for optional fields (with_* methods)
         // ===================================================================
         {
-            let optional_fields: Vec<&crate::ast::Field> = model.fields.iter()
+            let optional_fields: Vec<&crate::ast::Field> = model
+                .fields
+                .iter()
                 .filter(|f| f.type_ref.is_optional() && !self.is_system_field(f, model))
                 .collect();
 
             if !optional_fields.is_empty() {
                 writeln!(output).unwrap();
-                writeln!(output, "    // ==========================================================").unwrap();
+                writeln!(
+                    output,
+                    "    // =========================================================="
+                )
+                .unwrap();
                 writeln!(output, "    // Fluent Setters (with_* for optional fields)").unwrap();
-                writeln!(output, "    // ==========================================================").unwrap();
+                writeln!(
+                    output,
+                    "    // =========================================================="
+                )
+                .unwrap();
 
                 for field in &optional_fields {
                     let field_name = escape_rust_keyword(&field.name);
                     let inner_type = self.type_to_rust(field.type_ref.inner_type().unwrap());
                     writeln!(output).unwrap();
                     writeln!(output, "    /// Set the {} field (chainable)", field.name).unwrap();
-                    writeln!(output, "    pub fn with_{}(mut self, value: {}) -> Self {{", field_name, inner_type).unwrap();
+                    writeln!(
+                        output,
+                        "    pub fn with_{}(mut self, value: {}) -> Self {{",
+                        field_name, inner_type
+                    )
+                    .unwrap();
                     writeln!(output, "        self.{} = Some(value);", field_name).unwrap();
                     writeln!(output, "        self").unwrap();
                     writeln!(output, "    }}").unwrap();
@@ -621,35 +826,71 @@ impl RustGenerator {
             let sm_name = sm_type_name.unwrap_or(name);
             let sm_field = &sm.field;
             // Find the Rust type for the state machine field (for explicit parse turbofish)
-            let sm_field_rust_type = model.fields.iter()
+            let sm_field_rust_type = model
+                .fields
+                .iter()
                 .find(|f| f.name == *sm_field)
                 .map(|f| self.type_to_rust(&f.type_ref))
                 .unwrap_or_else(|| "String".to_string());
             writeln!(output).unwrap();
-            writeln!(output, "    // ==========================================================").unwrap();
+            writeln!(
+                output,
+                "    // =========================================================="
+            )
+            .unwrap();
             writeln!(output, "    // State Machine").unwrap();
-            writeln!(output, "    // ==========================================================").unwrap();
+            writeln!(
+                output,
+                "    // =========================================================="
+            )
+            .unwrap();
             writeln!(output).unwrap();
-            writeln!(output, "    /// Transition to a new state via the {} state machine.", sm_field).unwrap();
+            writeln!(
+                output,
+                "    /// Transition to a new state via the {} state machine.",
+                sm_field
+            )
+            .unwrap();
             writeln!(output, "    ///").unwrap();
-            writeln!(output, "    /// Returns `Err` if the transition is not permitted from the current state.").unwrap();
-            writeln!(output, "    /// Use this method instead of assigning `self.{}` directly.", sm_field).unwrap();
+            writeln!(
+                output,
+                "    /// Returns `Err` if the transition is not permitted from the current state."
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "    /// Use this method instead of assigning `self.{}` directly.",
+                sm_field
+            )
+            .unwrap();
             writeln!(output, "    pub fn transition_to(&mut self, new_state: {name}State) -> Result<(), StateMachineError> {{",
                 name = sm_name).unwrap();
             // Convert entity's field type to state machine's state type via Display/FromStr
             // parse::<{Name}State>() returns Result<_, StateMachineError> so ? works directly
-            writeln!(output,
+            writeln!(
+                output,
                 "        let current = self.{field}.to_string().parse::<{name}State>()?;",
-                field = sm_field, name = sm_name).unwrap();
-            writeln!(output, "        let mut sm = {name}StateMachine::from_state(current);",
-                name = sm_name).unwrap();
+                field = sm_field,
+                name = sm_name
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "        let mut sm = {name}StateMachine::from_state(current);",
+                name = sm_name
+            )
+            .unwrap();
             writeln!(output, "        sm.transition_to_state(new_state)?;").unwrap();
             // Convert state machine's state type back to entity's field type via Display/FromStr
             // Explicit turbofish type avoids type inference failures for non-String error types
-            writeln!(output,
+            writeln!(
+                output,
                 "        self.{field} = new_state.to_string().parse::<{field_type}>()\
                 \n            .map_err(|e| StateMachineError::InvalidState(e.to_string()))?;",
-                field = sm_field, field_type = sm_field_rust_type).unwrap();
+                field = sm_field,
+                field_type = sm_field_rust_type
+            )
+            .unwrap();
             writeln!(output, "        Ok(())").unwrap();
             writeln!(output, "    }}").unwrap();
         }
@@ -658,17 +899,31 @@ impl RustGenerator {
         // APPLY PATCH — apply partial updates from a field map
         // ===================================================================
         {
-            let patchable_fields: Vec<&crate::ast::Field> = model.fields.iter()
+            let patchable_fields: Vec<&crate::ast::Field> = model
+                .fields
+                .iter()
                 .filter(|f| !self.is_system_field(f, model))
                 .collect();
 
             if !patchable_fields.is_empty() {
                 writeln!(output).unwrap();
-                writeln!(output, "    // ==========================================================").unwrap();
+                writeln!(
+                    output,
+                    "    // =========================================================="
+                )
+                .unwrap();
                 writeln!(output, "    // Partial Update").unwrap();
-                writeln!(output, "    // ==========================================================").unwrap();
+                writeln!(
+                    output,
+                    "    // =========================================================="
+                )
+                .unwrap();
                 writeln!(output).unwrap();
-                writeln!(output, "    /// Apply partial updates from a map of field name to JSON value").unwrap();
+                writeln!(
+                    output,
+                    "    /// Apply partial updates from a map of field name to JSON value"
+                )
+                .unwrap();
                 writeln!(output, "    pub fn apply_patch(&mut self, fields: std::collections::HashMap<String, serde_json::Value>) {{").unwrap();
                 writeln!(output, "        for (key, value) in fields {{").unwrap();
                 writeln!(output, "            match key.as_str() {{").unwrap();
@@ -701,9 +956,17 @@ impl RustGenerator {
         if let Some(entity) = entity {
             if !entity.methods.is_empty() {
                 writeln!(output).unwrap();
-                writeln!(output, "    // ==========================================================").unwrap();
+                writeln!(
+                    output,
+                    "    // =========================================================="
+                )
+                .unwrap();
                 writeln!(output, "    // DDD Entity Methods").unwrap();
-                writeln!(output, "    // ==========================================================").unwrap();
+                writeln!(
+                    output,
+                    "    // =========================================================="
+                )
+                .unwrap();
 
                 // Collect auto-generated method names to detect conflicts
                 let reserved_methods = self.get_reserved_method_names(model);
@@ -711,7 +974,12 @@ impl RustGenerator {
                 for method in &entity.methods {
                     // Skip if method name conflicts with auto-generated methods
                     if reserved_methods.contains(&method.name.as_str()) {
-                        writeln!(output, "    // Note: Method '{}' is auto-generated and skipped here", method.name).unwrap();
+                        writeln!(
+                            output,
+                            "    // Note: Method '{}' is auto-generated and skipped here",
+                            method.name
+                        )
+                        .unwrap();
                         continue;
                     }
                     self.generate_ddd_method(method, output);
@@ -722,13 +990,21 @@ impl RustGenerator {
             if !entity.invariants.is_empty() {
                 writeln!(output).unwrap();
                 writeln!(output, "    /// Check all business invariants").unwrap();
-                writeln!(output, "    pub fn check_invariants(&self) -> Result<(), Vec<&'static str>> {{").unwrap();
+                writeln!(
+                    output,
+                    "    pub fn check_invariants(&self) -> Result<(), Vec<&'static str>> {{"
+                )
+                .unwrap();
                 writeln!(output, "        let mut errors = Vec::new();").unwrap();
                 for (i, invariant) in entity.invariants.iter().enumerate() {
                     writeln!(output, "        // Invariant {}: {}", i + 1, invariant).unwrap();
                     writeln!(output, "        // TODO: Implement invariant check").unwrap();
                 }
-                writeln!(output, "        if errors.is_empty() {{ Ok(()) }} else {{ Err(errors) }}").unwrap();
+                writeln!(
+                    output,
+                    "        if errors.is_empty() {{ Ok(()) }} else {{ Err(errors) }}"
+                )
+                .unwrap();
                 writeln!(output, "    }}").unwrap();
             }
         }
@@ -746,17 +1022,14 @@ impl RustGenerator {
     }
 
     /// Generate builder struct and implementation for an entity
-    fn generate_builder(
-        &self,
-        model: &Model,
-        schema: &ResolvedSchema,
-        output: &mut String,
-    ) {
+    fn generate_builder(&self, model: &Model, schema: &ResolvedSchema, output: &mut String) {
         let name = &model.name;
         let builder_name = format!("{}Builder", name);
 
         // Collect non-system fields for builder
-        let builder_fields: Vec<&crate::ast::Field> = model.fields.iter()
+        let builder_fields: Vec<&crate::ast::Field> = model
+            .fields
+            .iter()
             .filter(|f| !self.is_system_field(f, model))
             .collect();
 
@@ -764,8 +1037,17 @@ impl RustGenerator {
         writeln!(output).unwrap();
         writeln!(output, "/// Builder for {} entity", name).unwrap();
         writeln!(output, "///").unwrap();
-        writeln!(output, "/// Provides a fluent API for constructing {} instances.", name).unwrap();
-        writeln!(output, "/// System fields (id, metadata, timestamps) are auto-initialized.").unwrap();
+        writeln!(
+            output,
+            "/// Provides a fluent API for constructing {} instances.",
+            name
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "/// System fields (id, metadata, timestamps) are auto-initialized."
+        )
+        .unwrap();
         writeln!(output, "#[derive(Debug, Clone, Default)]").unwrap();
         writeln!(output, "pub struct {} {{", builder_name).unwrap();
 
@@ -800,14 +1082,24 @@ impl RustGenerator {
 
             // Doc comment
             if let Some(default_expr) = self.builder_field_default_expr(field, schema) {
-                writeln!(output, "    /// Set the {} field (default: `{}`)", field.name, default_expr).unwrap();
+                writeln!(
+                    output,
+                    "    /// Set the {} field (default: `{}`)",
+                    field.name, default_expr
+                )
+                .unwrap();
             } else if field.type_ref.is_optional() {
                 writeln!(output, "    /// Set the {} field (optional)", field.name).unwrap();
             } else {
                 writeln!(output, "    /// Set the {} field (required)", field.name).unwrap();
             }
 
-            writeln!(output, "    pub fn {}(mut self, value: {}) -> Self {{", field_name, setter_type).unwrap();
+            writeln!(
+                output,
+                "    pub fn {}(mut self, value: {}) -> Self {{",
+                field_name, setter_type
+            )
+            .unwrap();
             writeln!(output, "        self.{} = Some(value);", field_name).unwrap();
             writeln!(output, "        self").unwrap();
             writeln!(output, "    }}").unwrap();
@@ -817,8 +1109,17 @@ impl RustGenerator {
         // build() method
         writeln!(output, "    /// Build the {} entity", name).unwrap();
         writeln!(output, "    ///").unwrap();
-        writeln!(output, "    /// Returns Err if any required field without a default is missing.").unwrap();
-        writeln!(output, "    pub fn build(self) -> Result<{}, String> {{", name).unwrap();
+        writeln!(
+            output,
+            "    /// Returns Err if any required field without a default is missing."
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    pub fn build(self) -> Result<{}, String> {{",
+            name
+        )
+        .unwrap();
 
         // Phase 1: Validate required fields without @default
         for field in &builder_fields {
@@ -826,8 +1127,12 @@ impl RustGenerator {
                 && self.builder_field_default_expr(field, schema).is_none()
             {
                 let field_name = escape_rust_keyword(&field.name);
-                writeln!(output, "        let {} = self.{}.ok_or_else(|| \"{} is required\".to_string())?;",
-                    field_name, field_name, field.name).unwrap();
+                writeln!(
+                    output,
+                    "        let {} = self.{}.ok_or_else(|| \"{} is required\".to_string())?;",
+                    field_name, field_name, field.name
+                )
+                .unwrap();
             }
         }
 
@@ -840,7 +1145,13 @@ impl RustGenerator {
 
             if self.is_system_field(field, model) {
                 // System: auto-initialize
-                writeln!(output, "            {}: {},", field_name, self.field_default_expr(field, model)).unwrap();
+                writeln!(
+                    output,
+                    "            {}: {},",
+                    field_name,
+                    self.field_default_expr(field, model)
+                )
+                .unwrap();
             } else if field.type_ref.is_optional() {
                 // Optional: pass through (builder Option<T> -> entity Option<T>)
                 writeln!(output, "            {}: self.{},", field_name, field_name).unwrap();
@@ -848,9 +1159,19 @@ impl RustGenerator {
                 // Required with @default: unwrap_or (unwrap_or_default when the
                 // default is a Default::default() call — clippy::unwrap_or_default)
                 if default_expr == "Default::default()" || default_expr.ends_with("::default()") {
-                    writeln!(output, "            {}: self.{}.unwrap_or_default(),", field_name, field_name).unwrap();
+                    writeln!(
+                        output,
+                        "            {}: self.{}.unwrap_or_default(),",
+                        field_name, field_name
+                    )
+                    .unwrap();
                 } else {
-                    writeln!(output, "            {}: self.{}.unwrap_or({}),", field_name, field_name, default_expr).unwrap();
+                    writeln!(
+                        output,
+                        "            {}: self.{}.unwrap_or({}),",
+                        field_name, field_name, default_expr
+                    )
+                    .unwrap();
                 }
             } else {
                 // Required without default: use validated local variable
@@ -880,13 +1201,20 @@ impl RustGenerator {
                             let error_type = error_part.trim_end_matches('>').trim();
 
                             // Check if it's a custom error type (not a standard type)
-                            let standard_types = ["String", "&str", "anyhow::Error", "std::io::Error",
-                                                   "Box<dyn std::error::Error>", "()"];
-                            if !standard_types.contains(&error_type) &&
-                               !error_type.starts_with("Vec<") &&
-                               !error_type.starts_with("Option<") &&
-                               !schema.schema.enums.iter().any(|e| e.name == error_type)
-                               && !error_types.contains(&error_type.to_string()) {
+                            let standard_types = [
+                                "String",
+                                "&str",
+                                "anyhow::Error",
+                                "std::io::Error",
+                                "Box<dyn std::error::Error>",
+                                "()",
+                            ];
+                            if !standard_types.contains(&error_type)
+                                && !error_type.starts_with("Vec<")
+                                && !error_type.starts_with("Option<")
+                                && !schema.schema.enums.iter().any(|e| e.name == error_type)
+                                && !error_types.contains(&error_type.to_string())
+                            {
                                 error_types.push(error_type.to_string());
                             }
                         }
@@ -908,7 +1236,12 @@ impl RustGenerator {
         writeln!(output).unwrap();
 
         for error_type in error_types {
-            writeln!(output, "/// Domain error for {} operations", error_type.to_lowercase().replace("_", " ")).unwrap();
+            writeln!(
+                output,
+                "/// Domain error for {} operations",
+                error_type.to_lowercase().replace("_", " ")
+            )
+            .unwrap();
             writeln!(output, "#[derive(Debug, Clone, Error)]").unwrap();
             writeln!(output, "pub enum {} {{", error_type).unwrap();
             writeln!(output, "    #[error(\"{{0}}\")]").unwrap();
@@ -927,11 +1260,19 @@ impl RustGenerator {
 
             // From<String> conversion for ergonomic error creation
             writeln!(output, "impl From<String> for {} {{", error_type).unwrap();
-            writeln!(output, "    fn from(msg: String) -> Self {{ Self::Message(msg) }}").unwrap();
+            writeln!(
+                output,
+                "    fn from(msg: String) -> Self {{ Self::Message(msg) }}"
+            )
+            .unwrap();
             writeln!(output, "}}").unwrap();
             writeln!(output).unwrap();
             writeln!(output, "impl From<&str> for {} {{", error_type).unwrap();
-            writeln!(output, "    fn from(msg: &str) -> Self {{ Self::Message(msg.to_string()) }}").unwrap();
+            writeln!(
+                output,
+                "    fn from(msg: &str) -> Self {{ Self::Message(msg.to_string()) }}"
+            )
+            .unwrap();
             writeln!(output, "}}").unwrap();
             writeln!(output).unwrap();
         }
@@ -951,7 +1292,9 @@ impl RustGenerator {
         let self_ref = if method.mutates { "&mut self" } else { "&self" };
 
         // Build parameter list (prefix with _ since body is todo!())
-        let params: Vec<String> = method.params.iter()
+        let params: Vec<String> = method
+            .params
+            .iter()
             .map(|(name, type_ref)| format!("_{}: {}", name, self.type_to_rust(type_ref)))
             .collect();
 
@@ -962,12 +1305,19 @@ impl RustGenerator {
         };
 
         // Build return type
-        let return_type = method.returns.as_ref()
+        let return_type = method
+            .returns
+            .as_ref()
             .map(|t| format!(" -> {}", self.type_to_rust(t)))
             .unwrap_or_default();
 
         // Write method signature
-        writeln!(output, "    pub {}fn {}({}{}){}{{", async_kw, method.name, self_ref, param_str, return_type).unwrap();
+        writeln!(
+            output,
+            "    pub {}fn {}({}{}){}{{",
+            async_kw, method.name, self_ref, param_str, return_type
+        )
+        .unwrap();
         writeln!(output, "        // TODO: Implement {} method", method.name).unwrap();
         writeln!(output, "        todo!(\"Implement {}\");", method.name).unwrap();
         writeln!(output, "    }}").unwrap();
@@ -986,7 +1336,12 @@ impl RustGenerator {
         writeln!(output).unwrap();
         writeln!(output, "    fn entity_id(&self) -> &Self::Id {{").unwrap();
         if pk_type.starts_with("Option<") {
-            writeln!(output, "        self.{}.as_ref().expect(\"Entity must have an ID\")", pk_field).unwrap();
+            writeln!(
+                output,
+                "        self.{}.as_ref().expect(\"Entity must have an ID\")",
+                pk_field
+            )
+            .unwrap();
         } else {
             writeln!(output, "        &self.{}", pk_field).unwrap();
         }
@@ -1010,7 +1365,12 @@ impl RustGenerator {
         let has_direct_deleted_at = model.fields.iter().any(|f| f.name == "deleted_at");
 
         writeln!(output).unwrap();
-        writeln!(output, "impl backbone_core::PersistentEntity for {} {{", name).unwrap();
+        writeln!(
+            output,
+            "impl backbone_core::PersistentEntity for {} {{",
+            name
+        )
+        .unwrap();
 
         // entity_id — always Uuid-based
         writeln!(output, "    fn entity_id(&self) -> String {{").unwrap();
@@ -1018,13 +1378,21 @@ impl RustGenerator {
         writeln!(output, "    }}").unwrap();
 
         writeln!(output, "    fn set_entity_id(&mut self, id: String) {{").unwrap();
-        writeln!(output, "        if let Ok(uuid) = uuid::Uuid::parse_str(&id) {{").unwrap();
+        writeln!(
+            output,
+            "        if let Ok(uuid) = uuid::Uuid::parse_str(&id) {{"
+        )
+        .unwrap();
         writeln!(output, "            self.{} = uuid;", pk_field).unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
 
         // created_at
-        writeln!(output, "    fn created_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {{").unwrap();
+        writeln!(
+            output,
+            "    fn created_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {{"
+        )
+        .unwrap();
         if has_audit {
             writeln!(output, "        self.metadata.created_at").unwrap();
         } else if has_direct_created_at {
@@ -1034,7 +1402,11 @@ impl RustGenerator {
         }
         writeln!(output, "    }}").unwrap();
 
-        writeln!(output, "    fn set_created_at(&mut self, ts: chrono::DateTime<chrono::Utc>) {{").unwrap();
+        writeln!(
+            output,
+            "    fn set_created_at(&mut self, ts: chrono::DateTime<chrono::Utc>) {{"
+        )
+        .unwrap();
         if has_audit {
             writeln!(output, "        self.metadata.created_at = Some(ts);").unwrap();
         } else if has_direct_created_at {
@@ -1045,7 +1417,11 @@ impl RustGenerator {
         writeln!(output, "    }}").unwrap();
 
         // updated_at
-        writeln!(output, "    fn updated_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {{").unwrap();
+        writeln!(
+            output,
+            "    fn updated_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {{"
+        )
+        .unwrap();
         if has_audit {
             writeln!(output, "        self.metadata.updated_at").unwrap();
         } else if has_direct_updated_at {
@@ -1055,7 +1431,11 @@ impl RustGenerator {
         }
         writeln!(output, "    }}").unwrap();
 
-        writeln!(output, "    fn set_updated_at(&mut self, ts: chrono::DateTime<chrono::Utc>) {{").unwrap();
+        writeln!(
+            output,
+            "    fn set_updated_at(&mut self, ts: chrono::DateTime<chrono::Utc>) {{"
+        )
+        .unwrap();
         if has_audit {
             writeln!(output, "        self.metadata.updated_at = Some(ts);").unwrap();
         } else if has_direct_updated_at {
@@ -1066,7 +1446,11 @@ impl RustGenerator {
         writeln!(output, "    }}").unwrap();
 
         // deleted_at
-        writeln!(output, "    fn deleted_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {{").unwrap();
+        writeln!(
+            output,
+            "    fn deleted_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {{"
+        )
+        .unwrap();
         if has_audit {
             writeln!(output, "        self.metadata.deleted_at").unwrap();
         } else if has_direct_deleted_at {
@@ -1076,7 +1460,11 @@ impl RustGenerator {
         }
         writeln!(output, "    }}").unwrap();
 
-        writeln!(output, "    fn set_deleted_at(&mut self, ts: Option<chrono::DateTime<chrono::Utc>>) {{").unwrap();
+        writeln!(
+            output,
+            "    fn set_deleted_at(&mut self, ts: Option<chrono::DateTime<chrono::Utc>>) {{"
+        )
+        .unwrap();
         if has_audit {
             writeln!(output, "        self.metadata.deleted_at = ts;").unwrap();
         } else if has_direct_deleted_at {
@@ -1104,11 +1492,15 @@ impl RustGenerator {
         let name = &model.name;
 
         // Collect UUID column hints (id + *_id fields whose type is Uuid)
-        let uuid_cols: Vec<&str> = model.fields.iter()
+        let uuid_cols: Vec<&str> = model
+            .fields
+            .iter()
             .filter(|f| {
                 let is_uuid = match &f.type_ref {
                     TypeRef::Primitive(PrimitiveType::Uuid) => true,
-                    TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Primitive(PrimitiveType::Uuid)),
+                    TypeRef::Optional(inner) => {
+                        matches!(inner.as_ref(), TypeRef::Primitive(PrimitiveType::Uuid))
+                    }
                     _ => false,
                 };
                 is_uuid && (f.name == "id" || f.name.ends_with("_id"))
@@ -1117,7 +1509,9 @@ impl RustGenerator {
             .collect();
 
         // Collect enum column hints: field -> snake_case pg type name
-        let enum_cols: Vec<(&str, String)> = model.fields.iter()
+        let enum_cols: Vec<(&str, String)> = model
+            .fields
+            .iter()
             .filter_map(|f| {
                 let type_name = match &f.type_ref {
                     TypeRef::Custom(n) => Some(n.as_str()),
@@ -1138,24 +1532,32 @@ impl RustGenerator {
             .collect();
 
         // Collect search fields: text-like primitives
-        let search_fields: Vec<&str> = model.fields.iter()
-            .filter(|f| matches!(
-                f.type_ref,
-                TypeRef::Primitive(PrimitiveType::String)
-                | TypeRef::Primitive(PrimitiveType::Email)
-                | TypeRef::Primitive(PrimitiveType::Slug)
-            ))
+        let search_fields: Vec<&str> = model
+            .fields
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.type_ref,
+                    TypeRef::Primitive(PrimitiveType::String)
+                        | TypeRef::Primitive(PrimitiveType::Email)
+                        | TypeRef::Primitive(PrimitiveType::Slug)
+                )
+            })
             .map(|f| f.name.as_str())
             .collect();
 
         // Field-level security: @private (owner/root-only) and @owner (the tenant-id
         // column). Emitted as RESPONSE keys (camelCase) to match the serialized
         // response the handler prunes — see backbone-core's apply_field_security.
-        let private_fields: Vec<String> = model.fields.iter()
+        let private_fields: Vec<String> = model
+            .fields
+            .iter()
             .filter(|f| f.has_attribute("private"))
             .map(|f| crate::webgen::parser::to_camel_case(&f.name))
             .collect();
-        let owner_field: Option<String> = model.fields.iter()
+        let owner_field: Option<String> = model
+            .fields
+            .iter()
             .find(|f| f.has_attribute("owner"))
             .map(|f| crate::webgen::parser::to_camel_case(&f.name));
 
@@ -1223,23 +1625,43 @@ impl RustGenerator {
         writeln!(output, "impl backbone_orm::EntityRepoMeta for {name} {{").unwrap();
 
         // column_types()
-        writeln!(output, "    fn column_types() -> std::collections::HashMap<String, String> {{").unwrap();
+        writeln!(
+            output,
+            "    fn column_types() -> std::collections::HashMap<String, String> {{"
+        )
+        .unwrap();
         if uuid_cols.is_empty() && enum_cols.is_empty() {
             writeln!(output, "        std::collections::HashMap::new()").unwrap();
         } else {
-            writeln!(output, "        let mut m = std::collections::HashMap::new();").unwrap();
+            writeln!(
+                output,
+                "        let mut m = std::collections::HashMap::new();"
+            )
+            .unwrap();
             for col in &uuid_cols {
-                writeln!(output, "        m.insert(\"{col}\".to_string(), \"uuid\".to_string());").unwrap();
+                writeln!(
+                    output,
+                    "        m.insert(\"{col}\".to_string(), \"uuid\".to_string());"
+                )
+                .unwrap();
             }
             for (col, pg_type) in &enum_cols {
-                writeln!(output, "        m.insert(\"{col}\".to_string(), \"{pg_type}\".to_string());").unwrap();
+                writeln!(
+                    output,
+                    "        m.insert(\"{col}\".to_string(), \"{pg_type}\".to_string());"
+                )
+                .unwrap();
             }
             writeln!(output, "        m").unwrap();
         }
         writeln!(output, "    }}").unwrap();
 
         // search_fields()
-        writeln!(output, "    fn search_fields() -> &'static [&'static str] {{").unwrap();
+        writeln!(
+            output,
+            "    fn search_fields() -> &'static [&'static str] {{"
+        )
+        .unwrap();
         if search_fields.is_empty() {
             writeln!(output, "        &[]").unwrap();
         } else {
@@ -1251,7 +1673,11 @@ impl RustGenerator {
         // private_fields() — only override when the model declares @private fields.
         if !private_fields.is_empty() {
             let joined: Vec<String> = private_fields.iter().map(|f| format!("\"{f}\"")).collect();
-            writeln!(output, "    fn private_fields() -> &'static [&'static str] {{").unwrap();
+            writeln!(
+                output,
+                "    fn private_fields() -> &'static [&'static str] {{"
+            )
+            .unwrap();
             writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
             writeln!(output, "    }}").unwrap();
         }
@@ -1279,7 +1705,11 @@ impl RustGenerator {
                 .iter()
                 .map(|(n, t, fk)| format!("(\"{n}\", \"{t}\", \"{fk}\")"))
                 .collect();
-            writeln!(output, "    fn relations() -> &'static [(&'static str, &'static str, &'static str)] {{").unwrap();
+            writeln!(
+                output,
+                "    fn relations() -> &'static [(&'static str, &'static str, &'static str)] {{"
+            )
+            .unwrap();
             writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
             writeln!(output, "    }}").unwrap();
         }
@@ -1287,7 +1717,11 @@ impl RustGenerator {
         writeln!(output, "}}").unwrap();
     }
 
-    fn generate_model(&self, model: &Model, schema: &ResolvedSchema) -> Result<String, GenerateError> {
+    fn generate_model(
+        &self,
+        model: &Model,
+        schema: &ResolvedSchema,
+    ) -> Result<String, GenerateError> {
         let mut output = String::new();
 
         // Find matching Entity definition early (needed for error type extraction)
@@ -1306,16 +1740,26 @@ impl RustGenerator {
         let mut needs_duration = false;
         let mut needs_uuid = false;
         let mut needs_decimal = false;
-        let mut needs_other_entities = false;  // For wildcard import of other entities
-        let mut needs_value_objects = false;  // For value_objects import
+        let mut needs_other_entities = false; // For wildcard import of other entities
+        let mut needs_value_objects = false; // For value_objects import
         let needs_audit_metadata = self.has_audit_metadata(model);
         let has_hashed_field = self.has_hashed_field(model);
         let mut custom_types: Vec<String> = Vec::new();
 
         for field in &model.fields {
-            self.collect_type_imports(&field.type_ref, &mut needs_datetime, &mut needs_naive_date,
-                                      &mut needs_naive_time, &mut needs_duration, &mut needs_uuid, &mut needs_decimal,
-                                      &mut needs_other_entities, &mut needs_value_objects, &mut custom_types, schema);
+            self.collect_type_imports(
+                &field.type_ref,
+                &mut needs_datetime,
+                &mut needs_naive_date,
+                &mut needs_naive_time,
+                &mut needs_duration,
+                &mut needs_uuid,
+                &mut needs_decimal,
+                &mut needs_other_entities,
+                &mut needs_value_objects,
+                &mut custom_types,
+                schema,
+            );
         }
 
         // AuditMetadata accessor methods need DateTime<Utc> and Uuid
@@ -1329,15 +1773,35 @@ impl RustGenerator {
             for method in &entity.methods {
                 // Collect from parameters
                 for (_name, type_ref) in &method.params {
-                    self.collect_type_imports(type_ref, &mut needs_datetime, &mut needs_naive_date,
-                                              &mut needs_naive_time, &mut needs_duration, &mut needs_uuid, &mut needs_decimal,
-                                              &mut needs_other_entities, &mut needs_value_objects, &mut custom_types, schema);
+                    self.collect_type_imports(
+                        type_ref,
+                        &mut needs_datetime,
+                        &mut needs_naive_date,
+                        &mut needs_naive_time,
+                        &mut needs_duration,
+                        &mut needs_uuid,
+                        &mut needs_decimal,
+                        &mut needs_other_entities,
+                        &mut needs_value_objects,
+                        &mut custom_types,
+                        schema,
+                    );
                 }
                 // Collect from return type
                 if let Some(return_type) = &method.returns {
-                    self.collect_type_imports(return_type, &mut needs_datetime, &mut needs_naive_date,
-                                              &mut needs_naive_time, &mut needs_duration, &mut needs_uuid, &mut needs_decimal,
-                                              &mut needs_other_entities, &mut needs_value_objects, &mut custom_types, schema);
+                    self.collect_type_imports(
+                        return_type,
+                        &mut needs_datetime,
+                        &mut needs_naive_date,
+                        &mut needs_naive_time,
+                        &mut needs_duration,
+                        &mut needs_uuid,
+                        &mut needs_decimal,
+                        &mut needs_other_entities,
+                        &mut needs_value_objects,
+                        &mut custom_types,
+                        schema,
+                    );
                 }
             }
         }
@@ -1462,7 +1926,11 @@ impl RustGenerator {
             // `@omit_if_none` when absence is semantically meaningful. See
             // apps/bersihir-service/docs/field-shaping.md (Phase 1).
             if field.type_ref.is_optional() && field.has_attribute("omit_if_none") {
-                writeln!(output, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+                writeln!(
+                    output,
+                    "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+                )
+                .unwrap();
             }
 
             // Add sqlx(json) and serde(default) attributes for AuditMetadata JSONB deserialization
@@ -1486,8 +1954,14 @@ impl RustGenerator {
 
         // Generate entity methods implementation block (including DDD methods if entity exists)
         // Note: entity was already found at the beginning of this function for error type extraction
-        self.generate_entity_methods(model, entity, state_machine,
-            self.find_state_machine_hook(model, schema).map(|h| h.name.as_str()), &mut output);
+        self.generate_entity_methods(
+            model,
+            entity,
+            state_machine,
+            self.find_state_machine_hook(model, schema)
+                .map(|h| h.name.as_str()),
+            &mut output,
+        );
 
         // Generate backbone_orm::EntityRepoMeta implementation (needs schema for enum detection)
         {
@@ -1555,7 +2029,11 @@ impl RustGenerator {
                     _ => {
                         // Check if this is a value object (shared_type or value_object)
                         let is_value_object = schema.schema.shared_types.contains_key(name)
-                            || schema.schema.value_objects.iter().any(|vo| &vo.name == name);
+                            || schema
+                                .schema
+                                .value_objects
+                                .iter()
+                                .any(|vo| &vo.name == name);
 
                         if is_value_object {
                             *needs_value_objects = true;
@@ -1572,18 +2050,62 @@ impl RustGenerator {
                 }
             }
             TypeRef::Optional(inner) => {
-                self.collect_type_imports(inner, needs_datetime, needs_naive_date,
-                                         needs_naive_time, needs_duration, needs_uuid, needs_decimal, needs_other_entities, needs_value_objects, custom_types, schema);
+                self.collect_type_imports(
+                    inner,
+                    needs_datetime,
+                    needs_naive_date,
+                    needs_naive_time,
+                    needs_duration,
+                    needs_uuid,
+                    needs_decimal,
+                    needs_other_entities,
+                    needs_value_objects,
+                    custom_types,
+                    schema,
+                );
             }
             TypeRef::Array(inner) => {
-                self.collect_type_imports(inner, needs_datetime, needs_naive_date,
-                                         needs_naive_time, needs_duration, needs_uuid, needs_decimal, needs_other_entities, needs_value_objects, custom_types, schema);
+                self.collect_type_imports(
+                    inner,
+                    needs_datetime,
+                    needs_naive_date,
+                    needs_naive_time,
+                    needs_duration,
+                    needs_uuid,
+                    needs_decimal,
+                    needs_other_entities,
+                    needs_value_objects,
+                    custom_types,
+                    schema,
+                );
             }
             TypeRef::Map { key, value } => {
-                self.collect_type_imports(key, needs_datetime, needs_naive_date,
-                                         needs_naive_time, needs_duration, needs_uuid, needs_decimal, needs_other_entities, needs_value_objects, custom_types, schema);
-                self.collect_type_imports(value, needs_datetime, needs_naive_date,
-                                         needs_naive_time, needs_duration, needs_uuid, needs_decimal, needs_other_entities, needs_value_objects, custom_types, schema);
+                self.collect_type_imports(
+                    key,
+                    needs_datetime,
+                    needs_naive_date,
+                    needs_naive_time,
+                    needs_duration,
+                    needs_uuid,
+                    needs_decimal,
+                    needs_other_entities,
+                    needs_value_objects,
+                    custom_types,
+                    schema,
+                );
+                self.collect_type_imports(
+                    value,
+                    needs_datetime,
+                    needs_naive_date,
+                    needs_naive_time,
+                    needs_duration,
+                    needs_uuid,
+                    needs_decimal,
+                    needs_other_entities,
+                    needs_value_objects,
+                    custom_types,
+                    schema,
+                );
             }
             TypeRef::ModuleRef { .. } => {}
         }
@@ -1659,11 +2181,19 @@ impl RustGenerator {
             "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]"
         )
         .unwrap();
-        writeln!(output, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
+        writeln!(
+            output,
+            "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]"
+        )
+        .unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
         // Use the actual PostgreSQL enum type name (snake_case)
-        writeln!(output, "#[sqlx(type_name = \"{}\", rename_all = \"snake_case\")]",
-                 to_snake_case(enum_name)).unwrap();
+        writeln!(
+            output,
+            "#[sqlx(type_name = \"{}\", rename_all = \"snake_case\")]",
+            to_snake_case(enum_name)
+        )
+        .unwrap();
 
         // Enum - use escaped PascalCase name
         writeln!(output, "pub enum {} {{", escaped_enum_name).unwrap();
@@ -1689,7 +2219,12 @@ impl RustGenerator {
 
         // Implement Display
         writeln!(output).unwrap();
-        writeln!(output, "impl std::fmt::Display for {} {{", escaped_enum_name).unwrap();
+        writeln!(
+            output,
+            "impl std::fmt::Display for {} {{",
+            escaped_enum_name
+        )
+        .unwrap();
         writeln!(
             output,
             "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{"
@@ -1774,15 +2309,13 @@ impl RustGenerator {
                 // Preserve Rust primitive types and common types as-is
                 match name.as_str() {
                     // Rust primitive types - must be lowercase
-                    "u8" | "u16" | "u32" | "u64" | "u128" | "usize" |
-                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
-                    "f32" | "f64" | "bool" | "str" | "String" |
-                    "char" | "()" => name.clone(),
+                    "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32"
+                    | "i64" | "i128" | "isize" | "f32" | "f64" | "bool" | "str" | "String"
+                    | "char" | "()" => name.clone(),
                     // Common Rust types - preserve exact casing
-                    "Vec" | "Option" | "Result" | "Box" | "Arc" | "Rc" |
-                    "HashMap" | "BTreeMap" | "HashSet" | "BTreeSet" |
-                    "DateTime" | "Utc" | "NaiveDate" | "NaiveTime" | "NaiveDateTime" |
-                    "Duration" | "Uuid" | "Decimal" | "Value" => name.clone(),
+                    "Vec" | "Option" | "Result" | "Box" | "Arc" | "Rc" | "HashMap" | "BTreeMap"
+                    | "HashSet" | "BTreeSet" | "DateTime" | "Utc" | "NaiveDate" | "NaiveTime"
+                    | "NaiveDateTime" | "Duration" | "Uuid" | "Decimal" | "Value" => name.clone(),
                     // Custom types - convert to PascalCase
                     _ => to_pascal_case(name),
                 }
@@ -1836,7 +2369,11 @@ impl Generator for RustGenerator {
 
         writeln!(mod_content, "//! Domain Entities").unwrap();
         writeln!(mod_content, "//!").unwrap();
-        writeln!(mod_content, "//! Generated by metaphor-schema. Do not edit manually.").unwrap();
+        writeln!(
+            mod_content,
+            "//! Generated by metaphor-schema. Do not edit manually."
+        )
+        .unwrap();
         writeln!(mod_content).unwrap();
 
         // Collect unique module names (models + enums) to avoid duplicates
@@ -1897,18 +2434,38 @@ impl Generator for RustGenerator {
         writeln!(mod_content).unwrap();
 
         // Entity trait
-        writeln!(mod_content, "// ==========================================================================").unwrap();
+        writeln!(
+            mod_content,
+            "// =========================================================================="
+        )
+        .unwrap();
         writeln!(mod_content, "// Entity Trait").unwrap();
-        writeln!(mod_content, "// ==========================================================================").unwrap();
+        writeln!(
+            mod_content,
+            "// =========================================================================="
+        )
+        .unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "use std::fmt::Debug;").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "/// Trait for domain entities").unwrap();
         writeln!(mod_content, "///").unwrap();
-        writeln!(mod_content, "/// All generated entities implement this trait, providing").unwrap();
-        writeln!(mod_content, "/// a common interface for working with domain objects.").unwrap();
+        writeln!(
+            mod_content,
+            "/// All generated entities implement this trait, providing"
+        )
+        .unwrap();
+        writeln!(
+            mod_content,
+            "/// a common interface for working with domain objects."
+        )
+        .unwrap();
         writeln!(mod_content, "pub trait Entity: Debug + Clone {{").unwrap();
-        writeln!(mod_content, "    /// The type of the entity's unique identifier").unwrap();
+        writeln!(
+            mod_content,
+            "    /// The type of the entity's unique identifier"
+        )
+        .unwrap();
         writeln!(mod_content, "    type Id: Debug + Clone + PartialEq;").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// Get the entity's unique identifier").unwrap();
@@ -1920,9 +2477,17 @@ impl Generator for RustGenerator {
         writeln!(mod_content).unwrap();
 
         // AuditMetadata struct for JSONB audit fields
-        writeln!(mod_content, "// ==========================================================================").unwrap();
+        writeln!(
+            mod_content,
+            "// =========================================================================="
+        )
+        .unwrap();
         writeln!(mod_content, "// Audit Metadata").unwrap();
-        writeln!(mod_content, "// ==========================================================================").unwrap();
+        writeln!(
+            mod_content,
+            "// =========================================================================="
+        )
+        .unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "use chrono::{{DateTime, Utc}};").unwrap();
         writeln!(mod_content, "use serde::{{Deserialize, Serialize}};").unwrap();
@@ -1930,40 +2495,96 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(mod_content, "use utoipa::ToSchema;").unwrap();
         writeln!(mod_content).unwrap();
-        writeln!(mod_content, "/// Audit metadata stored as JSONB in the database").unwrap();
+        writeln!(
+            mod_content,
+            "/// Audit metadata stored as JSONB in the database"
+        )
+        .unwrap();
         writeln!(mod_content, "///").unwrap();
-        writeln!(mod_content, "/// This struct consolidates audit fields (timestamps and actors) into a single").unwrap();
-        writeln!(mod_content, "/// JSONB column for efficient storage and flexible querying.").unwrap();
-        writeln!(mod_content, "#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]").unwrap();
-        writeln!(mod_content, "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]").unwrap();
+        writeln!(
+            mod_content,
+            "/// This struct consolidates audit fields (timestamps and actors) into a single"
+        )
+        .unwrap();
+        writeln!(
+            mod_content,
+            "/// JSONB column for efficient storage and flexible querying."
+        )
+        .unwrap();
+        writeln!(
+            mod_content,
+            "#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]"
+        )
+        .unwrap();
+        writeln!(
+            mod_content,
+            "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]"
+        )
+        .unwrap();
         writeln!(mod_content, "pub struct AuditMetadata {{").unwrap();
         writeln!(mod_content, "    /// Timestamp when the record was created").unwrap();
-        writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+        writeln!(
+            mod_content,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub created_at: Option<DateTime<Utc>>,").unwrap();
         writeln!(mod_content).unwrap();
-        writeln!(mod_content, "    /// Timestamp when the record was last updated").unwrap();
-        writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+        writeln!(
+            mod_content,
+            "    /// Timestamp when the record was last updated"
+        )
+        .unwrap();
+        writeln!(
+            mod_content,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub updated_at: Option<DateTime<Utc>>,").unwrap();
         writeln!(mod_content).unwrap();
-        writeln!(mod_content, "    /// Timestamp when the record was soft-deleted").unwrap();
-        writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+        writeln!(
+            mod_content,
+            "    /// Timestamp when the record was soft-deleted"
+        )
+        .unwrap();
+        writeln!(
+            mod_content,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub deleted_at: Option<DateTime<Utc>>,").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// User ID who created the record").unwrap();
-        writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+        writeln!(
+            mod_content,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub created_by: Option<Uuid>,").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// User ID who last updated the record").unwrap();
-        writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+        writeln!(
+            mod_content,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub updated_by: Option<Uuid>,").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// User ID who deleted the record").unwrap();
-        writeln!(mod_content, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
+        writeln!(
+            mod_content,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub deleted_by: Option<Uuid>,").unwrap();
         writeln!(mod_content, "}}").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "impl AuditMetadata {{").unwrap();
-        writeln!(mod_content, "    /// Create new audit metadata with created_at set to now").unwrap();
+        writeln!(
+            mod_content,
+            "    /// Create new audit metadata with created_at set to now"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub fn new() -> Self {{").unwrap();
         writeln!(mod_content, "        Self {{").unwrap();
         writeln!(mod_content, "            created_at: Some(Utc::now()),").unwrap();
@@ -1972,7 +2593,11 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "    }}").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// Create with creator ID").unwrap();
-        writeln!(mod_content, "    pub fn with_creator(creator_id: Uuid) -> Self {{").unwrap();
+        writeln!(
+            mod_content,
+            "    pub fn with_creator(creator_id: Uuid) -> Self {{"
+        )
+        .unwrap();
         writeln!(mod_content, "        Self {{").unwrap();
         writeln!(mod_content, "            created_at: Some(Utc::now()),").unwrap();
         writeln!(mod_content, "            created_by: Some(creator_id),").unwrap();
@@ -1986,7 +2611,11 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "    }}").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// Touch with updater ID").unwrap();
-        writeln!(mod_content, "    pub fn touch_by(&mut self, updater_id: Uuid) {{").unwrap();
+        writeln!(
+            mod_content,
+            "    pub fn touch_by(&mut self, updater_id: Uuid) {{"
+        )
+        .unwrap();
         writeln!(mod_content, "        self.updated_at = Some(Utc::now());").unwrap();
         writeln!(mod_content, "        self.updated_by = Some(updater_id);").unwrap();
         writeln!(mod_content, "    }}").unwrap();
@@ -1997,7 +2626,11 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "    }}").unwrap();
         writeln!(mod_content).unwrap();
         writeln!(mod_content, "    /// Soft delete with deleter ID").unwrap();
-        writeln!(mod_content, "    pub fn soft_delete_by(&mut self, deleter_id: Uuid) {{").unwrap();
+        writeln!(
+            mod_content,
+            "    pub fn soft_delete_by(&mut self, deleter_id: Uuid) {{"
+        )
+        .unwrap();
         writeln!(mod_content, "        self.deleted_at = Some(Utc::now());").unwrap();
         writeln!(mod_content, "        self.deleted_by = Some(deleter_id);").unwrap();
         writeln!(mod_content, "    }}").unwrap();
@@ -2013,7 +2646,11 @@ impl Generator for RustGenerator {
         writeln!(mod_content, "        self.deleted_at.is_some()").unwrap();
         writeln!(mod_content, "    }}").unwrap();
         writeln!(mod_content).unwrap();
-        writeln!(mod_content, "    /// Check if record is active (not deleted)").unwrap();
+        writeln!(
+            mod_content,
+            "    /// Check if record is active (not deleted)"
+        )
+        .unwrap();
         writeln!(mod_content, "    pub fn is_active(&self) -> bool {{").unwrap();
         writeln!(mod_content, "        self.deleted_at.is_none()").unwrap();
         writeln!(mod_content, "    }}").unwrap();
@@ -2032,8 +2669,8 @@ impl Generator for RustGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::hook::{Hook, State, StateMachine, Transition};
     use crate::ast::{Attribute, Field, ModuleSchema, PrimitiveType};
-    use crate::ast::hook::{Hook, StateMachine, State, Transition};
 
     fn make_model_with_status() -> Model {
         let mut model = Model::new("Payment");
@@ -2068,12 +2705,17 @@ mod tests {
         hook.state_machine = Some(StateMachine {
             field: "status".to_string(),
             states: vec![
-                State { name: "pending".to_string(), initial: true, ..Default::default() },
-                State { name: "paid".to_string(), ..Default::default() },
+                State {
+                    name: "pending".to_string(),
+                    initial: true,
+                    ..Default::default()
+                },
+                State {
+                    name: "paid".to_string(),
+                    ..Default::default()
+                },
             ],
-            transitions: vec![
-                Transition::new("pay", vec!["pending".to_string()], "paid"),
-            ],
+            transitions: vec![Transition::new("pay", vec!["pending".to_string()], "paid")],
             span: Default::default(),
         });
         schema.hooks.push(hook);
@@ -2112,7 +2754,9 @@ mod tests {
     fn generate_entity_file(model: Model, file: &str) -> String {
         let mut schema = ModuleSchema::new("test");
         schema.models.push(model);
-        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let output = RustGenerator::new()
+            .generate(&ResolvedSchema { schema })
+            .unwrap();
         output
             .files
             .get(&PathBuf::from(file))
@@ -2124,7 +2768,10 @@ mod tests {
     fn company_fence_is_structural_not_declared() {
         // No `@owner`, no `@tenant`, no annotation whatsoever — the fence must come from the
         // column's presence, a fact the author cannot forget to state.
-        let file = generate_entity_file(make_tenant_scoped_model(), "src/domain/entity/sales_invoice.rs");
+        let file = generate_entity_file(
+            make_tenant_scoped_model(),
+            "src/domain/entity/sales_invoice.rs",
+        );
         assert!(
             file.contains("fn company_field() -> Option<&'static str>"),
             "an entity with a tenant column must be fenced without being annotated"
@@ -2170,7 +2817,10 @@ mod tests {
         }];
 
         let file = generate_entity_file(model, "src/domain/entity/currency.rs");
-        assert!(!file.contains("fn company_field()"), "global reference data must not be fenced");
+        assert!(
+            !file.contains("fn company_field()"),
+            "global reference data must not be fenced"
+        );
     }
 
     #[test]
@@ -2179,7 +2829,9 @@ mod tests {
         let generator = RustGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let payment_file = output.files.get(&PathBuf::from("src/domain/entity/payment.rs"))
+        let payment_file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/payment.rs"))
             .expect("payment.rs should be generated");
 
         assert!(
@@ -2206,12 +2858,15 @@ mod tests {
         let generator = RustGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let payment_file = output.files.get(&PathBuf::from("src/domain/entity/payment.rs"))
+        let payment_file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/payment.rs"))
             .expect("payment.rs should be generated");
 
         // apply_patch should NOT contain a direct assignment to status
         // (the status arm should be absent from the match block)
-        let patch_section = payment_file.find("pub fn apply_patch")
+        let patch_section = payment_file
+            .find("pub fn apply_patch")
             .map(|start| &payment_file[start..start + 600])
             .unwrap_or("");
 
@@ -2227,7 +2882,9 @@ mod tests {
         let generator = RustGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let payment_file = output.files.get(&PathBuf::from("src/domain/entity/payment.rs"))
+        let payment_file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/payment.rs"))
             .expect("payment.rs should be generated");
 
         assert!(
@@ -2255,12 +2912,16 @@ mod tests {
             },
         ];
         module_schema.models.push(model);
-        let schema = ResolvedSchema { schema: module_schema };
+        let schema = ResolvedSchema {
+            schema: module_schema,
+        };
 
         let generator = RustGenerator::new();
         let output = generator.generate(&schema).unwrap();
 
-        let product_file = output.files.get(&PathBuf::from("src/domain/entity/product.rs"))
+        let product_file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/product.rs"))
             .expect("product.rs should be generated");
 
         assert!(

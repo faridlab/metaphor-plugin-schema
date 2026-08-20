@@ -11,52 +11,88 @@ pub mod types;
 pub mod workflow;
 
 // Re-export main types
+pub use authorization::{
+    AbacAttributes, AbacPolicy, AuthorizationConfig, PolicyDefinition, PolicyRule, PolicyType,
+    ResourcePolicy, ResourcePolicyRule, RoleDefinition,
+};
+pub use hook::{
+    Action, ActionType, CommitPolicy, ComputedField, Enforcement, Hook, JobPosture, Permission,
+    PermissionAction, Rule, ScheduledJob, State, StateMachine, Transition, Trigger, TriggerEvent,
+};
 pub use model::{
-    Attribute, AttributeValue, CompanyFence, EnumDef, EnumVariant, Field, ForeignKeyAction, Index,
-    IndexType, Lifecycle, LifecycleShape, Model, Relation,
-    RelationType, TypeDef, TypeDefField,
-    // DDD Entity & Value Object types
-    Entity, EntityMethod, ValueObject, ValueObjectMethod,
+    // Application Service types
+    AppService,
+    AppServiceMethod,
+    Attribute,
+    AttributeValue,
+    CompanyFence,
+    ComputedDtoField,
+    // Domain Event types
+    DomainEvent,
     // Domain Service types
-    DomainService, ServiceDependency, ServiceMethod,
+    DomainService,
+    // DTO types
+    Dto,
+    DtoField,
+    Endpoint,
+    // DDD Entity & Value Object types
+    Entity,
+    EntityMethod,
+    EnumDef,
+    EnumVariant,
+    EventField,
     // Event Sourcing types
-    EventSourcedConfig, SnapshotConfig,
+    EventSourcedConfig,
+    EventStorage,
+    Field,
+    ForeignKeyAction,
+    GrpcConfig,
+    GrpcMethod,
+    GrpcService,
+    // Event Handler types
+    Handler,
+    HandlerRetryPolicy,
+    HttpConfig,
+    Index,
+    IndexType,
+    // Integration/ACL types
+    Integration,
+    IntegrationMethod,
+    Lifecycle,
+    LifecycleShape,
+    Model,
+    // Presentation layer types
+    Presentation,
+    // CQRS Projection types
+    Projection,
+    ProjectionField,
+    ProjectionIndex,
+    ProjectionStorage,
+    Relation,
+    RelationType,
+    // Repository Trait types
+    RepositoryTrait,
+    RouteGroup,
+    ServiceDependency,
+    ServiceMethod,
+    SnapshotConfig,
+    SourceEvent,
+    Subscription,
+    TraitMethod,
+    TypeDef,
+    TypeDefField,
     // Use Case types
     UseCase,
-    // Domain Event types
-    DomainEvent, EventStorage, EventField,
-    // CQRS Projection types
-    Projection, ProjectionStorage, SourceEvent, ProjectionField, ProjectionIndex,
-    // Application Service types
-    AppService, AppServiceMethod,
-    // Event Handler types
-    Handler, HandlerRetryPolicy, Subscription,
-    // Integration/ACL types
-    Integration, IntegrationMethod,
-    // Presentation layer types
-    Presentation, HttpConfig, RouteGroup, Endpoint, GrpcConfig, GrpcService, GrpcMethod,
-    // DTO types
-    Dto, DtoField, ComputedDtoField,
+    ValueObject,
+    ValueObjectMethod,
     // Versioning types
     Versioning,
-    // Repository Trait types
-    RepositoryTrait, TraitMethod,
 };
 pub use types::{PrimitiveType, TypeRef};
-pub use hook::{
-    Action, ActionType, CommitPolicy, ComputedField, Enforcement, JobPosture, Permission,
-    PermissionAction, Rule, ScheduledJob, State, StateMachine, Transition, Trigger, TriggerEvent,
-    Hook,
-};
 pub use workflow::{
-    Workflow, WorkflowTrigger, WorkflowConfig, WorkflowHandler, TransactionMode, Step, StepType,
-    ActionStep, WaitStep, ConditionStep, ParallelStep, LoopStep,
-    SubprocessStep, HumanTaskStep, TransitionStep, TerminalStep,
-    CompensationStep, RetryPolicy, BackoffStrategy,
-};
-pub use authorization::{
-    AuthorizationConfig, RoleDefinition, PolicyDefinition, PolicyType, PolicyRule,
-    ResourcePolicy, ResourcePolicyRule, AbacAttributes, AbacPolicy,
+    ActionStep, BackoffStrategy, CompensationStep, ConditionStep, HumanTaskStep, LoopStep,
+    ParallelStep, RetryPolicy, Step, StepType, SubprocessStep, TerminalStep, TransactionMode,
+    TransitionStep, WaitStep, Workflow, WorkflowConfig, WorkflowHandler, WorkflowTrigger,
 };
 
 use indexmap::IndexMap;
@@ -161,7 +197,6 @@ pub struct ModuleSchema {
     // ==========================================================================
     // DDD & AUTHORIZATION EXTENSIONS
     // ==========================================================================
-
     /// DDD Entity definitions (enhanced models with behavior)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<Entity>,
@@ -187,7 +222,6 @@ pub struct ModuleSchema {
     // ==========================================================================
     // CQRS, APPLICATION LAYER & PRESENTATION EXTENSIONS
     // ==========================================================================
-
     /// CQRS Projection definitions (read models)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projections: Vec<Projection>,

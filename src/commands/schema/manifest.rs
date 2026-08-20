@@ -69,7 +69,10 @@ pub(super) fn load_user_owned_globs(output_dir: &Path) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in &manifest.user_owned {
         let glob = Glob::new(pattern).with_context(|| {
-            format!("Invalid user_owned glob in metaphor.codegen.yaml: {}", pattern)
+            format!(
+                "Invalid user_owned glob in metaphor.codegen.yaml: {}",
+                pattern
+            )
         })?;
         builder.add(glob);
     }

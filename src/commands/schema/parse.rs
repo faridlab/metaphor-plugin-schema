@@ -67,11 +67,17 @@ pub(super) fn execute_parse(path: &PathBuf, format: OutputFormat) -> Result<()> 
             println!("{} {}", "Parsing YAML hook:".cyan().bold(), file.display());
             match parse_yaml_hook_flexible(&content) {
                 Ok(HookParseResult::Hook(hook_file)) => print_hook_file(&hook_file, &format),
-                Ok(HookParseResult::Index(index_schema)) => print_hook_index(&index_schema, &format),
+                Ok(HookParseResult::Index(index_schema)) => {
+                    print_hook_index(&index_schema, &format)
+                }
                 Err(e) => println!("{}", e.format_with_source(&content, Some(filename)).red()),
             }
         } else if filename.ends_with(".workflow.yaml") {
-            println!("{} {}", "Parsing YAML workflow:".cyan().bold(), file.display());
+            println!(
+                "{} {}",
+                "Parsing YAML workflow:".cyan().bold(),
+                file.display()
+            );
             match parse_yaml_workflow(&content) {
                 Ok(workflow_file) => print_workflow_file(&workflow_file, &format),
                 Err(e) => println!("{}", e.format_with_source(&content, Some(filename)).red()),
@@ -155,12 +161,7 @@ fn print_hook_file(hook_file: &HookFile, format: &OutputFormat) {
                     }
                     println!("      Transitions: {}", sm.transitions.len());
                     for trans in &sm.transitions {
-                        println!(
-                            "        {} {:?} -> {}",
-                            "•".blue(),
-                            trans.from,
-                            trans.to
-                        );
+                        println!("        {} {:?} -> {}", "•".blue(), trans.from, trans.to);
                     }
                 }
 

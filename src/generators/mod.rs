@@ -3,8 +3,8 @@
 //! This module contains all code generators that transform the AST
 //! into various output formats.
 
-pub mod auth;
 pub mod audit_triggers;
+pub mod auth;
 pub mod bulk_operations;
 pub mod computed;
 pub mod config;
@@ -18,10 +18,16 @@ pub mod handler;
 pub mod module;
 pub mod openapi;
 // TODO: pub mod permission;
+pub mod dto;
+pub mod export;
+pub mod integration;
+pub mod integration_test;
+pub mod projection;
 pub mod proto;
 pub mod repository;
 pub mod repository_trait;
 pub mod rust;
+pub mod seeder;
 pub mod service;
 pub mod specification;
 pub mod sql;
@@ -30,21 +36,15 @@ pub mod trigger;
 pub mod usecase;
 pub mod validator;
 pub mod value_object;
-pub mod projection;
-pub mod export;
-pub mod integration;
-pub mod dto;
-pub mod seeder;
-pub mod integration_test;
 pub mod versioning;
 
 // Framework compliance generators
 pub mod app_state;
-pub mod routes_composer;
 pub mod handlers_module;
+pub mod routes_composer;
 
-pub use auth::AuthGenerator;
 pub use audit_triggers::AuditTriggersGenerator;
+pub use auth::AuthGenerator;
 pub use bulk_operations::BulkOperationsGenerator;
 pub use computed::ComputedGenerator;
 pub use config::ConfigGenerator;
@@ -58,10 +58,16 @@ pub use handler::HandlerGenerator;
 pub use module::ModuleGenerator;
 pub use openapi::OpenApiGenerator;
 // TODO: pub use permission::PermissionGenerator;
+pub use dto::DtoGenerator;
+pub use export::ExportGenerator;
+pub use integration::IntegrationGenerator;
+pub use integration_test::IntegrationTestGenerator;
+pub use projection::ProjectionGenerator;
 pub use proto::ProtoGenerator;
 pub use repository::RepositoryGenerator;
 pub use repository_trait::RepositoryTraitGenerator;
 pub use rust::RustGenerator;
+pub use seeder::SeederGenerator;
 pub use service::ServiceGenerator;
 pub use specification::SpecificationGenerator;
 pub use sql::SqlGenerator;
@@ -70,18 +76,12 @@ pub use trigger::TriggerGenerator;
 pub use usecase::UseCaseGenerator;
 pub use validator::ValidatorGenerator;
 pub use value_object::ValueObjectGenerator;
-pub use projection::ProjectionGenerator;
-pub use export::ExportGenerator;
-pub use integration::IntegrationGenerator;
-pub use dto::DtoGenerator;
-pub use seeder::SeederGenerator;
-pub use integration_test::IntegrationTestGenerator;
 pub use versioning::VersioningGenerator;
 
 // Framework compliance generators
 pub use app_state::AppStateGenerator;
-pub use routes_composer::RoutesComposerGenerator;
 pub use handlers_module::HandlersModuleGenerator;
+pub use routes_composer::RoutesComposerGenerator;
 
 use crate::resolver::ResolvedSchema;
 use crate::utils::to_snake_case;
@@ -211,7 +211,12 @@ pub fn migration_timestamp_for(index: usize) -> String {
 /// // pub use user_commands::*;
 /// ```
 pub fn build_subdirectory_mod(model_name: &str, module_file: &str) -> String {
-    let model_pascal = if model_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+    let model_pascal = if model_name
+        .chars()
+        .next()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false)
+    {
         model_name.to_string()
     } else {
         // Convert snake_case to PascalCase for display
@@ -221,9 +226,7 @@ pub fn build_subdirectory_mod(model_name: &str, module_file: &str) -> String {
                 let mut chars = s.chars();
                 match chars.next() {
                     None => String::new(),
-                    Some(first) => {
-                        first.to_uppercase().collect::<String>() + chars.as_str()
-                    }
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                 }
             })
             .collect::<String>()
@@ -309,7 +312,8 @@ impl NameCache {
     /// Get or compute snake_case for a model name
     pub fn get_snake(&mut self, name: &str) -> &str {
         if !self.snake_cache.contains_key(name) {
-            self.snake_cache.insert(name.to_string(), to_snake_case(name));
+            self.snake_cache
+                .insert(name.to_string(), to_snake_case(name));
         }
         self.snake_cache.get(name).map(|s| s.as_str()).unwrap()
     }
@@ -317,7 +321,8 @@ impl NameCache {
     /// Get or compute PascalCase for a model name
     pub fn get_pascal(&mut self, name: &str) -> &str {
         if !self.pascal_cache.contains_key(name) {
-            self.pascal_cache.insert(name.to_string(), to_pascal_case(name));
+            self.pascal_cache
+                .insert(name.to_string(), to_pascal_case(name));
         }
         self.pascal_cache.get(name).map(|s| s.as_str()).unwrap()
     }
@@ -451,9 +456,7 @@ fn to_pascal_case(name: &str) -> String {
             let mut chars = s.chars();
             match chars.next() {
                 None => String::new(),
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + chars.as_str()
-                }
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
             }
         })
         .collect::<String>()
@@ -563,7 +566,9 @@ pub fn generate_all_with_options(
                     GenerationTarget::Rust => RustGenerator::new().generate(s)?,
                     GenerationTarget::Sql => SqlGenerator::new().generate(s)?,
                     GenerationTarget::Repository => RepositoryGenerator::new().generate(s)?,
-                    GenerationTarget::RepositoryTrait => RepositoryTraitGenerator::new().generate(s)?,
+                    GenerationTarget::RepositoryTrait => {
+                        RepositoryTraitGenerator::new().generate(s)?
+                    }
                     GenerationTarget::Service => ServiceGenerator::new().generate(s)?,
                     GenerationTarget::DomainService => DomainServiceGenerator::new().generate(s)?,
                     GenerationTarget::UseCase => UseCaseGenerator::new().generate(s)?,
@@ -575,7 +580,9 @@ pub fn generate_all_with_options(
                     GenerationTarget::Handler => HandlerGenerator::new().generate(s)?,
                     GenerationTarget::Grpc => GrpcGenerator::new().generate(s)?,
                     GenerationTarget::Graphql => GraphqlGenerator::new().generate(s)?,
-                    GenerationTarget::OpenApi => OpenApiGenerator::new().with_split(options.split).generate(s)?,
+                    GenerationTarget::OpenApi => OpenApiGenerator::new()
+                        .with_split(options.split)
+                        .generate(s)?,
                     GenerationTarget::Trigger => TriggerGenerator::new().generate(s)?,
                     GenerationTarget::Flow => FlowGenerator::new().generate(s)?,
                     GenerationTarget::Module => ModuleGenerator::new().generate(s)?,
@@ -589,14 +596,22 @@ pub fn generate_all_with_options(
                     GenerationTarget::Integration => IntegrationGenerator::new().generate(s)?,
                     GenerationTarget::Dto => DtoGenerator::new().generate(s)?,
                     GenerationTarget::Versioning => VersioningGenerator::new().generate(s)?,
-                    GenerationTarget::BulkOperations => BulkOperationsGenerator::new().generate(s)?,
+                    GenerationTarget::BulkOperations => {
+                        BulkOperationsGenerator::new().generate(s)?
+                    }
                     GenerationTarget::Seeder => SeederGenerator::new().generate(s)?,
-                    GenerationTarget::IntegrationTest => IntegrationTestGenerator::new().generate(s)?,
+                    GenerationTarget::IntegrationTest => {
+                        IntegrationTestGenerator::new().generate(s)?
+                    }
                     GenerationTarget::AuditTriggers => AuditTriggersGenerator::new().generate(s)?,
                     // Framework compliance generators
                     GenerationTarget::AppState => AppStateGenerator::new().generate(s)?,
-                    GenerationTarget::RoutesComposer => RoutesComposerGenerator::new().generate(s)?,
-                    GenerationTarget::HandlersModule => HandlersModuleGenerator::new().generate(s)?,
+                    GenerationTarget::RoutesComposer => {
+                        RoutesComposerGenerator::new().generate(s)?
+                    }
+                    GenerationTarget::HandlersModule => {
+                        HandlersModuleGenerator::new().generate(s)?
+                    }
                 };
                 batch_output.merge(generator_output);
             }
@@ -662,7 +677,9 @@ impl GenerationTarget {
             "repository-trait" | "repository_trait" | "repo-trait" => Some(Self::RepositoryTrait),
             "service" | "services" | "svc" => Some(Self::Service),
             "domain-service" | "domain_service" | "domain-svc" => Some(Self::DomainService),
-            "usecase" | "usecases" | "use-case" | "use_case" | "interactor" | "interactors" => Some(Self::UseCase),
+            "usecase" | "usecases" | "use-case" | "use_case" | "interactor" | "interactors" => {
+                Some(Self::UseCase)
+            }
             "auth" | "authentication" | "authorization" => Some(Self::Auth),
             "events" | "domain-events" | "messaging" => Some(Self::Events),
             "state-machine" | "statemachine" | "sm" => Some(Self::StateMachine),
@@ -673,7 +690,9 @@ impl GenerationTarget {
             "graphql" | "gql" => Some(Self::Graphql),
             "openapi" | "swagger" => Some(Self::OpenApi),
             "trigger" | "triggers" => Some(Self::Trigger),
-            "workflow" | "workflows" | "flow" | "flows" | "saga" | "orchestration" => Some(Self::Flow),
+            "workflow" | "workflows" | "flow" | "flows" | "saga" | "orchestration" => {
+                Some(Self::Flow)
+            }
             "module" | "mod" | "lib" => Some(Self::Module),
             "config" | "configuration" | "settings" => Some(Self::Config),
             "value-object" | "value_object" | "vo" => Some(Self::ValueObject),
@@ -687,8 +706,12 @@ impl GenerationTarget {
             "versioning" | "version" | "api-version" | "api-versioning" => Some(Self::Versioning),
             "bulk-operations" | "bulk_operations" | "bulk" | "batch" => Some(Self::BulkOperations),
             "seeder" | "seeders" | "seed" | "seeds" => Some(Self::Seeder),
-            "integration-test" | "integration_test" | "test" | "tests" => Some(Self::IntegrationTest),
-            "audit-triggers" | "audit_triggers" | "audit-trigger" | "audit_trigger" => Some(Self::AuditTriggers),
+            "integration-test" | "integration_test" | "test" | "tests" => {
+                Some(Self::IntegrationTest)
+            }
+            "audit-triggers" | "audit_triggers" | "audit-trigger" | "audit_trigger" => {
+                Some(Self::AuditTriggers)
+            }
             // Framework compliance generators
             "app-state" | "app_state" | "appstate" => Some(Self::AppState),
             "routes-composer" | "routes_composer" => Some(Self::RoutesComposer),
@@ -758,10 +781,7 @@ pub fn parse_targets(s: &str) -> Vec<GenerationTarget> {
 /// Matching is alias-aware: any string `from_str()` accepts (e.g. `handler`,
 /// `handlers`, `rest`) resolves to the canonical [`GenerationTarget`] before
 /// comparison.
-pub(crate) fn model_skips_target(
-    model: &crate::ast::Model,
-    target: GenerationTarget,
-) -> bool {
+pub(crate) fn model_skips_target(model: &crate::ast::Model, target: GenerationTarget) -> bool {
     // Whitelist mode: if enabled is non-empty, only listed targets pass.
     if !model.enabled_generators.is_empty() {
         let allowed = model
@@ -801,19 +821,20 @@ fn filter_targets_by_config(
     }
 
     // Blacklist mode: remove explicitly disabled targets
-    let mut filtered: Vec<GenerationTarget> = if let Some(disabled) = config.as_ref().and_then(|c| c.disabled.as_ref()) {
-        let disabled_targets: Vec<GenerationTarget> = disabled
-            .iter()
-            .filter_map(|s| GenerationTarget::from_str(s.trim()))
-            .collect();
-        targets
-            .iter()
-            .filter(|t| !disabled_targets.contains(t))
-            .cloned()
-            .collect()
-    } else {
-        targets.to_vec()
-    };
+    let mut filtered: Vec<GenerationTarget> =
+        if let Some(disabled) = config.as_ref().and_then(|c| c.disabled.as_ref()) {
+            let disabled_targets: Vec<GenerationTarget> = disabled
+                .iter()
+                .filter_map(|s| GenerationTarget::from_str(s.trim()))
+                .collect();
+            targets
+                .iter()
+                .filter(|t| !disabled_targets.contains(t))
+                .cloned()
+                .collect()
+        } else {
+            targets.to_vec()
+        };
 
     // CQRS opt-in: skip Cqrs and Projection unless cqrs = true
     // Applies regardless of whether a config exists — default is opt-out
@@ -828,14 +849,16 @@ fn filter_targets_by_config(
     // produces uncompiled orphan dirs. Modules that wire them set `layers: true`.
     let layers_enabled = config.as_ref().and_then(|c| c.layers) == Some(true);
     if !layers_enabled {
-        filtered.retain(|t| !matches!(
-            t,
-            GenerationTarget::Auth
-                | GenerationTarget::BulkOperations
-                | GenerationTarget::UseCase
-                | GenerationTarget::RoutesComposer
-                | GenerationTarget::HandlersModule
-        ));
+        filtered.retain(|t| {
+            !matches!(
+                t,
+                GenerationTarget::Auth
+                    | GenerationTarget::BulkOperations
+                    | GenerationTarget::UseCase
+                    | GenerationTarget::RoutesComposer
+                    | GenerationTarget::HandlersModule
+            )
+        });
     }
 
     filtered
@@ -850,7 +873,11 @@ mod tests {
         GenerationTarget::all()
     }
 
-    fn make_config(enabled: Option<Vec<&str>>, disabled: Option<Vec<&str>>, cqrs: Option<bool>) -> Option<GeneratorsConfig> {
+    fn make_config(
+        enabled: Option<Vec<&str>>,
+        disabled: Option<Vec<&str>>,
+        cqrs: Option<bool>,
+    ) -> Option<GeneratorsConfig> {
         Some(GeneratorsConfig {
             enabled: enabled.map(|v| v.iter().map(|s| s.to_string()).collect()),
             disabled: disabled.map(|v| v.iter().map(|s| s.to_string()).collect()),
@@ -882,7 +909,8 @@ mod tests {
 
     #[test]
     fn test_cqrs_skipped_when_false() {
-        let result = filter_targets_by_config(&all_targets(), &make_config(None, None, Some(false)));
+        let result =
+            filter_targets_by_config(&all_targets(), &make_config(None, None, Some(false)));
         assert!(!result.contains(&GenerationTarget::Cqrs));
         assert!(!result.contains(&GenerationTarget::Projection));
     }
@@ -897,7 +925,10 @@ mod tests {
     #[test]
     fn test_disabled_blacklist_still_applies_cqrs_opt_in() {
         // disabled: [handler] + no cqrs: true → handler gone, Cqrs/Projection also skipped
-        let result = filter_targets_by_config(&all_targets(), &make_config(None, Some(vec!["handler"]), None));
+        let result = filter_targets_by_config(
+            &all_targets(),
+            &make_config(None, Some(vec!["handler"]), None),
+        );
         assert!(!result.contains(&GenerationTarget::Handler));
         assert!(!result.contains(&GenerationTarget::Cqrs));
         assert!(!result.contains(&GenerationTarget::Projection));
@@ -906,7 +937,10 @@ mod tests {
     #[test]
     fn test_disabled_blacklist_with_cqrs_true_includes_cqrs() {
         // disabled: [handler] + cqrs: true → handler gone, Cqrs/Projection kept
-        let result = filter_targets_by_config(&all_targets(), &make_config(None, Some(vec!["handler"]), Some(true)));
+        let result = filter_targets_by_config(
+            &all_targets(),
+            &make_config(None, Some(vec!["handler"]), Some(true)),
+        );
         assert!(!result.contains(&GenerationTarget::Handler));
         assert!(result.contains(&GenerationTarget::Cqrs));
         assert!(result.contains(&GenerationTarget::Projection));
@@ -961,7 +995,10 @@ mod tests {
     #[test]
     fn test_enabled_whitelist_respects_explicit_cqrs() {
         // enabled: [rust, cqrs] → only those two, no implicit filtering
-        let result = filter_targets_by_config(&all_targets(), &make_config(Some(vec!["rust", "cqrs"]), None, None));
+        let result = filter_targets_by_config(
+            &all_targets(),
+            &make_config(Some(vec!["rust", "cqrs"]), None, None),
+        );
         assert!(result.contains(&GenerationTarget::Rust));
         assert!(result.contains(&GenerationTarget::Cqrs));
         assert!(!result.contains(&GenerationTarget::Repository));

@@ -1,6 +1,6 @@
 //! Shared type resolution: handles type composition and extension
 
-use super::types::{YamlSharedType, YamlField, AUDIT_METADATA_TYPE_NAME};
+use super::types::{YamlField, YamlSharedType, AUDIT_METADATA_TYPE_NAME};
 use indexmap::IndexMap;
 
 /// Resolve shared types, handling composition (type extension)
@@ -9,7 +9,9 @@ use indexmap::IndexMap;
 /// Special handling for "Metadata" composition: instead of expanding into
 /// individual audit columns (created_at, updated_at, etc.), it creates a
 /// single "metadata" JSONB field with @audit_metadata attribute.
-pub fn resolve_shared_types(shared_types: &IndexMap<String, YamlSharedType>) -> IndexMap<String, IndexMap<String, YamlField>> {
+pub fn resolve_shared_types(
+    shared_types: &IndexMap<String, YamlSharedType>,
+) -> IndexMap<String, IndexMap<String, YamlField>> {
     let mut resolved: IndexMap<String, IndexMap<String, YamlField>> = IndexMap::new();
 
     // First pass: resolve all direct field definitions

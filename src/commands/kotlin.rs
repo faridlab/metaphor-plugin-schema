@@ -171,7 +171,8 @@ fn run_generate(
     // The Kotlin generator uses this string in package paths, so we want the
     // schema's declared name (`bersihir`) rather than a project name with
     // hyphens (`bersihir-service`) which would be an invalid Kotlin package.
-    let module_for_codegen = read_index_module_name(&primary_schema).unwrap_or_else(|| module.clone());
+    let module_for_codegen =
+        read_index_module_name(&primary_schema).unwrap_or_else(|| module.clone());
     if verbose && module_for_codegen != module {
         eprintln!(
             "{} '{}' → '{}' (from index.model.yaml)",
@@ -252,7 +253,12 @@ fn run_generate(
             println!(
                 "{} {}",
                 "→ disabled targets (app metaphor.codegen.yaml):".dimmed(),
-                disabled_targets.iter().map(|d| d.as_str()).collect::<Vec<_>>().join(", ").yellow()
+                disabled_targets
+                    .iter()
+                    .map(|d| d.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    .yellow()
             );
         }
         t
@@ -284,7 +290,11 @@ fn run_generate(
         if let Some(primary_project) = ws.project_by_name(&module).cloned().or_else(|| {
             ws.projects()
                 .iter()
-                .find(|p| ws.schema_dir_for(&module).map(|d| d.starts_with(ws.project_path(p))).unwrap_or(false))
+                .find(|p| {
+                    ws.schema_dir_for(&module)
+                        .map(|d| d.starts_with(ws.project_path(p)))
+                        .unwrap_or(false)
+                })
                 .cloned()
         }) {
             for dep_name in &primary_project.depends_on {
@@ -338,21 +348,11 @@ fn run_generate(
                     skip_existing,
                     verbose,
                 ) {
-                    eprintln!(
-                        "{} module '{}' failed: {}",
-                        "⚠".yellow(),
-                        dep,
-                        e
-                    );
+                    eprintln!("{} module '{}' failed: {}", "⚠".yellow(), dep, e);
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "{} skipping '{}' — {}",
-                    "⚠".yellow(),
-                    dep,
-                    e
-                );
+                eprintln!("{} skipping '{}' — {}", "⚠".yellow(), dep, e);
             }
         }
     }
@@ -440,17 +440,16 @@ fn generate_one(
     );
 
     if schema.models.is_empty() && schema.enums.is_empty() {
-        println!(
-            "{} no models — nothing to generate",
-            "·".dimmed()
-        );
+        println!("{} no models — nothing to generate", "·".dimmed());
         return Ok(());
     }
 
     let package_info = config.package_info();
     let source_display = match &package_info.source {
         PackageSource::GradleNamespace(path) => format!("Gradle namespace ({})", path.display()),
-        PackageSource::SqlDelightPackage(path) => format!("SQLDelight package ({})", path.display()),
+        PackageSource::SqlDelightPackage(path) => {
+            format!("SQLDelight package ({})", path.display())
+        }
         PackageSource::ExistingKotlinFiles => "existing Kotlin files".to_string(),
         PackageSource::Default => "default".to_string(),
     };
@@ -511,7 +510,12 @@ fn generate_one(
         } else {
             "skipped (contain // <<< CUSTOM marker)"
         };
-        println!("{} {} files {}", "⚠".yellow(), result.skipped_files.len(), reason);
+        println!(
+            "{} {} files {}",
+            "⚠".yellow(),
+            result.skipped_files.len(),
+            reason
+        );
         if config.verbose {
             for path in &result.skipped_files {
                 println!("  → {}", path.display());
@@ -675,11 +679,7 @@ pub(crate) fn discover_external_modules(schema_dir: &Path) -> Result<BTreeSet<St
 /// Filtered to projects that actually have a schema dir (i.e. plausible
 /// targets for code generation).
 fn project_names_for_error(ws: &Workspace) -> String {
-    let names: Vec<String> = ws
-        .projects()
-        .iter()
-        .map(|p| p.name.clone())
-        .collect();
+    let names: Vec<String> = ws.projects().iter().map(|p| p.name.clone()).collect();
     if names.is_empty() {
         "(none in metaphor.yaml)".to_string()
     } else {

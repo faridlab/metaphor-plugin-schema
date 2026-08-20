@@ -7,8 +7,8 @@ use std::fs;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_pascal_case, to_snake_case, to_camel_case};
 use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::parser::{to_camel_case, to_pascal_case, to_snake_case};
 
 /// Generator for gRPC client implementations
 pub struct GrpcClientGenerator {
@@ -30,7 +30,9 @@ impl GrpcClientGenerator {
         let mut result = DomainGenerationResult::new();
 
         let _entity_pascal = to_pascal_case(&entity.name);
-        let grpc_dir = self.config.output_dir
+        let grpc_dir = self
+            .config
+            .output_dir
             .join("infrastructure")
             .join("grpc")
             .join("modules")
@@ -60,7 +62,9 @@ impl GrpcClientGenerator {
     ) -> Result<DomainGenerationResult> {
         let mut result = DomainGenerationResult::new();
 
-        let grpc_dir = self.config.output_dir
+        let grpc_dir = self
+            .config
+            .output_dir
             .join("infrastructure")
             .join("grpc")
             .join("modules")
@@ -90,7 +94,7 @@ impl GrpcClientGenerator {
         let module = &self.config.module;
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} gRPC Client
  *
  * gRPC-web client for {entity_pascal} entity operations.
@@ -296,7 +300,8 @@ export default {entity_camel}Service;
 
     /// Generate module index content
     fn generate_module_index_content(&self, entities: &[EntityDefinition]) -> String {
-        let imports: Vec<String> = entities.iter()
+        let imports: Vec<String> = entities
+            .iter()
             .map(|e| {
                 let entity_camel = to_camel_case(&e.name);
                 let entity_snake = to_snake_case(&e.name);
@@ -326,7 +331,7 @@ export default {entity_camel}Service;
         };
 
         format!(
-"/**
+            "/**
  * gRPC Services for {} module
  *
  * Exports all gRPC service clients for {} entities.

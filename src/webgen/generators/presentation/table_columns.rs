@@ -8,8 +8,8 @@ use std::fs;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefinition, FieldType};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::to_pascal_case;
 use crate::webgen::generators::domain::DomainGenerationResult;
+use crate::webgen::parser::to_pascal_case;
 
 /// Generator for table column definitions
 pub struct TableColumnsGenerator {
@@ -31,7 +31,9 @@ impl TableColumnsGenerator {
         let mut result = DomainGenerationResult::new();
 
         let entity_pascal = to_pascal_case(&entity.name);
-        let tables_dir = self.config.output_dir
+        let tables_dir = self
+            .config
+            .output_dir
             .join("presentation")
             .join("components")
             .join("tables")
@@ -69,7 +71,7 @@ impl TableColumnsGenerator {
         let column_accessors = self.generate_column_accessors(entity);
 
         format!(
-r#"/**
+            r#"/**
  * {entity_pascal} Table Columns
  *
  * Column definitions and cell renderers for {entity_pascal} data tables.
@@ -187,8 +189,14 @@ export function use{entity_pascal}TableColumns(
     }
 
     /// Generate column definitions
-    fn generate_column_definitions(&self, entity: &EntityDefinition, _enums: &[EnumDefinition]) -> String {
-        let columns: Vec<String> = entity.fields.iter()
+    fn generate_column_definitions(
+        &self,
+        entity: &EntityDefinition,
+        _enums: &[EnumDefinition],
+    ) -> String {
+        let columns: Vec<String> = entity
+            .fields
+            .iter()
             .filter(|f| !self.is_sensitive_field(f))
             .take(8) // Limit to reasonable number of columns
             .map(|f| self.generate_column_def(f, _enums))
@@ -204,7 +212,7 @@ export function use{entity_pascal}TableColumns(
         let cell_renderer = self.get_cell_renderer(field);
 
         format!(
-r#"    {{
+            r#"    {{
       accessorKey: '{field_name}',
       header: '{header}',
       cell: {cell_renderer},
@@ -271,11 +279,11 @@ r#"    {{
     /// Check if field is sensitive
     fn is_sensitive_field(&self, field: &FieldDefinition) -> bool {
         let name = field.name.to_lowercase();
-        name.contains("password") ||
-        name.contains("secret") ||
-        name.contains("token") ||
-        name.contains("hash") ||
-        name.contains("key") && !name.contains("api_key_id")
+        name.contains("password")
+            || name.contains("secret")
+            || name.contains("token")
+            || name.contains("hash")
+            || name.contains("key") && !name.contains("api_key_id")
     }
 
     /// Convert field name to label

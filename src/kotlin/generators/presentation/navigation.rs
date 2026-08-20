@@ -6,11 +6,11 @@
 //!
 //! Per-entity destination classes are kept as-is from the existing generator.
 
+use crate::ast::ModuleSchema;
 use crate::kotlin::error::{MobileGenError, Result};
+use crate::kotlin::generators::write_generated_file;
 use crate::kotlin::generators::GenerationResult;
 use crate::kotlin::generators::MobileGenerator;
-use crate::kotlin::generators::write_generated_file;
-use crate::ast::ModuleSchema;
 use serde::Serialize;
 use std::path::Path;
 
@@ -43,7 +43,9 @@ pub fn generate_navigation(
 
     // Per-entity destination classes (existing pattern — kept as-is)
     for model in &schema.models {
-        if generator.is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Navigation) {
+        if generator
+            .is_disabled_for_model(model, crate::kotlin::config::GenerationTarget::Navigation)
+        {
             continue;
         }
         match generate_entity_destination(generator, model, &schema.name, output_dir) {
@@ -73,7 +75,9 @@ fn generate_nav_config(
     let entities: Vec<NavEntityData> = schema
         .models
         .iter()
-        .filter(|m| !generator.is_disabled_for_model(m, crate::kotlin::config::GenerationTarget::Navigation))
+        .filter(|m| {
+            !generator.is_disabled_for_model(m, crate::kotlin::config::GenerationTarget::Navigation)
+        })
         .map(|m| NavEntityData {
             entity_name: m.name.clone(),
             collection: m.collection_name(),
@@ -98,9 +102,18 @@ fn generate_nav_config(
         .render("nav_config", &data)
         .map_err(|e| MobileGenError::template(format!("NavConfig template error: {}", e)))?;
 
-    let relative_path = format!("{}/presentation/navigation/{}NavConfig.kt", module_lower, module_pascal);
+    let relative_path = format!(
+        "{}/presentation/navigation/{}NavConfig.kt",
+        module_lower, module_pascal
+    );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(p) => Ok(Some(p)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -123,7 +136,9 @@ fn generate_deep_links(
     let entities: Vec<NavEntityData> = schema
         .models
         .iter()
-        .filter(|m| !generator.is_disabled_for_model(m, crate::kotlin::config::GenerationTarget::Navigation))
+        .filter(|m| {
+            !generator.is_disabled_for_model(m, crate::kotlin::config::GenerationTarget::Navigation)
+        })
         .map(|m| NavEntityData {
             entity_name: m.name.clone(),
             collection: m.collection_name(),
@@ -142,9 +157,18 @@ fn generate_deep_links(
         .render("nav_deep_link", &data)
         .map_err(|e| MobileGenError::template(format!("NavDeepLink template error: {}", e)))?;
 
-    let relative_path = format!("{}/presentation/navigation/{}DeepLinks.kt", module_lower, module_pascal);
+    let relative_path = format!(
+        "{}/presentation/navigation/{}DeepLinks.kt",
+        module_lower, module_pascal
+    );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(p) => Ok(Some(p)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }
@@ -203,7 +227,13 @@ class {entity}Destination(
         entity = entity_name,
     );
 
-    match write_generated_file(output_dir, base_package, &relative_path, &content, generator.skip_existing)? {
+    match write_generated_file(
+        output_dir,
+        base_package,
+        &relative_path,
+        &content,
+        generator.skip_existing,
+    )? {
         crate::kotlin::generators::WriteOutcome::Written(path) => Ok(Some(path)),
         crate::kotlin::generators::WriteOutcome::Skipped(_) => Ok(None),
     }

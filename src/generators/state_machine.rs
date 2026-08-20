@@ -3,8 +3,10 @@
 //! Generates Rust state machine implementations from hook definitions.
 //! Creates type-safe state transitions with role-based access control.
 
-use super::{GenerateError, GeneratedOutput, Generator, build_generated_path, build_subdirectory_mod};
-use crate::ast::hook::{StateMachine, Hook};
+use super::{
+    build_generated_path, build_subdirectory_mod, GenerateError, GeneratedOutput, Generator,
+};
+use crate::ast::hook::{Hook, StateMachine};
 use crate::resolver::ResolvedSchema;
 use crate::utils::{to_pascal_case, to_snake_case};
 use std::fmt::Write;
@@ -19,7 +21,7 @@ pub struct StateMachineGenerator {
 impl StateMachineGenerator {
     pub fn new() -> Self {
         Self {
-            group_by_domain: false,  // Keep flat - only one file per entity
+            group_by_domain: false, // Keep flat - only one file per entity
         }
     }
 
@@ -40,7 +42,11 @@ impl StateMachineGenerator {
 
         // State enum
         writeln!(output, "/// States for {} workflow", name).unwrap();
-        writeln!(output, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]").unwrap();
+        writeln!(
+            output,
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]"
+        )
+        .unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
         writeln!(output, "pub enum {}State {{", name).unwrap();
 
@@ -70,7 +76,11 @@ impl StateMachineGenerator {
 
         // Display implementation
         writeln!(output, "impl std::fmt::Display for {}State {{", name).unwrap();
-        writeln!(output, "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{").unwrap();
+        writeln!(
+            output,
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{"
+        )
+        .unwrap();
         writeln!(output, "        match self {{").unwrap();
         for state in &sm.states {
             writeln!(
@@ -78,7 +88,8 @@ impl StateMachineGenerator {
                 "            Self::{} => write!(f, \"{}\"),",
                 to_pascal_case(&state.name),
                 state.name
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -89,7 +100,11 @@ impl StateMachineGenerator {
         writeln!(output, "impl FromStr for {}State {{", name).unwrap();
         writeln!(output, "    type Err = StateMachineError;").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "    fn from_str(s: &str) -> Result<Self, Self::Err> {{").unwrap();
+        writeln!(
+            output,
+            "    fn from_str(s: &str) -> Result<Self, Self::Err> {{"
+        )
+        .unwrap();
         writeln!(output, "        match s.to_lowercase().as_str() {{").unwrap();
         for state in &sm.states {
             writeln!(
@@ -97,12 +112,14 @@ impl StateMachineGenerator {
                 "            \"{}\" => Ok(Self::{}),",
                 state.name.to_lowercase(),
                 to_pascal_case(&state.name)
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(
             output,
             "            _ => Err(StateMachineError::InvalidState(s.to_string())),"
-        ).unwrap();
+        )
+        .unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
@@ -113,7 +130,12 @@ impl StateMachineGenerator {
         writeln!(output, "    /// Check if this is the initial state").unwrap();
         writeln!(output, "    pub fn is_initial(&self) -> bool {{").unwrap();
         if let Some(initial) = sm.initial_state() {
-            writeln!(output, "        matches!(self, Self::{})", to_pascal_case(&initial.name)).unwrap();
+            writeln!(
+                output,
+                "        matches!(self, Self::{})",
+                to_pascal_case(&initial.name)
+            )
+            .unwrap();
         } else {
             writeln!(output, "        false").unwrap();
         }
@@ -126,12 +148,16 @@ impl StateMachineGenerator {
         if final_states.is_empty() {
             writeln!(output, "        false").unwrap();
         } else {
-            writeln!(output, "        matches!(self, {})",
-                final_states.iter()
+            writeln!(
+                output,
+                "        matches!(self, {})",
+                final_states
+                    .iter()
                     .map(|s| format!("Self::{}", to_pascal_case(&s.name)))
                     .collect::<Vec<_>>()
                     .join(" | ")
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -151,19 +177,33 @@ impl StateMachineGenerator {
     }
 
     /// Generate transition enum
-    fn generate_transition_enum(&self, hook: &Hook, sm: &StateMachine) -> Result<String, GenerateError> {
+    fn generate_transition_enum(
+        &self,
+        hook: &Hook,
+        sm: &StateMachine,
+    ) -> Result<String, GenerateError> {
         let mut output = String::new();
         let name = &hook.name;
 
         // Transition enum
         writeln!(output, "/// Transitions for {} workflow", name).unwrap();
-        writeln!(output, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]").unwrap();
+        writeln!(
+            output,
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]"
+        )
+        .unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
         writeln!(output, "pub enum {}Transition {{", name).unwrap();
 
         for transition in &sm.transitions {
             let variant_name = to_pascal_case(&transition.name);
-            writeln!(output, "    /// {} -> {}", transition.from.join(", "), transition.to).unwrap();
+            writeln!(
+                output,
+                "    /// {} -> {}",
+                transition.from.join(", "),
+                transition.to
+            )
+            .unwrap();
             writeln!(output, "    {},", variant_name).unwrap();
         }
 
@@ -172,7 +212,11 @@ impl StateMachineGenerator {
 
         // Display implementation
         writeln!(output, "impl std::fmt::Display for {}Transition {{", name).unwrap();
-        writeln!(output, "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{").unwrap();
+        writeln!(
+            output,
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{"
+        )
+        .unwrap();
         writeln!(output, "        match self {{").unwrap();
         for transition in &sm.transitions {
             writeln!(
@@ -180,7 +224,8 @@ impl StateMachineGenerator {
                 "            Self::{} => write!(f, \"{}\"),",
                 to_pascal_case(&transition.name),
                 transition.name
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -191,7 +236,11 @@ impl StateMachineGenerator {
         writeln!(output, "impl FromStr for {}Transition {{", name).unwrap();
         writeln!(output, "    type Err = StateMachineError;").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "    fn from_str(s: &str) -> Result<Self, Self::Err> {{").unwrap();
+        writeln!(
+            output,
+            "    fn from_str(s: &str) -> Result<Self, Self::Err> {{"
+        )
+        .unwrap();
         writeln!(output, "        match s.to_lowercase().as_str() {{").unwrap();
         for transition in &sm.transitions {
             writeln!(
@@ -199,12 +248,14 @@ impl StateMachineGenerator {
                 "            \"{}\" => Ok(Self::{}),",
                 transition.name.to_lowercase(),
                 to_pascal_case(&transition.name)
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(
             output,
             "            _ => Err(StateMachineError::InvalidTransition(s.to_string())),"
-        ).unwrap();
+        )
+        .unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
@@ -222,7 +273,8 @@ impl StateMachineGenerator {
                 to_pascal_case(&transition.name),
                 name,
                 to_pascal_case(&transition.to)
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -232,14 +284,23 @@ impl StateMachineGenerator {
         writeln!(output, "    pub fn all() -> Vec<Self> {{").unwrap();
         writeln!(output, "        vec![").unwrap();
         for transition in &sm.transitions {
-            writeln!(output, "            Self::{},", to_pascal_case(&transition.name)).unwrap();
+            writeln!(
+                output,
+                "            Self::{},",
+                to_pascal_case(&transition.name)
+            )
+            .unwrap();
         }
         writeln!(output, "        ]").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    /// Get allowed roles for this transition").unwrap();
-        writeln!(output, "    pub fn allowed_roles(&self) -> &'static [&'static str] {{").unwrap();
+        writeln!(
+            output,
+            "    pub fn allowed_roles(&self) -> &'static [&'static str] {{"
+        )
+        .unwrap();
         writeln!(output, "        match self {{").unwrap();
         for transition in &sm.transitions {
             if transition.allowed_roles.is_empty() {
@@ -247,17 +308,21 @@ impl StateMachineGenerator {
                     output,
                     "            Self::{} => &[],",
                     to_pascal_case(&transition.name)
-                ).unwrap();
+                )
+                .unwrap();
             } else {
                 writeln!(
                     output,
                     "            Self::{} => &[{}],",
                     to_pascal_case(&transition.name),
-                    transition.allowed_roles.iter()
+                    transition
+                        .allowed_roles
+                        .iter()
                         .map(|r| format!("\"{}\"", r))
                         .collect::<Vec<_>>()
                         .join(", ")
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
         writeln!(output, "        }}").unwrap();
@@ -269,7 +334,11 @@ impl StateMachineGenerator {
     }
 
     /// Generate state machine struct
-    fn generate_state_machine_struct(&self, hook: &Hook, sm: &StateMachine) -> Result<String, GenerateError> {
+    fn generate_state_machine_struct(
+        &self,
+        hook: &Hook,
+        sm: &StateMachine,
+    ) -> Result<String, GenerateError> {
         let mut output = String::new();
         let name = &hook.name;
 
@@ -287,44 +356,84 @@ impl StateMachineGenerator {
 
         // Implementation
         writeln!(output, "impl {}StateMachine {{", name).unwrap();
-        writeln!(output, "    /// Create a new state machine with initial state").unwrap();
+        writeln!(
+            output,
+            "    /// Create a new state machine with initial state"
+        )
+        .unwrap();
         writeln!(output, "    pub fn new() -> Self {{").unwrap();
         writeln!(output, "        Self {{").unwrap();
-        writeln!(output, "            current_state: {}State::default(),", name).unwrap();
+        writeln!(
+            output,
+            "            current_state: {}State::default(),",
+            name
+        )
+        .unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    /// Create from an existing state").unwrap();
-        writeln!(output, "    pub fn from_state(state: {}State) -> Self {{", name).unwrap();
+        writeln!(
+            output,
+            "    pub fn from_state(state: {}State) -> Self {{",
+            name
+        )
+        .unwrap();
         writeln!(output, "        Self {{ current_state: state }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    /// Get the current state").unwrap();
-        writeln!(output, "    pub fn current_state(&self) -> {}State {{", name).unwrap();
+        writeln!(
+            output,
+            "    pub fn current_state(&self) -> {}State {{",
+            name
+        )
+        .unwrap();
         writeln!(output, "        self.current_state").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Determine which final states have NO outgoing transitions (truly terminal)
-        let states_with_outgoing: std::collections::HashSet<&str> = sm.transitions.iter()
+        let states_with_outgoing: std::collections::HashSet<&str> = sm
+            .transitions
+            .iter()
             .flat_map(|t| t.from.iter().map(|s| s.as_str()))
             .collect();
-        let terminal_states: Vec<_> = sm.states.iter()
-            .filter(|s| s.final_state && !states_with_outgoing.contains(s.name.as_str()) && s.name != "*")
+        let terminal_states: Vec<_> = sm
+            .states
+            .iter()
+            .filter(|s| {
+                s.final_state && !states_with_outgoing.contains(s.name.as_str()) && s.name != "*"
+            })
             .collect();
 
         // Can transition check
-        writeln!(output, "    /// Check if a transition is allowed from the current state").unwrap();
-        writeln!(output, "    pub fn can_transition(&self, transition: {}Transition) -> bool {{", name).unwrap();
+        writeln!(
+            output,
+            "    /// Check if a transition is allowed from the current state"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    pub fn can_transition(&self, transition: {}Transition) -> bool {{",
+            name
+        )
+        .unwrap();
         // Only add is_final guard if there are truly terminal states (final + no outgoing transitions)
         if !terminal_states.is_empty() {
-            let terminal_match = terminal_states.iter()
+            let terminal_match = terminal_states
+                .iter()
                 .map(|s| format!("{}State::{}", name, to_pascal_case(&s.name)))
                 .collect::<Vec<_>>()
                 .join(" | ");
-            writeln!(output, "        if matches!(self.current_state, {}) {{", terminal_match).unwrap();
+            writeln!(
+                output,
+                "        if matches!(self.current_state, {}) {{",
+                terminal_match
+            )
+            .unwrap();
             writeln!(output, "            return false;").unwrap();
             writeln!(output, "        }}").unwrap();
             writeln!(output).unwrap();
@@ -340,13 +449,18 @@ impl StateMachineGenerator {
                         output,
                         "            (_, {}Transition::{}) => true,",
                         name, trans_variant
-                    ).unwrap();
+                    )
+                    .unwrap();
                 } else {
                     writeln!(
                         output,
                         "            ({}State::{}, {}Transition::{}) => true,",
-                        name, to_pascal_case(from_state), name, trans_variant
-                    ).unwrap();
+                        name,
+                        to_pascal_case(from_state),
+                        name,
+                        trans_variant
+                    )
+                    .unwrap();
                 }
             }
         }
@@ -357,36 +471,68 @@ impl StateMachineGenerator {
         writeln!(output).unwrap();
 
         // Can transition with role check
-        writeln!(output, "    /// Check if a transition is allowed for a given role").unwrap();
+        writeln!(
+            output,
+            "    /// Check if a transition is allowed for a given role"
+        )
+        .unwrap();
         writeln!(output, "    pub fn can_transition_with_role(&self, transition: {}Transition, role: &str) -> bool {{", name).unwrap();
         writeln!(output, "        if !self.can_transition(transition) {{").unwrap();
         writeln!(output, "            return false;").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        let allowed_roles = transition.allowed_roles();").unwrap();
+        writeln!(
+            output,
+            "        let allowed_roles = transition.allowed_roles();"
+        )
+        .unwrap();
         writeln!(output, "        if allowed_roles.is_empty() {{").unwrap();
         writeln!(output, "            return true; // No role restriction").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        allowed_roles.iter().any(|r| *r == role || *r == \"*\")").unwrap();
+        writeln!(
+            output,
+            "        allowed_roles.iter().any(|r| *r == role || *r == \"*\")"
+        )
+        .unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Apply transition
-        writeln!(output, "    /// Apply a transition, returning the new state").unwrap();
+        writeln!(
+            output,
+            "    /// Apply a transition, returning the new state"
+        )
+        .unwrap();
         writeln!(
             output,
             "    pub fn transition(&mut self, transition: {}Transition) -> Result<{}State, StateMachineError> {{",
             name, name
         ).unwrap();
         writeln!(output, "        if !self.can_transition(transition) {{").unwrap();
-        writeln!(output, "            return Err(StateMachineError::TransitionNotAllowed {{").unwrap();
-        writeln!(output, "                transition: transition.to_string(),").unwrap();
-        writeln!(output, "                from: self.current_state.to_string(),").unwrap();
+        writeln!(
+            output,
+            "            return Err(StateMachineError::TransitionNotAllowed {{"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "                transition: transition.to_string(),"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "                from: self.current_state.to_string(),"
+        )
+        .unwrap();
         writeln!(output, "            }});").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        self.current_state = transition.target_state();").unwrap();
+        writeln!(
+            output,
+            "        self.current_state = transition.target_state();"
+        )
+        .unwrap();
         writeln!(output, "        Ok(self.current_state)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -400,37 +546,66 @@ impl StateMachineGenerator {
         ).unwrap();
         writeln!(output, "        // Check basic transition validity first").unwrap();
         writeln!(output, "        if !self.can_transition(transition) {{").unwrap();
-        writeln!(output, "            return Err(StateMachineError::TransitionNotAllowed {{").unwrap();
-        writeln!(output, "                transition: transition.to_string(),").unwrap();
-        writeln!(output, "                from: self.current_state.to_string(),").unwrap();
+        writeln!(
+            output,
+            "            return Err(StateMachineError::TransitionNotAllowed {{"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "                transition: transition.to_string(),"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "                from: self.current_state.to_string(),"
+        )
+        .unwrap();
         writeln!(output, "            }});").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "        // Check role authorization").unwrap();
-        writeln!(output, "        if !self.can_transition_with_role(transition, role) {{").unwrap();
-        writeln!(output, "            return Err(StateMachineError::RoleNotAuthorized {{").unwrap();
+        writeln!(
+            output,
+            "        if !self.can_transition_with_role(transition, role) {{"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "            return Err(StateMachineError::RoleNotAuthorized {{"
+        )
+        .unwrap();
         writeln!(output, "                role: role.to_string(),").unwrap();
-        writeln!(output, "                transition: transition.to_string(),").unwrap();
+        writeln!(
+            output,
+            "                transition: transition.to_string(),"
+        )
+        .unwrap();
         writeln!(output, "            }});").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
-        writeln!(output, "        self.current_state = transition.target_state();").unwrap();
+        writeln!(
+            output,
+            "        self.current_state = transition.target_state();"
+        )
+        .unwrap();
         writeln!(output, "        Ok(self.current_state)").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Get available transitions
-        writeln!(output, "    /// Get all available transitions from the current state").unwrap();
+        writeln!(
+            output,
+            "    /// Get all available transitions from the current state"
+        )
+        .unwrap();
         writeln!(
             output,
             "    pub fn available_transitions(&self) -> Vec<{}Transition> {{",
             name
-        ).unwrap();
-        writeln!(
-            output,
-            "        {}Transition::all()",
-            name
-        ).unwrap();
+        )
+        .unwrap();
+        writeln!(output, "        {}Transition::all()", name).unwrap();
         writeln!(output, "            .into_iter()").unwrap();
         writeln!(output, "            .filter(|t| self.can_transition(*t))").unwrap();
         writeln!(output, "            .collect()").unwrap();
@@ -438,28 +613,45 @@ impl StateMachineGenerator {
         writeln!(output).unwrap();
 
         // Get available transitions for role
-        writeln!(output, "    /// Get all available transitions for a given role").unwrap();
+        writeln!(
+            output,
+            "    /// Get all available transitions for a given role"
+        )
+        .unwrap();
         writeln!(
             output,
             "    pub fn available_transitions_for_role(&self, role: &str) -> Vec<{}Transition> {{",
             name
-        ).unwrap();
+        )
+        .unwrap();
+        writeln!(output, "        {}Transition::all()", name).unwrap();
+        writeln!(output, "            .into_iter()").unwrap();
         writeln!(
             output,
-            "        {}Transition::all()",
-            name
-        ).unwrap();
-        writeln!(output, "            .into_iter()").unwrap();
-        writeln!(output, "            .filter(|t| self.can_transition_with_role(*t, role))").unwrap();
+            "            .filter(|t| self.can_transition_with_role(*t, role))"
+        )
+        .unwrap();
         writeln!(output, "            .collect()").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
         // Direct state transition (for entity transition_to method)
-        writeln!(output, "    /// Attempt to transition directly to a target state.").unwrap();
+        writeln!(
+            output,
+            "    /// Attempt to transition directly to a target state."
+        )
+        .unwrap();
         writeln!(output, "    ///").unwrap();
-        writeln!(output, "    /// Finds any transition that leads to the target state and applies it.").unwrap();
-        writeln!(output, "    /// Returns Err if no valid transition leads from current state to target.").unwrap();
+        writeln!(
+            output,
+            "    /// Finds any transition that leads to the target state and applies it."
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "    /// Returns Err if no valid transition leads from current state to target."
+        )
+        .unwrap();
         writeln!(
             output,
             "    pub fn transition_to_state(&mut self, target: {name}State) -> Result<{name}State, StateMachineError> {{",
@@ -469,14 +661,23 @@ impl StateMachineGenerator {
             output,
             "        let valid = {name}Transition::all().into_iter()",
             name = name
-        ).unwrap();
+        )
+        .unwrap();
         writeln!(output, "            .filter(|t| self.can_transition(*t))").unwrap();
         writeln!(output, "            .find(|t| t.target_state() == target);").unwrap();
         writeln!(output, "        match valid {{").unwrap();
         writeln!(output, "            Some(t) => self.transition(t),").unwrap();
-        writeln!(output, "            None => Err(StateMachineError::TransitionNotAllowed {{").unwrap();
+        writeln!(
+            output,
+            "            None => Err(StateMachineError::TransitionNotAllowed {{"
+        )
+        .unwrap();
         writeln!(output, "                transition: target.to_string(),").unwrap();
-        writeln!(output, "                from: self.current_state.to_string(),").unwrap();
+        writeln!(
+            output,
+            "                from: self.current_state.to_string(),"
+        )
+        .unwrap();
         writeln!(output, "            }}),").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -532,7 +733,12 @@ impl StateMachineGenerator {
     }
 
     /// Generate unit tests
-    fn generate_tests(&self, output: &mut String, hook: &Hook, sm: &StateMachine) -> Result<(), GenerateError> {
+    fn generate_tests(
+        &self,
+        output: &mut String,
+        hook: &Hook,
+        sm: &StateMachine,
+    ) -> Result<(), GenerateError> {
         let name = &hook.name;
 
         writeln!(output, "#[cfg(test)]").unwrap();
@@ -550,7 +756,8 @@ impl StateMachineGenerator {
                 "        assert_eq!(sm.current_state(), {}State::{});",
                 name,
                 to_pascal_case(&initial.name)
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(output, "        assert!(sm.current_state().is_initial());").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -571,8 +778,11 @@ impl StateMachineGenerator {
                 writeln!(
                     output,
                     "        let mut sm = {}StateMachine::from_state({}State::{});",
-                    name, name, to_pascal_case(from_state)
-                ).unwrap();
+                    name,
+                    name,
+                    to_pascal_case(from_state)
+                )
+                .unwrap();
             }
 
             writeln!(
@@ -580,21 +790,24 @@ impl StateMachineGenerator {
                 "        assert!(sm.can_transition({}Transition::{}));",
                 name,
                 to_pascal_case(&first_transition.name)
-            ).unwrap();
+            )
+            .unwrap();
 
             writeln!(
                 output,
                 "        let result = sm.transition({}Transition::{});",
                 name,
                 to_pascal_case(&first_transition.name)
-            ).unwrap();
+            )
+            .unwrap();
             writeln!(output, "        assert!(result.is_ok());").unwrap();
             writeln!(
                 output,
                 "        assert_eq!(sm.current_state(), {}State::{});",
                 name,
                 to_pascal_case(&first_transition.to)
-            ).unwrap();
+            )
+            .unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
         }
@@ -613,19 +826,25 @@ impl StateMachineGenerator {
                     writeln!(
                         output,
                         "        let mut sm = {}StateMachine::from_state({}State::{});",
-                        name, name, to_pascal_case(&state.name)
-                    ).unwrap();
+                        name,
+                        name,
+                        to_pascal_case(&state.name)
+                    )
+                    .unwrap();
                     writeln!(
                         output,
                         "        // {} is not valid from {} state",
-                        to_pascal_case(&transition.name), to_pascal_case(&state.name)
-                    ).unwrap();
+                        to_pascal_case(&transition.name),
+                        to_pascal_case(&state.name)
+                    )
+                    .unwrap();
                     writeln!(
                         output,
                         "        let result = sm.transition({}Transition::{});",
                         name,
                         to_pascal_case(&transition.name)
-                    ).unwrap();
+                    )
+                    .unwrap();
                     writeln!(output, "        assert!(result.is_err());").unwrap();
                     found_invalid = true;
                     break 'outer;
@@ -633,7 +852,11 @@ impl StateMachineGenerator {
             }
         }
         if !found_invalid {
-            writeln!(output, "        // All transitions are valid from all states (wildcard), test passes").unwrap();
+            writeln!(
+                output,
+                "        // All transitions are valid from all states (wildcard), test passes"
+            )
+            .unwrap();
             writeln!(output, "        assert!(true);").unwrap();
         }
 
@@ -649,13 +872,15 @@ impl StateMachineGenerator {
                 "        let state: {}State = \"{}\".parse().unwrap();",
                 name,
                 state.name.to_lowercase()
-            ).unwrap();
+            )
+            .unwrap();
             writeln!(
                 output,
                 "        assert_eq!(state, {}State::{});",
                 name,
                 to_pascal_case(&state.name)
-            ).unwrap();
+            )
+            .unwrap();
         }
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -664,9 +889,21 @@ impl StateMachineGenerator {
         writeln!(output, "    #[test]").unwrap();
         writeln!(output, "    fn test_available_transitions() {{").unwrap();
         writeln!(output, "        let sm = {}StateMachine::new();", name).unwrap();
-        writeln!(output, "        let available = sm.available_transitions();").unwrap();
-        writeln!(output, "        // Should have at least some transitions available from initial state").unwrap();
-        writeln!(output, "        assert!(!available.is_empty() || sm.current_state().is_final());").unwrap();
+        writeln!(
+            output,
+            "        let available = sm.available_transitions();"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        // Should have at least some transitions available from initial state"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        assert!(!available.is_empty() || sm.current_state().is_final());"
+        )
+        .unwrap();
         writeln!(output, "    }}").unwrap();
 
         writeln!(output, "}}").unwrap();
@@ -691,7 +928,9 @@ impl Generator for StateMachineGenerator {
         }
 
         // Generate mod.rs if we have any state machines
-        let hooks_with_sm: Vec<_> = schema.schema.hooks
+        let hooks_with_sm: Vec<_> = schema
+            .schema
+            .hooks
             .iter()
             .filter(|h| h.state_machine.is_some())
             .collect();
@@ -716,7 +955,11 @@ impl Generator for StateMachineGenerator {
 
 impl StateMachineGenerator {
     /// Generate a hook file if it has a state machine
-    fn generate_hook_file(&self, output: &mut GeneratedOutput, hook: &Hook) -> Result<(), GenerateError> {
+    fn generate_hook_file(
+        &self,
+        output: &mut GeneratedOutput,
+        hook: &Hook,
+    ) -> Result<(), GenerateError> {
         if hook.state_machine.is_none() {
             return Ok(());
         }
@@ -727,12 +970,20 @@ impl StateMachineGenerator {
         }
 
         let file_name = format!("{}_state_machine.rs", to_snake_case(&hook.name));
-        let path = build_generated_path("src/domain/state_machine", &hook.name, &file_name, self.group_by_domain);
+        let path = build_generated_path(
+            "src/domain/state_machine",
+            &hook.name,
+            &file_name,
+            self.group_by_domain,
+        );
         output.add_file(path, content);
 
         // Generate subdirectory mod.rs if grouping by domain
         if self.group_by_domain {
-            let mod_path = PathBuf::from(format!("src/domain/state_machine/{}/mod.rs", to_snake_case(&hook.name)));
+            let mod_path = PathBuf::from(format!(
+                "src/domain/state_machine/{}/mod.rs",
+                to_snake_case(&hook.name)
+            ));
             let sub_mod_content = build_subdirectory_mod(&hook.name, &file_name.replace(".rs", ""));
             output.add_file(mod_path, sub_mod_content);
         }
@@ -757,7 +1008,11 @@ fn generate_state_machine_mod(hooks: &[&Hook], group_by_domain: bool) -> String 
     writeln!(mod_content).unwrap();
 
     // StateMachineError is defined ONCE here in mod.rs, shared by all entity state machine files
-    writeln!(mod_content, "/// Shared error type for all state machines in this module").unwrap();
+    writeln!(
+        mod_content,
+        "/// Shared error type for all state machines in this module"
+    )
+    .unwrap();
     writeln!(mod_content, "#[derive(Debug, Clone, thiserror::Error)]").unwrap();
     writeln!(mod_content, "pub enum StateMachineError {{").unwrap();
     writeln!(mod_content, "    #[error(\"Invalid state: {{0}}\")]").unwrap();
@@ -766,22 +1021,38 @@ fn generate_state_machine_mod(hooks: &[&Hook], group_by_domain: bool) -> String 
     writeln!(mod_content, "    #[error(\"Invalid transition: {{0}}\")]").unwrap();
     writeln!(mod_content, "    InvalidTransition(String),").unwrap();
     writeln!(mod_content).unwrap();
-    writeln!(mod_content, "    #[error(\"Transition '{{transition}}' not allowed from state '{{from}}'\")]").unwrap();
+    writeln!(
+        mod_content,
+        "    #[error(\"Transition '{{transition}}' not allowed from state '{{from}}'\")]"
+    )
+    .unwrap();
     writeln!(mod_content, "    TransitionNotAllowed {{").unwrap();
     writeln!(mod_content, "        transition: String,").unwrap();
     writeln!(mod_content, "        from: String,").unwrap();
     writeln!(mod_content, "    }},").unwrap();
     writeln!(mod_content).unwrap();
-    writeln!(mod_content, "    #[error(\"Role '{{role}}' not authorized for transition '{{transition}}'\")]").unwrap();
+    writeln!(
+        mod_content,
+        "    #[error(\"Role '{{role}}' not authorized for transition '{{transition}}'\")]"
+    )
+    .unwrap();
     writeln!(mod_content, "    RoleNotAuthorized {{").unwrap();
     writeln!(mod_content, "        role: String,").unwrap();
     writeln!(mod_content, "        transition: String,").unwrap();
     writeln!(mod_content, "    }},").unwrap();
     writeln!(mod_content).unwrap();
-    writeln!(mod_content, "    #[error(\"Guard condition failed for transition '{{0}}'\")]").unwrap();
+    writeln!(
+        mod_content,
+        "    #[error(\"Guard condition failed for transition '{{0}}'\")]"
+    )
+    .unwrap();
     writeln!(mod_content, "    GuardFailed(String),").unwrap();
     writeln!(mod_content).unwrap();
-    writeln!(mod_content, "    #[error(\"Cannot transition from final state '{{0}}'\")]").unwrap();
+    writeln!(
+        mod_content,
+        "    #[error(\"Cannot transition from final state '{{0}}'\")]"
+    )
+    .unwrap();
     writeln!(mod_content, "    FinalStateReached(String),").unwrap();
     writeln!(mod_content, "}}").unwrap();
     writeln!(mod_content).unwrap();
@@ -794,7 +1065,12 @@ fn generate_state_machine_mod(hooks: &[&Hook], group_by_domain: bool) -> String 
         if group_by_domain {
             writeln!(mod_content, "pub use {}::{{{}}};", snake, exports).unwrap();
         } else {
-            writeln!(mod_content, "pub use {}_state_machine::{{{}}};", snake, exports).unwrap();
+            writeln!(
+                mod_content,
+                "pub use {}_state_machine::{{{}}};",
+                snake, exports
+            )
+            .unwrap();
         }
     }
 
@@ -804,7 +1080,7 @@ fn generate_state_machine_mod(hooks: &[&Hook], group_by_domain: bool) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::hook::{State, Transition, Hook, StateMachine};
+    use crate::ast::hook::{Hook, State, StateMachine, Transition};
 
     fn create_test_hook() -> Hook {
         let mut hook = Hook::new("User", "User");

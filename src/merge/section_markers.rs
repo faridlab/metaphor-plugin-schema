@@ -124,12 +124,7 @@ impl SectionMarker {
 
     /// Wrap content in custom markers
     pub fn wrap_custom(content: &str) -> String {
-        format!(
-            "{}\n{}\n{}",
-            Self::CUSTOM_START,
-            content,
-            Self::CUSTOM_END
-        )
+        format!("{}\n{}\n{}", Self::CUSTOM_START, content, Self::CUSTOM_END)
     }
 
     /// Create an empty custom section placeholder
@@ -162,7 +157,8 @@ pub fn parse_sections(content: &str) -> Vec<ParsedSection> {
             if SectionMarker::is_start_marker(line) {
                 // Start new section
                 let name = SectionMarker::get_section_name(line).unwrap_or_default();
-                let section_type = SectionMarker::parse_marker(line).unwrap_or(SectionType::Generated);
+                let section_type =
+                    SectionMarker::parse_marker(line).unwrap_or(SectionType::Generated);
                 current_section = Some((name, section_type, String::new(), line_num));
                 in_section = true;
             } else if SectionMarker::is_end_marker(line) && in_section {
@@ -225,10 +221,7 @@ mod tests {
             SectionMarker::get_section_name("# [/PATHS:GENERATED]"),
             Some("PATHS:GENERATED".to_string())
         );
-        assert_eq!(
-            SectionMarker::get_section_name("not a marker"),
-            None
-        );
+        assert_eq!(SectionMarker::get_section_name("not a marker"), None);
     }
 
     #[test]

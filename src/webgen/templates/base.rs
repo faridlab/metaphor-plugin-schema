@@ -803,7 +803,12 @@ pub struct TemplateReplacer {
 
 impl TemplateReplacer {
     /// Create a new replacer
-    pub fn new(entity_pascal: String, entity_snake: String, module: String, domain_import: String) -> Self {
+    pub fn new(
+        entity_pascal: String,
+        entity_snake: String,
+        module: String,
+        domain_import: String,
+    ) -> Self {
         Self {
             entity_pascal,
             entity_snake,
@@ -817,7 +822,10 @@ impl TemplateReplacer {
         let mut result = template.to_string();
         result = result.replace("{{ENTITY_NAME}}", &self.entity_pascal);
         result = result.replace("{{ENTITY_NAME_SNAKE}}", &self.entity_snake);
-        result = result.replace("{{ENTITY_NAME_CAMEL}}", &crate::webgen::parser::to_camel_case(&self.entity_pascal));
+        result = result.replace(
+            "{{ENTITY_NAME_CAMEL}}",
+            &crate::webgen::parser::to_camel_case(&self.entity_pascal),
+        );
         result = result.replace("{{MODULE_NAME}}", &self.module);
         result = result.replace("{{DOMAIN_IMPORT}}", &self.domain_import);
         result
