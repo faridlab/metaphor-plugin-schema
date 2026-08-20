@@ -7,9 +7,7 @@
 //! - Event sourcing configuration
 //! - Authorization configuration (RBAC/ABAC)
 
-use metaphor_schema::parser::yaml_parser::{
-    parse_model_yaml_str, YamlModelSchema,
-};
+use metaphor_schema::parser::yaml_parser::{parse_model_yaml_str, YamlModelSchema};
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,8 +28,8 @@ fn read_fixture(name: &str) -> String {
 #[test]
 fn test_parse_entity_with_methods() {
     let yaml = read_fixture("entity_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse entity example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse entity example YAML");
 
     // Verify model is parsed
     assert_eq!(schema.models.len(), 1);
@@ -49,44 +47,61 @@ fn test_parse_entity_with_methods() {
     assert!(entity.implements.contains(&"SoftDeletable".to_string()));
 
     // Check value objects mapping
-    assert_eq!(entity.value_objects.get("email"), Some(&"Email".to_string()));
+    assert_eq!(
+        entity.value_objects.get("email"),
+        Some(&"Email".to_string())
+    );
 
     // Check methods
     assert_eq!(entity.methods.len(), 4);
 
-    let verify_method = entity.methods.iter()
+    let verify_method = entity
+        .methods
+        .iter()
         .find(|m| m.name == "verify_email")
         .expect("verify_email method not found");
     assert!(verify_method.mutates.unwrap_or(false));
-    assert_eq!(verify_method.returns.as_deref(), Some("Result<(), UserError>"));
+    assert_eq!(
+        verify_method.returns.as_deref(),
+        Some("Result<(), UserError>")
+    );
 
-    let can_login = entity.methods.iter()
+    let can_login = entity
+        .methods
+        .iter()
         .find(|m| m.name == "can_login")
         .expect("can_login method not found");
     assert!(!can_login.mutates.unwrap_or(false));
     assert_eq!(can_login.returns.as_deref(), Some("bool"));
 
-    let suspend = entity.methods.iter()
+    let suspend = entity
+        .methods
+        .iter()
         .find(|m| m.name == "suspend")
         .expect("suspend method not found");
     assert!(suspend.mutates.unwrap_or(false));
     assert!(suspend.is_async.unwrap_or(false));
 
-    let reactivate = entity.methods.iter()
+    let reactivate = entity
+        .methods
+        .iter()
         .find(|m| m.name == "reactivate")
         .expect("reactivate method not found");
     assert!(reactivate.params.contains_key("reason"));
 
     // Check invariants
     assert_eq!(entity.invariants.len(), 3);
-    assert!(entity.invariants.iter().any(|i| i.contains("email must be unique")));
+    assert!(entity
+        .invariants
+        .iter()
+        .any(|i| i.contains("email must be unique")));
 }
 
 #[test]
 fn test_entity_converts_to_ast() {
     let yaml = read_fixture("entity_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse entity example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse entity example YAML");
 
     let yaml_entity = schema.entities.get("User").expect("User entity not found");
     let entity = yaml_entity.clone().into_entity("User".to_string());
@@ -105,18 +120,22 @@ fn test_entity_converts_to_ast() {
 #[test]
 fn test_parse_value_object_wrapper() {
     let yaml = read_fixture("value_object_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse value object example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse value object example YAML");
 
     // Check Email (wrapper type)
-    let email = schema.value_objects.get("Email")
+    let email = schema
+        .value_objects
+        .get("Email")
         .expect("Email value object not found");
 
     assert_eq!(email.inner_type.as_deref(), Some("String"));
     assert_eq!(email.validation.as_deref(), Some("email_format"));
     assert_eq!(email.methods.len(), 2);
 
-    let domain_method = email.methods.iter()
+    let domain_method = email
+        .methods
+        .iter()
         .find(|m| m.name == "domain")
         .expect("domain method not found");
     assert_eq!(domain_method.returns.as_deref(), Some("&str"));
@@ -125,11 +144,13 @@ fn test_parse_value_object_wrapper() {
 #[test]
 fn test_parse_value_object_composite() {
     let yaml = read_fixture("value_object_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse value object example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse value object example YAML");
 
     // Check Money (composite type)
-    let money = schema.value_objects.get("Money")
+    let money = schema
+        .value_objects
+        .get("Money")
         .expect("Money value object not found");
 
     // Should have fields
@@ -139,12 +160,16 @@ fn test_parse_value_object_composite() {
 
     // Check methods
     assert!(money.methods.len() >= 4);
-    let add_method = money.methods.iter()
+    let add_method = money
+        .methods
+        .iter()
         .find(|m| m.name == "add")
         .expect("add method not found");
     assert!(add_method.params.contains_key("other"));
 
-    let is_zero = money.methods.iter()
+    let is_zero = money
+        .methods
+        .iter()
         .find(|m| m.name == "is_zero")
         .expect("is_zero method not found");
     assert!(is_zero.is_const.unwrap_or(false));
@@ -160,11 +185,14 @@ fn test_parse_value_object_composite() {
 #[test]
 fn test_value_object_converts_to_ast() {
     let yaml = read_fixture("value_object_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse value object example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse value object example YAML");
 
     let yaml_vo = schema.value_objects.get("Money").expect("Money not found");
-    let vo = yaml_vo.clone().into_value_object("Money".to_string()).unwrap();
+    let vo = yaml_vo
+        .clone()
+        .into_value_object("Money".to_string())
+        .unwrap();
 
     assert_eq!(vo.name, "Money");
     assert!(vo.fields.len() >= 2);
@@ -178,24 +206,30 @@ fn test_value_object_converts_to_ast() {
 #[test]
 fn test_parse_domain_service() {
     let yaml = read_fixture("domain_service_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse domain service example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse domain service example YAML");
 
     assert_eq!(schema.domain_services.len(), 4);
 
     // Check PasswordService (stateless)
-    let password_svc = schema.domain_services.get("PasswordService")
+    let password_svc = schema
+        .domain_services
+        .get("PasswordService")
         .expect("PasswordService not found");
     assert!(password_svc.stateless.unwrap_or(false));
     assert_eq!(password_svc.methods.len(), 3);
 
-    let hash_method = password_svc.methods.iter()
+    let hash_method = password_svc
+        .methods
+        .iter()
         .find(|m| m.name == "hash")
         .expect("hash method not found");
     assert!(hash_method.is_async.unwrap_or(false));
 
     // Check UserRegistrationService (with dependencies)
-    let reg_svc = schema.domain_services.get("UserRegistrationService")
+    let reg_svc = schema
+        .domain_services
+        .get("UserRegistrationService")
         .expect("UserRegistrationService not found");
     assert!(!reg_svc.stateless.unwrap_or(true));
 
@@ -203,7 +237,9 @@ fn test_parse_domain_service() {
     assert!(reg_svc.dependencies.len() >= 4);
 
     // Check PaymentService dependencies exist
-    let payment_svc = schema.domain_services.get("PaymentService")
+    let payment_svc = schema
+        .domain_services
+        .get("PaymentService")
         .expect("PaymentService not found");
     assert!(payment_svc.dependencies.len() >= 4);
 }
@@ -211,11 +247,16 @@ fn test_parse_domain_service() {
 #[test]
 fn test_domain_service_converts_to_ast() {
     let yaml = read_fixture("domain_service_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse domain service example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse domain service example YAML");
 
-    let yaml_svc = schema.domain_services.get("OrderService").expect("OrderService not found");
-    let svc = yaml_svc.clone().into_domain_service("OrderService".to_string());
+    let yaml_svc = schema
+        .domain_services
+        .get("OrderService")
+        .expect("OrderService not found");
+    let svc = yaml_svc
+        .clone()
+        .into_domain_service("OrderService".to_string());
 
     assert_eq!(svc.name, "OrderService");
     assert!(!svc.stateless);
@@ -230,50 +271,70 @@ fn test_domain_service_converts_to_ast() {
 #[test]
 fn test_parse_event_sourced_config() {
     let yaml = read_fixture("event_sourced_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse event sourced example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse event sourced example YAML");
 
     assert_eq!(schema.event_sourced.len(), 3);
 
     // Check Order event sourcing
-    let order_es = schema.event_sourced.get("Order")
+    let order_es = schema
+        .event_sourced
+        .get("Order")
         .expect("Order event sourced config not found");
     assert!(order_es.events.len() >= 8);
     assert!(order_es.events.contains(&"OrderPlaced".to_string()));
     assert!(order_es.events.contains(&"OrderConfirmed".to_string()));
 
     // Check snapshot config
-    let snapshot = order_es.snapshot.as_ref()
+    let snapshot = order_es
+        .snapshot
+        .as_ref()
         .expect("Order should have snapshot config");
     assert!(snapshot.enabled.unwrap_or(false));
     assert_eq!(snapshot.every_n_events, Some(50));
 
     // Check handlers
     assert!(order_es.handlers.len() >= 3);
-    assert_eq!(order_es.handlers.get("OrderPlaced"), Some(&"handle_order_placed".to_string()));
+    assert_eq!(
+        order_es.handlers.get("OrderPlaced"),
+        Some(&"handle_order_placed".to_string())
+    );
 
     // Check Account (with more config)
-    let account_es = schema.event_sourced.get("Account")
+    let account_es = schema
+        .event_sourced
+        .get("Account")
         .expect("Account event sourced config not found");
-    let account_snap = account_es.snapshot.as_ref().expect("Account should have snapshot");
+    let account_snap = account_es
+        .snapshot
+        .as_ref()
+        .expect("Account should have snapshot");
     assert_eq!(account_snap.every_n_events, Some(100));
     assert_eq!(account_snap.max_age_seconds, Some(3600));
     assert_eq!(account_snap.storage.as_deref(), Some("database"));
 
     // Check AuditLog (no snapshot)
-    let audit_es = schema.event_sourced.get("AuditLog")
+    let audit_es = schema
+        .event_sourced
+        .get("AuditLog")
         .expect("AuditLog event sourced config not found");
-    let audit_snap = audit_es.snapshot.as_ref().expect("AuditLog should have snapshot");
+    let audit_snap = audit_es
+        .snapshot
+        .as_ref()
+        .expect("AuditLog should have snapshot");
     assert!(!audit_snap.enabled.unwrap_or(true));
 }
 
 #[test]
 fn test_event_sourced_converts_to_ast() {
     let yaml = read_fixture("event_sourced_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse event sourced example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse event sourced example YAML");
 
-    let yaml_es = schema.event_sourced.get("Order").expect("Order ES not found");
+    let yaml_es = schema
+        .event_sourced
+        .get("Order")
+        .expect("Order ES not found");
     let es = yaml_es.clone().into_event_sourced("Order".to_string());
 
     assert_eq!(es.entity_name, "Order");
@@ -289,20 +350,28 @@ fn test_event_sourced_converts_to_ast() {
 #[test]
 fn test_parse_authorization_config() {
     let yaml = read_fixture("authorization_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse authorization example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse authorization example YAML");
 
-    let auth = schema.authorization.as_ref()
+    let auth = schema
+        .authorization
+        .as_ref()
         .expect("Authorization config not found");
 
     // Check permissions
     assert!(auth.permissions.len() >= 4);
-    let user_perms = auth.permissions.get("users").expect("users permissions not found");
+    let user_perms = auth
+        .permissions
+        .get("users")
+        .expect("users permissions not found");
     assert!(user_perms.contains(&"read".to_string()));
     assert!(user_perms.contains(&"create".to_string()));
     assert!(user_perms.contains(&"delete".to_string()));
 
-    let doc_perms = auth.permissions.get("documents").expect("documents permissions not found");
+    let doc_perms = auth
+        .permissions
+        .get("documents")
+        .expect("documents permissions not found");
     assert!(doc_perms.contains(&"share".to_string()));
     assert!(doc_perms.contains(&"archive".to_string()));
 
@@ -320,14 +389,19 @@ fn test_parse_authorization_config() {
     assert_eq!(admin.level, Some(80));
     assert!(admin.permissions.iter().any(|p| p.contains("*")));
 
-    let superadmin = auth.roles.get("superadmin").expect("superadmin role not found");
+    let superadmin = auth
+        .roles
+        .get("superadmin")
+        .expect("superadmin role not found");
     assert_eq!(superadmin.level, Some(100));
     assert!(superadmin.permissions.contains(&"*".to_string()));
 
     // Check policies
     assert!(auth.policies.len() >= 5);
 
-    let owner_policy = auth.policies.get("document_owner")
+    let owner_policy = auth
+        .policies
+        .get("document_owner")
         .expect("document_owner policy not found");
     assert_eq!(owner_policy.policy_type.as_deref(), Some("any"));
     assert!(owner_policy.rules.len() >= 1);
@@ -336,10 +410,13 @@ fn test_parse_authorization_config() {
 #[test]
 fn test_authorization_converts_to_ast() {
     let yaml = read_fixture("authorization_example.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse authorization example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse authorization example YAML");
 
-    let yaml_auth = schema.authorization.as_ref().expect("Authorization not found");
+    let yaml_auth = schema
+        .authorization
+        .as_ref()
+        .expect("Authorization not found");
     let auth = yaml_auth.clone().into_authorization();
 
     assert!(auth.permissions.len() >= 4);
@@ -354,27 +431,51 @@ fn test_authorization_converts_to_ast() {
 #[test]
 fn test_parse_complete_ddd_schema() {
     let yaml = read_fixture("complete_ddd.model.yaml");
-    let schema: YamlModelSchema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse complete DDD example YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(&yaml).expect("Failed to parse complete DDD example YAML");
 
     // Verify all DDD features are present
     assert!(schema.models.len() >= 2, "Should have at least 2 models");
     assert!(schema.enums.len() >= 2, "Should have at least 2 enums");
-    assert!(schema.value_objects.len() >= 3, "Should have at least 3 value objects");
-    assert!(schema.entities.len() >= 2, "Should have at least 2 entities");
-    assert!(schema.domain_services.len() >= 2, "Should have at least 2 domain services");
-    assert!(schema.event_sourced.len() >= 2, "Should have at least 2 event sourced configs");
-    assert!(schema.authorization.is_some(), "Should have authorization config");
+    assert!(
+        schema.value_objects.len() >= 3,
+        "Should have at least 3 value objects"
+    );
+    assert!(
+        schema.entities.len() >= 2,
+        "Should have at least 2 entities"
+    );
+    assert!(
+        schema.domain_services.len() >= 2,
+        "Should have at least 2 domain services"
+    );
+    assert!(
+        schema.event_sourced.len() >= 2,
+        "Should have at least 2 event sourced configs"
+    );
+    assert!(
+        schema.authorization.is_some(),
+        "Should have authorization config"
+    );
 
     // Verify Order entity links correctly
-    let order_entity = schema.entities.get("Order").expect("Order entity not found");
+    let order_entity = schema
+        .entities
+        .get("Order")
+        .expect("Order entity not found");
     assert_eq!(order_entity.model.as_deref(), Some("Order"));
     assert!(order_entity.value_objects.contains_key("total"));
     assert!(order_entity.value_objects.contains_key("shipping_address"));
 
     // Verify domain service has dependencies
-    let order_svc = schema.domain_services.get("OrderService").expect("OrderService not found");
-    assert!(order_svc.dependencies.len() >= 2, "OrderService should have dependencies");
+    let order_svc = schema
+        .domain_services
+        .get("OrderService")
+        .expect("OrderService not found");
+    assert!(
+        order_svc.dependencies.len() >= 2,
+        "OrderService should have dependencies"
+    );
 }
 
 // =============================================================================
@@ -396,8 +497,7 @@ models:
         type: string
 "#;
 
-    let schema: YamlModelSchema = parse_model_yaml_str(yaml)
-        .expect("Failed to parse minimal YAML");
+    let schema: YamlModelSchema = parse_model_yaml_str(yaml).expect("Failed to parse minimal YAML");
 
     assert_eq!(schema.models.len(), 1);
     assert!(schema.entities.is_empty());
@@ -427,8 +527,8 @@ value_objects:
     validation: positive_amount
 "#;
 
-    let schema: YamlModelSchema = parse_model_yaml_str(yaml)
-        .expect("Failed to parse partial DDD YAML");
+    let schema: YamlModelSchema =
+        parse_model_yaml_str(yaml).expect("Failed to parse partial DDD YAML");
 
     assert_eq!(schema.models.len(), 1);
     assert_eq!(schema.value_objects.len(), 1);

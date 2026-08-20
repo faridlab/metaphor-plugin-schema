@@ -4,24 +4,22 @@
 //! Verifies that DDD AST nodes properly flow through to generators and
 //! produce the expected output.
 
-use metaphor_schema::ast::{ModuleSchema, Model, Field, Span};
-use metaphor_schema::ast::model::{
-    Entity, EntityMethod, ValueObject, ValueObjectMethod,
-    DomainService, ServiceDependency, ServiceMethod,
-};
-use metaphor_schema::ast::authorization::{
-    AuthorizationConfig, RoleDefinition, PolicyDefinition, PolicyType, PolicyRule,
-};
-use metaphor_schema::ast::types::{TypeRef, PrimitiveType};
-use metaphor_schema::generators::{
-    GeneratedOutput, Generator, GenerationTarget,
-    RustGenerator, ValueObjectGenerator, DomainServiceGenerator,
-    AuthGenerator, EventsGenerator,
-    generate_all,
-};
-use metaphor_schema::resolver::ResolvedSchema;
-use metaphor_schema::parser::yaml_parser::parse_model_yaml_str;
 use indexmap::IndexMap;
+use metaphor_schema::ast::authorization::{
+    AuthorizationConfig, PolicyDefinition, PolicyRule, PolicyType, RoleDefinition,
+};
+use metaphor_schema::ast::model::{
+    DomainService, Entity, EntityMethod, ServiceDependency, ServiceMethod, ValueObject,
+    ValueObjectMethod,
+};
+use metaphor_schema::ast::types::{PrimitiveType, TypeRef};
+use metaphor_schema::ast::{Field, Model, ModuleSchema, Span};
+use metaphor_schema::generators::{
+    generate_all, AuthGenerator, DomainServiceGenerator, EventsGenerator, GeneratedOutput,
+    GenerationTarget, Generator, RustGenerator, ValueObjectGenerator,
+};
+use metaphor_schema::parser::yaml_parser::parse_model_yaml_str;
+use metaphor_schema::resolver::ResolvedSchema;
 use std::fs;
 use std::path::PathBuf;
 
@@ -52,8 +50,7 @@ fn create_resolved_schema(schema: ModuleSchema) -> ResolvedSchema {
 #[test]
 fn test_rust_generator_with_entities() {
     let yaml = read_fixture("entity_example.model.yaml");
-    let yaml_schema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse entity YAML");
+    let yaml_schema = parse_model_yaml_str(&yaml).expect("Failed to parse entity YAML");
 
     let mut schema = create_test_schema();
 
@@ -74,11 +71,15 @@ fn test_rust_generator_with_entities() {
 
     let resolved = create_resolved_schema(schema);
     let generator = RustGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("RustGenerator should succeed");
 
     // Verify output was generated
-    assert!(!output.files.is_empty(), "RustGenerator should produce output");
+    assert!(
+        !output.files.is_empty(),
+        "RustGenerator should produce output"
+    );
 }
 
 #[test]
@@ -90,8 +91,13 @@ fn test_rust_generator_entity_methods_in_output() {
     // Add a model using the Model::new constructor and methods
     let mut model = Model::new("Order");
     model.collection = Some("orders".to_string());
-    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
-    model.fields.push(Field::new("status", TypeRef::Custom("OrderStatus".to_string())));
+    model
+        .fields
+        .push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    model.fields.push(Field::new(
+        "status",
+        TypeRef::Custom("OrderStatus".to_string()),
+    ));
     schema.models.push(model);
 
     // Add an entity with methods
@@ -115,12 +121,15 @@ fn test_rust_generator_entity_methods_in_output() {
         description: None,
         span: Span::default(),
     });
-    entity.invariants.push("status cannot be cancelled after shipped".to_string());
+    entity
+        .invariants
+        .push("status cannot be cancelled after shipped".to_string());
     schema.entities.push(entity);
 
     let resolved = create_resolved_schema(schema);
     let generator = RustGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("RustGenerator should succeed");
 
     // Check that output contains entity-related content
@@ -140,26 +149,30 @@ fn test_rust_generator_entity_methods_in_output() {
 #[test]
 fn test_value_object_generator_from_ast() {
     let yaml = read_fixture("value_object_example.model.yaml");
-    let yaml_schema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse value object YAML");
+    let yaml_schema = parse_model_yaml_str(&yaml).expect("Failed to parse value object YAML");
 
     let mut schema = create_test_schema();
     schema.name = "common".to_string();
 
     // Add value objects from YAML
     for (name, yaml_vo) in yaml_schema.value_objects {
-        schema.value_objects.push(yaml_vo.into_value_object(name).unwrap());
+        schema
+            .value_objects
+            .push(yaml_vo.into_value_object(name).unwrap());
     }
 
     let resolved = create_resolved_schema(schema);
     let generator = ValueObjectGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("ValueObjectGenerator should succeed");
 
     // Value object generator should produce output when VOs are defined
     // (even if empty, it should not fail)
-    assert!(output.files.is_empty() || !output.files.is_empty(),
-        "ValueObjectGenerator should complete without error");
+    assert!(
+        output.files.is_empty() || !output.files.is_empty(),
+        "ValueObjectGenerator should complete without error"
+    );
 }
 
 #[test]
@@ -172,8 +185,14 @@ fn test_value_object_with_methods() {
     params.insert("other".to_string(), TypeRef::Custom("Money".to_string()));
 
     let mut vo = ValueObject::new("Money");
-    vo.fields.push(Field::new("amount", TypeRef::Primitive(PrimitiveType::Decimal)));
-    vo.fields.push(Field::new("currency", TypeRef::Primitive(PrimitiveType::String)));
+    vo.fields.push(Field::new(
+        "amount",
+        TypeRef::Primitive(PrimitiveType::Decimal),
+    ));
+    vo.fields.push(Field::new(
+        "currency",
+        TypeRef::Primitive(PrimitiveType::String),
+    ));
     vo.methods.push(ValueObjectMethod {
         name: "add".to_string(),
         returns: TypeRef::Custom("Result<Money, Error>".to_string()),
@@ -197,7 +216,8 @@ fn test_value_object_with_methods() {
 
     let resolved = create_resolved_schema(schema);
     let generator = ValueObjectGenerator::new();
-    let _output = generator.generate(&resolved)
+    let _output = generator
+        .generate(&resolved)
         .expect("ValueObjectGenerator should handle VOs with methods");
 }
 
@@ -208,32 +228,40 @@ fn test_value_object_with_methods() {
 #[test]
 fn test_domain_service_generator_from_ast() {
     let yaml = read_fixture("domain_service_example.model.yaml");
-    let yaml_schema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse domain service YAML");
+    let yaml_schema = parse_model_yaml_str(&yaml).expect("Failed to parse domain service YAML");
 
     let mut schema = create_test_schema();
     schema.name = "user".to_string();
 
     // Add domain services from YAML
     for (name, yaml_svc) in yaml_schema.domain_services {
-        schema.domain_services.push(yaml_svc.into_domain_service(name));
+        schema
+            .domain_services
+            .push(yaml_svc.into_domain_service(name));
     }
 
     // The generator emits one domain-policy file per model (PermitAllPolicy alias or a
     // scaffold when the model declares domain rules), so a model must be present.
     let mut model = Model::new("User");
     model.collection = Some("users".to_string());
-    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    model
+        .fields
+        .push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
     schema.models.push(model);
 
     let resolved = create_resolved_schema(schema);
     let generator = DomainServiceGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("DomainServiceGenerator should succeed");
 
     // Generator should produce a per-model domain policy file (plus mod.rs)
-    assert!(output.files.contains_key(&PathBuf::from("src/domain/services/user_domain_policy.rs")),
-        "DomainServiceGenerator should produce a domain policy file for the User model");
+    assert!(
+        output
+            .files
+            .contains_key(&PathBuf::from("src/domain/services/user_domain_policy.rs")),
+        "DomainServiceGenerator should produce a domain policy file for the User model"
+    );
 }
 
 #[test]
@@ -243,15 +271,23 @@ fn test_domain_service_with_dependencies() {
 
     // Create a domain service with various dependency types
     let mut params = IndexMap::new();
-    params.insert("order_id".to_string(), TypeRef::Primitive(PrimitiveType::Uuid));
+    params.insert(
+        "order_id".to_string(),
+        TypeRef::Primitive(PrimitiveType::Uuid),
+    );
 
     let mut svc = DomainService::new("OrderProcessingService");
     svc.stateless = false;
     svc.description = Some("Processes orders through the fulfillment pipeline".to_string());
-    svc.dependencies.push(ServiceDependency::Repository("OrderRepository".to_string()));
-    svc.dependencies.push(ServiceDependency::Repository("ProductRepository".to_string()));
-    svc.dependencies.push(ServiceDependency::Service("PaymentService".to_string()));
-    svc.dependencies.push(ServiceDependency::Client("EmailClient".to_string()));
+    svc.dependencies
+        .push(ServiceDependency::Repository("OrderRepository".to_string()));
+    svc.dependencies.push(ServiceDependency::Repository(
+        "ProductRepository".to_string(),
+    ));
+    svc.dependencies
+        .push(ServiceDependency::Service("PaymentService".to_string()));
+    svc.dependencies
+        .push(ServiceDependency::Client("EmailClient".to_string()));
     svc.methods.push(ServiceMethod {
         name: "process_order".to_string(),
         is_async: true,
@@ -265,7 +301,8 @@ fn test_domain_service_with_dependencies() {
 
     let resolved = create_resolved_schema(schema);
     let generator = DomainServiceGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("DomainServiceGenerator should handle services with dependencies");
 
     // Check output files exist
@@ -282,8 +319,7 @@ fn test_domain_service_with_dependencies() {
 #[test]
 fn test_auth_generator_from_config() {
     let yaml = read_fixture("authorization_example.model.yaml");
-    let yaml_schema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse authorization YAML");
+    let yaml_schema = parse_model_yaml_str(&yaml).expect("Failed to parse authorization YAML");
 
     let mut schema = create_test_schema();
     schema.name = "auth".to_string();
@@ -300,12 +336,15 @@ fn test_auth_generator_from_config() {
 
     let resolved = create_resolved_schema(schema);
     let generator = AuthGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("AuthGenerator should succeed");
 
     // Auth generator should produce output
-    assert!(!output.files.is_empty(),
-        "AuthGenerator should produce auth-related files");
+    assert!(
+        !output.files.is_empty(),
+        "AuthGenerator should produce auth-related files"
+    );
 }
 
 #[test]
@@ -315,12 +354,15 @@ fn test_auth_generator_with_roles_and_policies() {
 
     // Create authorization config
     let mut permissions = IndexMap::new();
-    permissions.insert("documents".to_string(), vec![
-        "read".to_string(),
-        "create".to_string(),
-        "update".to_string(),
-        "delete".to_string(),
-    ]);
+    permissions.insert(
+        "documents".to_string(),
+        vec![
+            "read".to_string(),
+            "create".to_string(),
+            "update".to_string(),
+            "delete".to_string(),
+        ],
+    );
 
     let mut roles = vec![];
     let mut viewer_role = RoleDefinition::new("viewer");
@@ -346,13 +388,11 @@ fn test_auth_generator_with_roles_and_policies() {
     policies.push(PolicyDefinition {
         name: "owner_access".to_string(),
         policy_type: PolicyType::Any,
-        rules: vec![
-            PolicyRule::Owner {
-                resource: "Document".to_string(),
-                field: "owner_id".to_string(),
-                actor_field: Some("id".to_string()),
-            },
-        ],
+        rules: vec![PolicyRule::Owner {
+            resource: "Document".to_string(),
+            field: "owner_id".to_string(),
+            actor_field: Some("id".to_string()),
+        }],
         description: Some("Owners can access their documents".to_string()),
         span: Span::default(),
     });
@@ -367,18 +407,28 @@ fn test_auth_generator_with_roles_and_policies() {
     // must be present for it to produce output.
     let mut model = Model::new("Document");
     model.collection = Some("documents".to_string());
-    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
-    model.fields.push(Field::new("owner_id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    model
+        .fields
+        .push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    model.fields.push(Field::new(
+        "owner_id",
+        TypeRef::Primitive(PrimitiveType::Uuid),
+    ));
     schema.models.push(model);
 
     let resolved = create_resolved_schema(schema);
     let generator = AuthGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("AuthGenerator should handle complex auth config");
 
     // The auth generator produces a per-model auth file (Policy + Guard) plus mod.rs
-    assert!(output.files.contains_key(&PathBuf::from("src/application/auth/document_auth.rs")),
-        "AuthGenerator should produce an auth file for the Document model");
+    assert!(
+        output
+            .files
+            .contains_key(&PathBuf::from("src/application/auth/document_auth.rs")),
+        "AuthGenerator should produce an auth file for the Document model"
+    );
 }
 
 // =============================================================================
@@ -388,8 +438,7 @@ fn test_auth_generator_with_roles_and_policies() {
 #[test]
 fn test_events_generator_custom_events() {
     let yaml = read_fixture("event_sourced_example.model.yaml");
-    let yaml_schema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse event sourced YAML");
+    let yaml_schema = parse_model_yaml_str(&yaml).expect("Failed to parse event sourced YAML");
 
     let mut schema = create_test_schema();
     schema.name = "order".to_string();
@@ -406,12 +455,15 @@ fn test_events_generator_custom_events() {
 
     let resolved = create_resolved_schema(schema);
     let generator = EventsGenerator::new();
-    let output = generator.generate(&resolved)
+    let output = generator
+        .generate(&resolved)
         .expect("EventsGenerator should succeed");
 
     // Events generator should produce output
-    assert!(!output.files.is_empty(),
-        "EventsGenerator should produce event files");
+    assert!(
+        !output.files.is_empty(),
+        "EventsGenerator should produce event files"
+    );
 }
 
 // =============================================================================
@@ -421,8 +473,7 @@ fn test_events_generator_custom_events() {
 #[test]
 fn test_all_generators_with_ddd_schema() {
     let yaml = read_fixture("complete_ddd.model.yaml");
-    let yaml_schema = parse_model_yaml_str(&yaml)
-        .expect("Failed to parse complete DDD YAML");
+    let yaml_schema = parse_model_yaml_str(&yaml).expect("Failed to parse complete DDD YAML");
 
     let mut schema = create_test_schema();
     schema.name = "ecommerce".to_string();
@@ -437,11 +488,15 @@ fn test_all_generators_with_ddd_schema() {
     }
 
     for (name, yaml_vo) in yaml_schema.value_objects {
-        schema.value_objects.push(yaml_vo.into_value_object(name).unwrap());
+        schema
+            .value_objects
+            .push(yaml_vo.into_value_object(name).unwrap());
     }
 
     for (name, yaml_svc) in yaml_schema.domain_services {
-        schema.domain_services.push(yaml_svc.into_domain_service(name));
+        schema
+            .domain_services
+            .push(yaml_svc.into_domain_service(name));
     }
 
     for (name, yaml_es) in yaml_schema.event_sourced {
@@ -463,14 +518,19 @@ fn test_all_generators_with_ddd_schema() {
         GenerationTarget::Events,
     ];
 
-    let output = generate_all(&resolved, &targets)
-        .expect("All generators should succeed with DDD schema");
+    let output =
+        generate_all(&resolved, &targets).expect("All generators should succeed with DDD schema");
 
     // Verify combined output
-    assert!(!output.files.is_empty(),
-        "Combined generation should produce files");
+    assert!(
+        !output.files.is_empty(),
+        "Combined generation should produce files"
+    );
 
-    println!("Generated {} files from complete DDD schema", output.files.len());
+    println!(
+        "Generated {} files from complete DDD schema",
+        output.files.len()
+    );
     for path in output.files.keys() {
         println!("  - {}", path.display());
     }
@@ -489,8 +549,13 @@ fn test_generators_work_without_ddd_features() {
     // Add a basic model without DDD features
     let mut model = Model::new("LegacyEntity");
     model.collection = Some("legacy_entities".to_string());
-    model.fields.push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
-    model.fields.push(Field::new("name", TypeRef::Primitive(PrimitiveType::String)));
+    model
+        .fields
+        .push(Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid)));
+    model.fields.push(Field::new(
+        "name",
+        TypeRef::Primitive(PrimitiveType::String),
+    ));
     schema.models.push(model);
 
     // All DDD fields are empty
@@ -504,10 +569,12 @@ fn test_generators_work_without_ddd_features() {
 
     // Run all generators
     let targets = GenerationTarget::all();
-    let output = generate_all(&resolved, &targets)
-        .expect("All generators should work without DDD features");
+    let output =
+        generate_all(&resolved, &targets).expect("All generators should work without DDD features");
 
     // Should still produce output from basic model
-    assert!(!output.files.is_empty(),
-        "Generators should produce output for basic models");
+    assert!(
+        !output.files.is_empty(),
+        "Generators should produce output for basic models"
+    );
 }
