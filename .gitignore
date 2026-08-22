@@ -6,3 +6,4 @@ Cargo.lock
 
 # graphify knowledge graph (local, not committed)
 graphify-out/
+.dit-cache/
