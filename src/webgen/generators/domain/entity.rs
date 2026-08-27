@@ -494,7 +494,12 @@ export function get{name}Label(value: {name}): string {{
                 .iter()
                 .map(|v| {
                     let label = v.description.as_ref().unwrap_or(&v.name);
-                    format!("    [{}.{}]: '{}',", enum_def.name, v.name, label)
+                    format!(
+                        "    [{}.{}]: '{}',",
+                        enum_def.name,
+                        v.name,
+                        escape_single_quoted(label)
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -502,10 +507,22 @@ export function get{name}Label(value: {name}): string {{
     }
 }
 
+/// Escape prose for interpolation inside a single-quoted TypeScript string
+/// literal. Schema descriptions carry user prose — quotes, apostrophes, and
+/// line breaks — which would otherwise terminate the literal early.
+///
+/// Shared with the schema generator, which puts the same prose in `.describe()`.
+pub(crate) fn escape_single_quoted(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webgen::ast::entity::{FieldDefinition, FieldType};
+    use crate::webgen::ast::entity::{EnumVariant, FieldDefinition, FieldType};
 
     fn test_config() -> Config {
         Config::new("test_module")
@@ -552,5 +569,34 @@ mod tests {
         assert!(content.contains("export const isUser"));
         assert!(content.contains("from '@webapp/shared/entity/helpers'"));
         assert!(!content.contains("export interface User {"));
+    }
+
+    #[test]
+    fn test_enum_label_escapes_prose() {
+        let generator = EntityGenerator::new(test_config(), TypeMapper::new());
+
+        let enum_def = EnumDefinition {
+            name: "PunchSource".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "kiosk".to_string(),
+                    description: Some("Kiosk PIN (Tier B) — the kiosk's own reader".to_string()),
+                    is_default: false,
+                },
+                EnumVariant {
+                    name: "manual".to_string(),
+                    description: None,
+                    is_default: false,
+                },
+            ],
+        };
+
+        let content = generator.generate_enum_content(&enum_def);
+        // The apostrophe in the description is escaped, so the emitted literal
+        // stays a single valid string.
+        assert!(content
+            .contains("[PunchSource.kiosk]: 'Kiosk PIN (Tier B) — the kiosk\\'s own reader',"));
+        // Descriptions without prose hazards pass through untouched.
+        assert!(content.contains("[PunchSource.manual]: 'manual',"));
     }
 }
