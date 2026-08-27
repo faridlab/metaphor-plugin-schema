@@ -244,6 +244,33 @@ impl TypeMapper {
                 }
             }
             "length" => {
+                // `@length(N)` is an exact-length constraint, but schemas also
+                // use the kwarg form — `@length(max=N)` / `@length(min=N)` —
+                // which bounds the length instead of pinning it. Map kwargs
+                // onto the respective zod bounds; only a bare numeric argument
+                // keeps the exact-length check.
+                let bounds: Vec<String> = attr
+                    .args
+                    .iter()
+                    .filter_map(|arg| {
+                        if let Some(n) = arg.strip_prefix("max=") {
+                            Some(format!(
+                                ".max({}, {{ message: 'Must be at most {} characters' }})",
+                                n, n
+                            ))
+                        } else if let Some(n) = arg.strip_prefix("min=") {
+                            Some(format!(
+                                ".min({}, {{ message: 'Must be at least {} characters' }})",
+                                n, n
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !bounds.is_empty() {
+                    return Some(bounds.join(""));
+                }
                 let arg = attr.first_arg()?;
                 Some(format!(".length({}, {{ message: 'Must be exactly {} characters' }})", arg, arg))
             }
@@ -528,6 +555,30 @@ mod tests {
             "Date"
         );
         assert_eq!(mapper.to_typescript_type(&FieldType::Uuid, false), "string");
+    }
+
+    #[test]
+    fn test_length_attribute_kwarg_bounds() {
+        let mapper = TypeMapper::new();
+
+        // Kwarg form bounds the length instead of pinning it.
+        let attr = FieldAttribute::new("length", vec!["max=255".to_string()]);
+        assert_eq!(
+            mapper.attribute_to_zod_validation(&attr, &FieldType::String),
+            Some(".max(255, { message: 'Must be at most 255 characters' })".to_string())
+        );
+        let attr = FieldAttribute::new("length", vec!["min=2".to_string()]);
+        assert_eq!(
+            mapper.attribute_to_zod_validation(&attr, &FieldType::String),
+            Some(".min(2, { message: 'Must be at least 2 characters' })".to_string())
+        );
+
+        // A bare numeric argument keeps the exact-length check.
+        let attr = FieldAttribute::new("length", vec!["16".to_string()]);
+        assert_eq!(
+            mapper.attribute_to_zod_validation(&attr, &FieldType::String),
+            Some(".length(16, { message: 'Must be exactly 16 characters' })".to_string())
+        );
     }
 
     #[test]
