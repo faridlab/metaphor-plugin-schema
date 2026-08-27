@@ -7,6 +7,74 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-27
+
+### Added
+
+- **Field descriptions reach the generated schemas.** A field's `description:`
+  is now emitted as `.describe('…')` on the base, create and update Zod
+  schemas — the three a consumer introspects — as well as staying in the doc
+  comment above the field. It was previously a TypeScript comment only, so it
+  was stripped at compile time and no consumer could ever show it: 3,350
+  descriptions across the composed backbone modules, of which 2,713 explain
+  something a field name cannot ("Header account (cannot post transactions
+  directly)", "Normal balance side (Debit or Credit)").
+  Everything after a ` # ` in a description is a note to whoever maintains the
+  schema ("logical FK to organization.Company.id", an ADR reference,
+  "in-module") and is left out of `.describe()`; a description that is nothing
+  but such a note emits none.
+  · [`entity_schema.rs`](src/webgen/generators/domain/entity_schema.rs)
+  (`describing`, `field_hint`).
+
+- **`<entity>RelationTargets`: what each reference field points at, as data.**
+  A new pure-data export per entity maps a reference field to the ENTITY it
+  targets, read first from the field's `@foreign_key(JournalLine.id)`
+  declaration and falling back to a `# logical FK to …` note. A `*_id` names its
+  target only by convention, and the convention breaks on every alias
+  (`reverses_id`, `matched_source_id`), every reference into another module, and
+  every reference field not named `*_id` at all (`approved_by`, `conducted_by`);
+  a consumer had no way to resolve those but to guess. The reference shape is
+  taken strictly — qualified, PascalCase, or a plural table name — so prose after
+  the marker yields nothing rather than a bogus target.
+  · [`entity_schema.rs`](src/webgen/generators/domain/entity_schema.rs)
+  (`generate_relation_targets`, `target_of`, `declared_target`,
+  `relation_target`).
+
+- **`user_owned` globs an app added survive regeneration.** The codegen manifest
+  is generated with a default `user_owned:` list, and consuming apps append
+  their own globs (a per-resource config folder, for instance). A wholesale
+  rewrite dropped them, and a path absent from `user_owned` is wiped by the next
+  `--force` regen. Extras are now merged back, keeping their lines, comments and
+  order.
+  · [`contracts/mod.rs`](src/webgen/generators/contracts/mod.rs)
+  (`merge_user_owned`).
+
+### Changed
+
+- **Webapp REST clients namespace by the module's schema name.** Generated
+  `BaseCrudApiClient` subclasses now derive their URL segment from the module's
+  schema index (`<schema>/models/index.model.yaml`: `module:` field, `schema:`
+  as fallback) instead of the module key passed on the CLI. A generation
+  invoked as `metaphor schema generate:webapp backbone_sapiens --schema-dir
+  modules/backbone-sapiens/schema` now emits clients for
+  `/api/v1/sapiens/{collection}` (previously `/api/v1/backbone_sapiens/…`).
+  Schema directories without an index keep falling back to the module key, and
+  the API-root (product) module still mounts at `/api/v1/{collection}`.
+  Generated directory/import naming is unchanged (still keyed by the module
+  argument) — only the emitted base paths change.
+  · [`config.rs`](src/webgen/config.rs) (`Config::url_segment`),
+  [`api_client.rs`](src/webgen/generators/infrastructure/api_client.rs).
+
+### Fixed
+
+- **Prose in a generated enum label no longer breaks the emitted literal.** An
+  enum variant's description is interpolated into a single-quoted TypeScript
+  string; an apostrophe in it ("the kiosk's own reader") ended the literal early
+  and the file did not compile. Quotes, backslashes and line breaks are escaped,
+  and the same escaping is shared with the schema generator's `.describe()`.
+  · [`entity.rs`](src/webgen/generators/domain/entity.rs)
+  (`escape_single_quoted`).
+
 ## [0.12.0] — 2026-08-16
 
 ### Added
