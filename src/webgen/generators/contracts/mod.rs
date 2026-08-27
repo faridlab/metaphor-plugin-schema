@@ -215,6 +215,12 @@ user_owned:
   - hooks/**
 "#
         .to_string();
+        // Preserve consumer-appended user_owned globs across regen — they are
+        // reservations, and anything unlisted is wiped on the next --force run.
+        let manifest = match fs::read_to_string(&manifest_path) {
+            Ok(existing) => merge_user_owned(&manifest, &existing),
+            Err(_) => manifest,
+        };
 
         if self.config.dry_run {
             result.dry_run_files.push(manifest_path);
@@ -245,5 +251,107 @@ user_owned:
             crate::webgen::custom_blocks::preserve_and_write(&path, content).ok();
             result.files_generated.push(path);
         }
+    }
+}
+
+/// Collect the `user_owned:` list entries of a manifest, with their line
+/// indices: `(index, line)`. The section ends at the next non-indented,
+/// non-comment line. Returns an empty vec when the manifest has no section.
+fn user_owned_entries(manifest: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for (i, line) in manifest.lines().enumerate() {
+        if line.starts_with("user_owned:") {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with("- ") {
+            out.push((i, line.to_string()));
+        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            break;
+        }
+    }
+    out
+}
+
+/// The glob of a `user_owned` entry — the text after `- ` up to any trailing
+/// comment. Two entries with the same glob are the same reservation.
+fn entry_glob(entry: &str) -> String {
+    entry
+        .trim()
+        .strip_prefix("- ")
+        .map(|rest| rest.split('#').next().unwrap_or("").trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Merge `user_owned` extras from a previously written manifest into the
+/// freshly generated one. The generator owns the default list, but consuming
+/// apps append their own globs (e.g. `resources/**` per-resource config
+/// folders); a wholesale rewrite would drop them, and paths absent from
+/// `user_owned` are wiped on the next `--force` regen. Entries already present
+/// (matched by glob) are not duplicated; extras keep their original lines,
+/// comments included, in their original order.
+fn merge_user_owned(generated: &str, existing: &str) -> String {
+    let generated_globs: std::collections::HashSet<String> = user_owned_entries(generated)
+        .iter()
+        .map(|(_, l)| entry_glob(l))
+        .collect();
+    let extras: Vec<String> = user_owned_entries(existing)
+        .into_iter()
+        .map(|(_, l)| l)
+        .filter(|l| !generated_globs.contains(&entry_glob(l)))
+        .collect();
+
+    let mut lines: Vec<String> = generated.lines().map(|l| l.to_string()).collect();
+    let generated_entries = user_owned_entries(generated);
+    let insert_at = match generated_entries.last() {
+        Some((i, _)) => i + 1,
+        // No entries in the generated list — insert right after the header.
+        None => {
+            let header = lines
+                .iter()
+                .position(|l| l.starts_with("user_owned:"))
+                .unwrap_or(lines.len());
+            header + 1
+        }
+    };
+    for (n, extra) in extras.iter().enumerate() {
+        lines.insert(insert_at + n, extra.clone());
+    }
+    lines.join("\n") + "\n"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GENERATED: &str = "# header comment\nuser_owned:\n  - features/**\n  - components/**\n";
+
+    #[test]
+    fn merges_existing_user_owned_extras_with_comments_intact() {
+        let existing = "# header comment\nuser_owned:\n  - features/**\n  - resources/**   # per-resource config folders\n";
+        let merged = merge_user_owned(GENERATED, existing);
+        assert!(merged.contains("  - components/**\n"));
+        assert!(merged.contains("  - resources/**   # per-resource config folders\n"));
+        // No duplicate when the glob already exists (comment differences aside).
+        assert_eq!(merged.matches("features/**").count(), 1);
+    }
+
+    #[test]
+    fn keeps_generated_manifest_unchanged_when_no_extras() {
+        let existing = "# header comment\nuser_owned:\n  - features/**\n  - components/**\n";
+        assert_eq!(merge_user_owned(GENERATED, existing), GENERATED);
+    }
+
+    #[test]
+    fn ignores_user_owned_lookalikes_outside_the_section() {
+        // A `generated:` list must not be mistaken for user_owned entries.
+        let existing = "generated:\n  - shared/**\nuser_owned:\n  - features/**\n";
+        let merged = merge_user_owned(GENERATED, existing);
+        assert!(!merged.contains("shared/**"));
     }
 }
