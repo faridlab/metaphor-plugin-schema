@@ -5,6 +5,7 @@
 
 use std::fs;
 
+use super::entity::escape_single_quoted;
 use super::type_mapping::TypeMapper;
 use super::DomainGenerationResult;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition, FieldDefinition, FieldType};
@@ -223,7 +224,7 @@ export const {entity_camel}FilterSchema = z.object({{
  * Filter parameters type
  */
 export type {entity_pascal}FilterParams = z.infer<typeof {entity_camel}FilterSchema>;
-{hook_validations}
+{relation_targets}{hook_validations}
 // ============================================================================
 // Validation Helpers
 // ============================================================================
@@ -272,6 +273,7 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             create_fields = create_fields,
             update_fields = update_fields,
             filter_fields = self.generate_filter_field_schemas(entity, enums),
+            relation_targets = self.generate_relation_targets(entity),
             hook_validations = hook_validations,
         )
     }
@@ -355,7 +357,7 @@ const {name_camel}Schema = z.enum({name}Values);
         let mut fields = Vec::new();
 
         for field in &entity.fields {
-            let schema = self.type_mapper.to_zod_schema(field, enums);
+            let schema = describing(field, self.type_mapper.to_zod_schema(field, enums));
 
             // Add comment if description exists
             if let Some(desc) = &field.description {
@@ -382,7 +384,7 @@ const {name_camel}Schema = z.enum({name}Values);
                 continue;
             }
 
-            let schema = self.type_mapper.to_zod_schema(field, enums);
+            let schema = describing(field, self.type_mapper.to_zod_schema(field, enums));
             fields.push(format!("  {}: {},", field.name, schema));
         }
 
@@ -405,11 +407,58 @@ const {name_camel}Schema = z.enum({name}Values);
 
             let base_schema = self.type_mapper.to_zod_schema(field, enums);
             // Make all update fields optional
-            let optional_schema = format!("{}.optional()", base_schema);
+            let optional_schema = describing(field, format!("{}.optional()", base_schema));
             fields.push(format!("  {}: {},", field.name, optional_schema));
         }
 
         fields.join("\n")
+    }
+
+    /// Emit what each reference field points at, where the schema says so.
+    ///
+    /// A `*_id` names its target only by convention, and the convention breaks on
+    /// every alias (`reverses_id`, `matched_source_id`) and every reference into
+    /// another module. The schema records the real target in the field's note, in
+    /// prose — which no consumer can read. This turns the ones stated confidently
+    /// into data, and stays silent about the rest.
+    fn generate_relation_targets(&self, entity: &EntityDefinition) -> String {
+        let entries: Vec<String> = entity
+            .fields
+            .iter()
+            .filter_map(|f| {
+                let target = target_of(f)?;
+                Some(format!(
+                    "  {}: '{}',",
+                    f.name,
+                    escape_single_quoted(&target)
+                ))
+            })
+            .collect();
+        if entries.is_empty() {
+            return String::new();
+        }
+        format!(
+            r#"
+// ============================================================================
+// Relation Targets
+// ============================================================================
+
+/**
+ * The entity each reference field points at, as recorded in the schema.
+ *
+ * Only the references the schema states outright are here — a field whose target
+ * is left to its name is absent, and its consumer falls back to reading the name.
+ */
+export const {entity_camel}RelationTargets = {{
+{entries}
+}} as const;
+"#,
+            entity_camel = to_camel_case(&entity.name),
+            entries = entries.join(
+                "
+"
+            ),
+        )
     }
 
     /// Generate filter field schemas for query parameters
@@ -562,9 +611,133 @@ export function validate{entity_pascal}BusinessRules(
     }
 }
 
+/// The reader-facing half of a field description.
+///
+/// A schema description is written for two audiences at once: the sentence that
+/// explains the field, and — after a ` # ` — a note to whoever maintains the
+/// schema ("logical FK to organization.Company.id", an ADR reference, "in-module").
+/// Only the first half means anything on a screen, so only the first half is
+/// carried into the emitted schema. The full text stays in the doc comment above
+/// the field, where the note was written to be read.
+///
+/// Returns None for a description that is nothing but a note, so nothing empty
+/// is emitted.
+fn field_hint(description: &str) -> Option<String> {
+    let head = description
+        .split(" # ")
+        .next()
+        .unwrap_or(description)
+        .trim();
+    // A description that is nothing but the note starts with the marker.
+    if head.is_empty() || head.starts_with('#') {
+        return None;
+    }
+    Some(head.to_string())
+}
+
+/// What a field points at, from the two places the schema can say so.
+///
+/// `@foreign_key(JournalLine.id)` is a declaration and is taken first: it is
+/// structured, it is checked by the schema tooling, and it cannot drift from the
+/// prose the way a note can. The note after a ` # ` is the fallback, for the many
+/// logical references that carry no attribute because there is no SQL constraint
+/// to declare — cross-module references, and everything the deployment leaves
+/// unenforced.
+fn target_of(field: &FieldDefinition) -> Option<String> {
+    declared_target(field).or_else(|| field.description.as_deref().and_then(relation_target))
+}
+
+/// The target named by a `@foreign_key(...)` attribute.
+///
+/// The same attribute appears on a `relations:` entry naming the FK FIELD rather
+/// than the target (`@foreign_key(user_id)`), so only a capitalised name is taken
+/// as an entity — a lowercase one is a field name and means nothing here.
+fn declared_target(field: &FieldDefinition) -> Option<String> {
+    let arg = field
+        .attributes
+        .iter()
+        .find(|a| a.name == "foreign_key")
+        .and_then(|a| a.first_arg())?;
+    let reference = arg.trim().trim_end_matches(".id");
+    let last = reference.rsplit('.').next()?;
+    if last.starts_with(|c: char| c.is_ascii_uppercase()) {
+        Some(last.to_string())
+    } else {
+        None
+    }
+}
+
+/// English plural → singular, enough for a table name (`approval_policies` →
+/// `approval_policy`). A word that is already singular is returned unchanged.
+fn singular(word: &str) -> String {
+    if let Some(stem) = word.strip_suffix("ies") {
+        return format!("{stem}y");
+    }
+    if let Some(stem) = word.strip_suffix("sses") {
+        return format!("{stem}ss");
+    }
+    if let Some(stem) = word.strip_suffix("ses") {
+        return format!("{stem}s");
+    }
+    word.strip_suffix('s').unwrap_or(word).to_string()
+}
+
+/// The entity a reference field points at, read out of the note a schema author
+/// left after the ` # ` — "logical FK to organization.Company.id", "FK
+/// approval_policies.id (in-module)".
+///
+/// Deliberately strict, because a wrong target sends a reader to the wrong record
+/// and a missing one only costs a fallback. A reference has a recognisable shape:
+/// it is qualified (`module.Entity`), written as an entity (`PascalCase`), or names
+/// a table (a plural). Prose after the marker — "FK to the workflow that triggered
+/// it" — has none of those, and returns None.
+fn relation_target(description: &str) -> Option<String> {
+    let (_, note) = description.split_once('#')?;
+    let mut words = note
+        .split_whitespace()
+        .skip_while(|w| !w.eq_ignore_ascii_case("FK"));
+    words.next()?; // the "FK" itself
+    let mut token = words.next()?;
+    if token.eq_ignore_ascii_case("to") {
+        token = words.next()?;
+    }
+    let reference = token
+        .trim_end_matches([',', '.', ';', ':', ')', '(', '"'])
+        .trim_end_matches(".id")
+        .trim_end_matches(".Id")
+        .trim_end_matches('.');
+    let last = reference.rsplit('.').next()?;
+    if last.is_empty() {
+        return None;
+    }
+    if last.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return Some(last.to_string());
+    }
+    // A lowercase token only counts when its shape says "reference": qualified by
+    // a module, or plural like a table name.
+    if reference.contains('.') || last.ends_with('s') {
+        return Some(to_pascal_case(&singular(last)));
+    }
+    None
+}
+
+/// Attach a field's description to its Zod schema, so the explanation the schema
+/// already carries survives compilation and can be shown beside the field.
+///
+/// A doc comment cannot: it is stripped with the types, leaving every generated
+/// consumer to re-invent an explanation the schema author already wrote.
+/// `.describe()` makes the same prose data.
+fn describing(field: &FieldDefinition, schema: String) -> String {
+    match field.description.as_deref().and_then(field_hint) {
+        Some(hint) => format!("{}.describe('{}')", schema, escape_single_quoted(&hint)),
+        None => schema,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::webgen::ast::entity::FieldAttribute;
 
     fn test_config() -> Config {
         Config::new("test_module")
@@ -606,5 +779,212 @@ mod tests {
         assert!(generator.is_auto_generated_field(&id_field));
         assert!(generator.is_auto_generated_field(&created_at_field));
         assert!(!generator.is_auto_generated_field(&email_field));
+    }
+
+    fn described(name: &str, description: Option<&str>) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            type_name: FieldType::String,
+            attributes: vec![],
+            description: description.map(str::to_string),
+            optional: false,
+            default_value: None,
+        }
+    }
+
+    fn with_fk(name: &str, arg: &str, description: Option<&str>) -> FieldDefinition {
+        let mut f = described(name, description);
+        f.attributes = vec![FieldAttribute {
+            name: "foreign_key".to_string(),
+            args: vec![arg.to_string()],
+        }];
+        f
+    }
+
+    #[test]
+    fn a_declared_foreign_key_names_the_target() {
+        assert_eq!(
+            target_of(&with_fk(
+                "debit_move_id",
+                "JournalLine.id",
+                Some("Debit side of the edge")
+            ))
+            .as_deref(),
+            Some("JournalLine")
+        );
+        // A qualified declaration resolves to the entity, not the module.
+        assert_eq!(
+            target_of(&with_fk("user_id", "sapiens.User.id", None)).as_deref(),
+            Some("User")
+        );
+        // On a relations entry the attribute names the FK FIELD; that is not an entity.
+        assert_eq!(target_of(&with_fk("parent", "parent_id", None)), None);
+    }
+
+    #[test]
+    fn a_declaration_is_preferred_over_the_note() {
+        // Both present and disagreeing: the declaration is the checked one.
+        let f = with_fk(
+            "reward_item_id",
+            "Item.id",
+            Some("Free reward item # logical FK to catalog.Product.id"),
+        );
+        assert_eq!(target_of(&f).as_deref(), Some("Item"));
+        // With no declaration the note still answers.
+        assert_eq!(
+            target_of(&described(
+                "company_id",
+                Some("Owner # logical FK to organization.Company.id")
+            ))
+            .as_deref(),
+            Some("Company")
+        );
+    }
+
+    #[test]
+    fn field_hint_keeps_the_sentence_and_drops_the_schema_note() {
+        assert_eq!(
+            field_hint("Legal entity that owns this Chart of Accounts # logical FK to organization.Company.id"),
+            Some("Legal entity that owns this Chart of Accounts".to_string())
+        );
+        // A description with nothing but a note explains nothing to a reader.
+        assert_eq!(field_hint("# FK employees.id"), None);
+        assert_eq!(field_hint("   "), None);
+        // Prose that merely contains a hash is not a note.
+        assert_eq!(
+            field_hint("Invoice number (e.g. #INV-001)"),
+            Some("Invoice number (e.g. #INV-001)".to_string())
+        );
+    }
+
+    #[test]
+    fn a_described_field_carries_its_explanation_into_the_schema() {
+        let field = described(
+            "is_header",
+            Some("Header account (cannot post transactions directly)"),
+        );
+        assert_eq!(
+            describing(&field, "z.string()".to_string()),
+            "z.string().describe('Header account (cannot post transactions directly)')"
+        );
+
+        // An undescribed field is emitted exactly as before.
+        assert_eq!(
+            describing(&described("name", None), "z.string()".to_string()),
+            "z.string()"
+        );
+    }
+
+    #[test]
+    fn a_description_with_an_apostrophe_stays_one_string_literal() {
+        let field = described("owner_id", Some("The kiosk's own reader"));
+        assert_eq!(
+            describing(&field, "z.string()".to_string()),
+            "z.string().describe('The kiosk\\'s own reader')"
+        );
+    }
+
+    #[test]
+    fn relation_target_reads_the_reference_the_schema_states() {
+        // Every shape the schemas actually use.
+        assert_eq!(
+            relation_target("Legal entity # logical FK to organization.Company.id").as_deref(),
+            Some("Company")
+        );
+        assert_eq!(
+            relation_target("# logical FK employee.Employee.id (self-ref)").as_deref(),
+            Some("Employee")
+        );
+        assert_eq!(
+            relation_target("# FK approval_policies.id (in-module)").as_deref(),
+            Some("ApprovalPolicy")
+        );
+        assert_eq!(
+            relation_target("# FK employees.id").as_deref(),
+            Some("Employee")
+        );
+        assert_eq!(
+            relation_target("Project dimension # logical FK to projects.Project").as_deref(),
+            Some("Project")
+        );
+        // A hyphenated module qualifier still resolves to the entity.
+        assert_eq!(
+            relation_target("# logical FK to backbone-sapiens.User.id").as_deref(),
+            Some("User")
+        );
+    }
+
+    #[test]
+    fn relation_target_stays_silent_on_prose_and_on_silence() {
+        // Prose after the marker names no reference — sending a reader to an entity
+        // called "The" is worse than falling back to reading the field name.
+        assert_eq!(
+            relation_target("The thing being approved # logical FK to the workflow"),
+            None
+        );
+        assert_eq!(relation_target("Parent account for hierarchy"), None);
+        assert_eq!(relation_target("Source transaction ID"), None);
+        assert_eq!(relation_target("# see the ADR"), None);
+    }
+
+    #[test]
+    fn an_entity_with_no_stated_reference_gets_no_map() {
+        let generator = EntitySchemaGenerator::new(test_config(), TypeMapper::new());
+        let bare = EntityDefinition {
+            name: "Country".to_string(),
+            collection: "countries".to_string(),
+            fields: vec![described("name", Some("Country name"))],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+        assert_eq!(generator.generate_relation_targets(&bare), "");
+
+        let referring = EntityDefinition {
+            name: "Account".to_string(),
+            collection: "accounts".to_string(),
+            fields: vec![
+                described(
+                    "company_id",
+                    Some("Owner # logical FK to organization.Company.id"),
+                ),
+                described("parent_id", Some("Parent account for hierarchy")),
+            ],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+        let map = generator.generate_relation_targets(&referring);
+        assert!(map.contains("export const accountRelationTargets = {"));
+        assert!(map.contains("  company_id: 'Company',"));
+        // The field whose target is only implied by its name is left out.
+        assert!(!map.contains("parent_id"));
+    }
+
+    #[test]
+    fn every_schema_a_consumer_introspects_carries_the_description() {
+        let generator = EntitySchemaGenerator::new(test_config(), TypeMapper::new());
+        let entity = EntityDefinition {
+            name: "Province".to_string(),
+            collection: "provinces".to_string(),
+            fields: vec![described("name", Some("Province name"))],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+
+        // A form derives its fields from the create schema and a record screen
+        // from the update schema, so a description on the base schema alone would
+        // never reach either of them.
+        for body in [
+            generator.generate_base_field_schemas(&entity, &[]),
+            generator.generate_create_field_schemas(&entity, &[]),
+            generator.generate_update_field_schemas(&entity, &[]),
+        ] {
+            assert!(
+                body.contains(".describe('Province name')"),
+                "missing in: {body}"
+            );
+        }
     }
 }
