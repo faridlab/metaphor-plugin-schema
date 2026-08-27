@@ -1,7 +1,33 @@
 //! Configuration for webapp code generation
 
 use crate::webgen::{Error, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Read a module's declared schema name from its schema index
+/// (`<schema_dir>/models/index.model.yaml`).
+///
+/// The index stamps two fields with the module's short name at module
+/// creation: `module:` (the logical module name) and `schema:` (the Postgres
+/// schema the module owns). Both hold the same short name by convention
+/// (e.g. `sapiens`, `bucket`, `catalog`); `module:` is preferred and
+/// `schema:` is the fallback. Returns `None` when the index is missing,
+/// unreadable, or declares neither field.
+pub(crate) fn read_schema_module_name(schema_dir: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct IndexHeader {
+        module: Option<String>,
+        schema: Option<String>,
+    }
+    let path = schema_dir.join("models/index.model.yaml");
+    let content = std::fs::read_to_string(path).ok()?;
+    let header: IndexHeader = serde_yaml::from_str(&content).ok()?;
+    let name = header.module.or(header.schema)?.trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
 
 /// Code generation target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,10 +339,98 @@ impl Config {
     pub fn domain_import_path(&self) -> String {
         self.domain_import_pattern.replace("{module}", &self.module)
     }
+
+    /// The module segment used in generated REST client base paths.
+    ///
+    /// A module is addressed on the CLI by its crate/project key (e.g.
+    /// `backbone_sapiens`, because hyphenated project names must be passed
+    /// with underscores), but REST routes are namespaced by the module's
+    /// **schema name** — the short name declared in the schema index
+    /// (`<schema>/models/index.model.yaml`, `module:`/`schema:` fields, e.g.
+    /// `sapiens`). This resolves the segment from that index, so a generation
+    /// invoked as `backbone_sapiens` still emits clients for
+    /// `/api/v1/sapiens/{collection}`. When no index declares a name the
+    /// configured module name is used as-is.
+    ///
+    /// Returns an empty string for the API-root (product) module — its
+    /// collections mount at `/api/v1/{collection}` with no module segment.
+    pub fn url_segment(&self) -> String {
+        if self.api_root {
+            return String::new();
+        }
+        read_schema_module_name(&self.schema_dir()).unwrap_or_else(|| self.module.clone())
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self::new("sapiens")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a unique temp schema dir with the given `models/index.model.yaml`
+    /// body (`None` = create the dir without an index). Returns the schema dir.
+    fn temp_schema_dir(index_body: Option<&str>) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "webgen-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).expect("create temp schema models dir");
+        if let Some(body) = index_body {
+            std::fs::write(models.join("index.model.yaml"), body).expect("write index");
+        }
+        dir
+    }
+
+    #[test]
+    fn url_segment_uses_schema_index_module_name_over_crate_key() {
+        // Shape mirrors a real backbone module index: comments, both stamped
+        // fields, and unrelated keys below the header.
+        let dir = temp_schema_dir(Some(
+            "# Sapiens User Management System - Module Index Schema\nmodule: sapiens\nversion: 2\nschema: sapiens\n\nshared_types: []\n",
+        ));
+        let config = Config::new("backbone_sapiens").with_schema_dir(Some(dir.clone()));
+        assert_eq!(config.url_segment(), "sapiens");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn url_segment_falls_back_to_schema_field_when_module_missing() {
+        let dir = temp_schema_dir(Some("version: 2\nschema: bucket\n"));
+        let config = Config::new("backbone_bucket").with_schema_dir(Some(dir.clone()));
+        assert_eq!(config.url_segment(), "bucket");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn url_segment_falls_back_to_module_name_without_index() {
+        // Schema dir exists but carries no index (product-service shape).
+        let with_dir = temp_schema_dir(None);
+        let config = Config::new("backbone_selling").with_schema_dir(Some(with_dir.clone()));
+        assert_eq!(config.url_segment(), "backbone_selling");
+        std::fs::remove_dir_all(with_dir).ok();
+
+        // Schema dir absent entirely (derived default path that doesn't exist).
+        let config = Config::new("backbone_catalog");
+        assert_eq!(config.url_segment(), "backbone_catalog");
+    }
+
+    #[test]
+    fn url_segment_is_empty_for_api_root_module() {
+        let dir = temp_schema_dir(Some("module: sapiens\nschema: sapiens\n"));
+        let config = Config::new("backbone_sapiens")
+            .with_schema_dir(Some(dir.clone()))
+            .with_api_root(true);
+        assert_eq!(config.url_segment(), "");
+        std::fs::remove_dir_all(dir).ok();
     }
 }

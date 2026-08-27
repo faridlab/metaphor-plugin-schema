@@ -203,12 +203,25 @@ dependency:
 | Module kind | Base path | Example |
 |-------------|-----------|---------|
 | Product (API root) | `/api/v1/{collection}` | `/api/v1/orders` |
-| Backbone dependency | `/api/v1/{module}/{collection}` | `/api/v1/sapiens/customers` |
+| Backbone dependency | `/api/v1/{schema}/{collection}` | `/api/v1/sapiens/customers` |
 
 In workspace "app" mode the primary module is flagged as the API root
 automatically, so its collections drop the module segment; backbone modules
 (e.g. `sapiens`, `bucket`, `corpus`) keep theirs. The single-module command
 always emits the module-segmented layout.
+
+The module segment is the module's **schema name**, not the crate/project key
+the generation was invoked with. It is read from the module's schema index
+(`<schema>/models/index.model.yaml`): the `module:` field, falling back to
+`schema:` (both are stamped with the module's short name at module creation —
+`module:` is the logical module name, `schema:` the Postgres schema it owns).
+So `metaphor schema generate:webapp backbone_sapiens --schema-dir
+modules/backbone-sapiens/schema` emits clients for
+`/api/v1/sapiens/customers`, because that index declares `module: sapiens`.
+When a schema directory has no index (or declares neither field), the segment
+falls back to the module key exactly as passed on the CLI — give product
+services their own `index.model.yaml` with the intended public name to control
+that fallback.
 
 #### CRUD surface
 

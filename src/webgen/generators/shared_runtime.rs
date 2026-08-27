@@ -304,7 +304,8 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
 
   protected basePath(): string {
     // The product module mounts at /api/v1 directly (empty `module`); backbone
-    // modules (sapiens/bucket/corpus) mount under /api/v1/{module}.
+    // modules mount under /api/v1/{module}, where {module} is the module's
+    // schema name (sapiens, bucket, catalog, ...) — not its crate name.
     const seg = this.module ? `/${this.module}` : '';
     return `${API_BASE_URL}/api/${API_VERSION}${seg}/${this.collection}`;
   }

@@ -331,6 +331,17 @@ metaphor schema generate:webapp <MODULE> [OPTIONS]
 | `--dry-run` | flag | - | Show what would be generated without writing files |
 | `--force`, `-f` | flag | - | Overwrite existing files |
 
+### URL segment convention
+
+Generated REST clients build their base path as `/api/v1{segment}/{collection}`.
+The `{segment}` is the module's **schema name** — the short name declared in the
+module's schema index (`<schema>/models/index.model.yaml`, `module:` field with
+`schema:` as fallback; e.g. `sapiens`) — not the crate/project key passed as
+`MODULE`. A module invoked as `backbone_sapiens` therefore gets clients for
+`/api/v1/sapiens/...`. Modules whose schema directory carries no index fall
+back to the `MODULE` key as passed. See
+[generate-webapp.md](generate-webapp.md#api-routing) for details.
+
 ### Examples
 
 ```bash
