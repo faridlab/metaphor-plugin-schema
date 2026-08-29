@@ -7,6 +7,25 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-08-30
+
+### Fixed
+
+- **An entity whose name is a TypeScript keyword no longer emits a file that
+  cannot parse.** The entity-helper generator bound the camelCased entity name
+  as the clone helper's parameter, so an entity called `Package` produced
+  `clonePackage = (package: Package, …)`. `package` is reserved under strict
+  mode, and every file this generator emits is an ES module — which is strict
+  by definition — so the file failed to parse and took the consumer's whole
+  typecheck down with it. Names that collide now take a trailing underscore
+  (`package_`), which is legal, still reads as the entity it names, and cannot
+  itself collide because no keyword ends in `_`.
+  The escape covers all 45 words reserved in strict mode, so `Class`,
+  `Interface`, `Import`, `Delete` and the rest are handled before they are
+  first generated rather than after. Relation *property* names are untouched:
+  a keyword is a legal property name, and renaming one would change the shape
+  of the emitted type.
+
 ## [0.13.0] — 2026-08-27
 
 ### Added
