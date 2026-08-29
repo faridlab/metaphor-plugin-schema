@@ -198,6 +198,43 @@ pub fn to_camel_case(s: &str) -> String {
     }
 }
 
+/// Every word a generated TypeScript file may not use as a binding name.
+///
+/// Covers the always-reserved words plus the ones reserved only under strict
+/// mode — which is the set that matters here, because every file this crate
+/// emits is an ES module and modules are strict by definition. `await` and
+/// `yield` are included for the same reason: they are unusable inside the
+/// module-level and async contexts generated code lands in.
+const TS_RESERVED_WORDS: &[&str] = &[
+    "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+    "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function",
+    "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null",
+    "package", "private", "protected", "public", "return", "static", "super", "switch", "this",
+    "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
+];
+
+/// A camelCase name that is safe to bind in generated TypeScript.
+///
+/// An entity name is otherwise free to collide with a keyword — `Package`
+/// camelCases to `package`, which is reserved in strict mode, so the emitted
+/// file does not parse and the consumer's whole typecheck fails on it. A
+/// colliding name takes a trailing underscore, which is legal, still reads as
+/// the entity it names, and cannot itself collide (no keyword ends in `_`).
+///
+/// ```
+/// # use metaphor_schema::webgen::parser::to_camel_case_binding;
+/// assert_eq!(to_camel_case_binding("Package"), "package_");
+/// assert_eq!(to_camel_case_binding("Product"), "product");
+/// ```
+pub fn to_camel_case_binding(s: &str) -> String {
+    let camel = to_camel_case(s);
+    if TS_RESERVED_WORDS.contains(&camel.as_str()) {
+        format!("{}_", camel)
+    } else {
+        camel
+    }
+}
+
 /// Convert to kebab-case
 pub fn to_kebab_case(s: &str) -> String {
     to_snake_case(s).replace('_', "-")
@@ -226,6 +263,24 @@ pub fn pluralize(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_camel_case_binding_escapes_reserved_words() {
+        // `Package` is the entity that first hit this: `package` is reserved
+        // under strict mode, so the generated helper did not parse.
+        assert_eq!(to_camel_case_binding("Package"), "package_");
+        assert_eq!(to_camel_case_binding("Class"), "class_");
+        assert_eq!(to_camel_case_binding("Interface"), "interface_");
+        assert_eq!(to_camel_case_binding("Import"), "import_");
+        assert_eq!(to_camel_case_binding("Delete"), "delete_");
+    }
+
+    #[test]
+    fn test_camel_case_binding_leaves_ordinary_names_alone() {
+        assert_eq!(to_camel_case_binding("Product"), "product");
+        assert_eq!(to_camel_case_binding("PackageType"), "packageType");
+        assert_eq!(to_camel_case_binding("SalesOrderItem"), "salesOrderItem");
+    }
 
     #[test]
     fn test_snake_case() {

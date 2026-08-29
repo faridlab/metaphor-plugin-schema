@@ -10,7 +10,7 @@ use super::DomainGenerationResult;
 use crate::webgen::ast::entity::{EntityDefinition, EnumDefinition};
 use crate::webgen::config::Config;
 use crate::webgen::error::Result;
-use crate::webgen::parser::{to_camel_case, to_pascal_case};
+use crate::webgen::parser::{to_camel_case, to_camel_case_binding, to_pascal_case};
 
 /// Generator for TypeScript entity types
 pub struct EntityGenerator {
@@ -98,7 +98,9 @@ impl EntityGenerator {
         enums: &[EnumDefinition],
     ) -> String {
         let entity_pascal = to_pascal_case(&entity.name);
-        let entity_camel = to_camel_case(&entity.name);
+        // Bound as a parameter below, so it must clear the TS keywords: `Package`
+        // would otherwise emit `package`, which no strict-mode module parses.
+        let entity_camel = to_camel_case_binding(&entity.name);
 
         // Collect imports
         let imports = self.generate_imports(entity, enums);
