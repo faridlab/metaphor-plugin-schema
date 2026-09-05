@@ -7,6 +7,28 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.13.2] — 2026-09-05
+
+### Fixed
+
+- **Query-side exports can no longer collide with another entity's name
+  inside the module barrel.** The entity index re-exports every per-entity
+  file with `export *`, and the query-side names were built by suffixing the
+  entity name (`{entity}FilterSchema`), which is itself a valid entity-name
+  shape: entity `Mailing`'s list-filter schema and entity `MailingFilter`'s
+  own base schema both rendered as `mailingFilterSchema`, so the barrel
+  failed only at the consumer's `tsc`, in a generated tree nobody may edit.
+  Those exports now carry a distinct `List` segment (`mailingListFilterSchema`,
+  `MailingListFilterParams`, and the query twins), whose shape no
+  entity-derived base name can equal; schema models are untouched and no
+  schema was renamed to accommodate the generator. Generation now also
+  refuses to emit a module whose entity barrel would collide: the generator
+  unions each entity's exported symbols and aborts before writing any file,
+  naming both entities and the symbol, so the next collision class is caught
+  at `schema generate` instead of in a downstream typecheck. The per-file
+  symbol lists behind the check are pinned to the emitted templates by
+  invariant tests and cannot drift.
+
 ## [0.13.1] — 2026-08-30
 
 ### Fixed
