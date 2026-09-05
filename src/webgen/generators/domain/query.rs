@@ -179,8 +179,8 @@ export function isGet{entity_pascal}Query(value: unknown): value is Get{entity_p
 import {{ z }} from 'zod';
 import type {{
   {entity_pascal},
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams,
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams,
 }} from '../../entity/{entity_pascal}.schema';
 
 // ============================================================================
@@ -224,7 +224,7 @@ export interface List{entity_pascal}Query {{
     sortBy?: string;
     sortOrder?: SortOrder;
     search?: string;
-    filters?: {entity_pascal}FilterParams;
+    filters?: {entity_pascal}ListFilterParams;
     include?: string[];
   }};
 }}

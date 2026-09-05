@@ -18,7 +18,7 @@ impl HookTemplate {
 
 import { useQuery, UseQueryResult } from '@tanstack/react-query';
 import { get{{ENTITY_NAME}}ByIdUseCase, list{{ENTITY_NAME}}UseCase } from '@webapp/application/{{MODULE_NAME}}/usecases/{{ENTITY_NAME}}UseCases';
-import type { {{ENTITY_NAME}}, {{ENTITY_NAME}}QueryParams, {{ENTITY_NAME}}FilterParams } from '{{DOMAIN_IMPORT}}';
+import type { {{ENTITY_NAME}}, {{ENTITY_NAME}}ListQueryParams, {{ENTITY_NAME}}ListFilterParams } from '{{DOMAIN_IMPORT}}';
 import type { PaginatedResponse } from '@webapp/shared/types/pagination';
 
 /**
@@ -56,8 +56,8 @@ export function use{{ENTITY_NAME}}(id: string): UseQueryResult<{{ENTITY_NAME}}> 
  * Uses Application Layer UseCase
  */
 export function use{{ENTITY_NAME}}List(
-  params?: {{ENTITY_NAME}}QueryParams,
-  filters?: {{ENTITY_NAME}}FilterParams,
+  params?: {{ENTITY_NAME}}ListQueryParams,
+  filters?: {{ENTITY_NAME}}ListFilterParams,
   options?: { enabled?: boolean }
 ): UseQueryResult<PaginatedResponse<{{ENTITY_NAME}}>> {
   return useQuery({
@@ -339,8 +339,8 @@ import { listDeleted{{ENTITY_NAME}}UseCase } from '@webapp/application/{{MODULE_
  * Uses Application Layer UseCase - calls /trash endpoint via getDeleted()
  */
 export function use{{ENTITY_NAME}}TrashList(
-  params?: {{ENTITY_NAME}}QueryParams,
-  filters?: {{ENTITY_NAME}}FilterParams,
+  params?: {{ENTITY_NAME}}ListQueryParams,
+  filters?: {{ENTITY_NAME}}ListFilterParams,
   options?: { enabled?: boolean }
 ): UseQueryResult<PaginatedResponse<{{ENTITY_NAME}}>> {
   return useQuery({

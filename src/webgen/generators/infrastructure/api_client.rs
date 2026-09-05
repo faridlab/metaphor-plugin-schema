@@ -83,16 +83,16 @@ import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
   Update{entity_pascal}Input,
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams,
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams,
 }} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
 
 export class {entity_pascal}ApiClient extends {base}<
   {entity_pascal},
   Create{entity_pascal}Input,
   Update{entity_pascal}Input,
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams
 > {{
   protected readonly module = '{url_module}';
   protected readonly collection = '{entity_route}';

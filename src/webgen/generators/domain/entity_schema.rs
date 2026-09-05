@@ -200,7 +200,7 @@ export type Patch{entity_pascal}Input = z.infer<typeof patch{entity_pascal}Schem
 /**
  * Schema for {entity_pascal} list query parameters
  */
-export const {entity_camel}QuerySchema = z.object({{
+export const {entity_camel}ListQuerySchema = z.object({{
   page: z.number().int().positive().default(1),
   limit: z.number().int().positive().max(100).default(20),
   sortBy: z.string().optional(),
@@ -211,19 +211,19 @@ export const {entity_camel}QuerySchema = z.object({{
 /**
  * Query parameters type
  */
-export type {entity_pascal}QueryParams = z.infer<typeof {entity_camel}QuerySchema>;
+export type {entity_pascal}ListQueryParams = z.infer<typeof {entity_camel}ListQuerySchema>;
 
 /**
  * Schema for {entity_pascal} filter parameters
  */
-export const {entity_camel}FilterSchema = z.object({{
+export const {entity_camel}ListFilterSchema = z.object({{
 {filter_fields}
 }}).partial();
 
 /**
  * Filter parameters type
  */
-export type {entity_pascal}FilterParams = z.infer<typeof {entity_camel}FilterSchema>;
+export type {entity_pascal}ListFilterParams = z.infer<typeof {entity_camel}ListFilterSchema>;
 {relation_targets}{hook_validations}
 // ============================================================================
 // Validation Helpers
@@ -734,6 +734,48 @@ fn describing(field: &FieldDefinition, schema: String) -> String {
     }
 }
 
+/// Every symbol one entity's schema file contributes to the entity barrel.
+///
+/// The entity index re-exports each `./{Entity}.schema` with `export *`, so the
+/// union of these lists across a module's entities is exactly the namespace the
+/// barrel merges. The domain generator refuses to emit a module where two
+/// entities claim the same symbol; this list is what that check reads, and the
+/// invariant test below pins it to the template so the two cannot drift.
+pub fn schema_file_symbols(entity: &EntityDefinition, has_hook: bool) -> Vec<String> {
+    let pascal = to_pascal_case(&entity.name);
+    let camel = to_camel_case(&entity.name);
+    let mut symbols = vec![
+        format!("{camel}Schema"),
+        pascal.clone(),
+        format!("create{pascal}Schema"),
+        format!("Create{pascal}Input"),
+        format!("update{pascal}Schema"),
+        format!("Update{pascal}Input"),
+        format!("patch{pascal}Schema"),
+        format!("Patch{pascal}Input"),
+        // The `List` segment keeps the query-side names from ever matching
+        // another entity's base `{camel}Schema`: an entity `X` decorated to
+        // `xListFilterSchema` collides only with an entity literally named
+        // `XListFilter`, and the barrel check below refuses that pair loudly.
+        format!("{camel}ListQuerySchema"),
+        format!("{pascal}ListQueryParams"),
+        format!("{camel}ListFilterSchema"),
+        format!("{pascal}ListFilterParams"),
+        format!("validateCreate{pascal}"),
+        format!("validateUpdate{pascal}"),
+        format!("safeParseCreate{pascal}"),
+        format!("safeParseUpdate{pascal}"),
+    ];
+    // The business-rules validator is only emitted for entities with a hook.
+    if has_hook {
+        symbols.push(format!("validate{pascal}BusinessRules"));
+    }
+    if entity.fields.iter().any(|f| target_of(f).is_some()) {
+        symbols.push(format!("{camel}RelationTargets"));
+    }
+    symbols
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,5 +1028,67 @@ mod tests {
                 "missing in: {body}"
             );
         }
+    }
+
+    #[test]
+    fn the_symbol_list_matches_what_the_template_exports() {
+        let generator = EntitySchemaGenerator::new(test_config(), TypeMapper::new());
+        let referring = EntityDefinition {
+            name: "Widget".to_string(),
+            collection: "widgets".to_string(),
+            fields: vec![
+                described("name", None),
+                described(
+                    "owner_id",
+                    Some("Owner # logical FK to organization.Company.id"),
+                ),
+            ],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+        let content = generator.generate_schema_content(&referring, &[], None);
+        for symbol in schema_file_symbols(&referring, false) {
+            assert!(
+                content.contains(&format!("export const {symbol} ="))
+                    || content.contains(&format!("export type {symbol} ="))
+                    || content.contains(&format!("export function {symbol}(")),
+                "`{symbol}` is listed as a barrel symbol but the template does not export it"
+            );
+        }
+        assert!(content.contains("export const widgetRelationTargets = {"));
+        // No hook on the entity → no business-rules validator → it must not be
+        // listed (a phantom symbol would fail generation on names that never
+        // collide).
+        assert!(!schema_file_symbols(&referring, false)
+            .contains(&"validateWidgetBusinessRules".to_string()));
+
+        // With a hook the template does emit it, and the list must say so.
+        use crate::webgen::ast::state_machine::HookSchema;
+        let hook = HookSchema {
+            name: "widget_hook".to_string(),
+            model: "Widget".to_string(),
+            state_machine: None,
+            rules: vec![],
+            permissions: std::collections::HashMap::new(),
+            triggers: vec![],
+            computed_fields: vec![],
+        };
+        let hooked = generator.generate_schema_content(&referring, &[], Some(&hook));
+        assert!(hooked.contains("export function validateWidgetBusinessRules("));
+        assert!(schema_file_symbols(&referring, true)
+            .contains(&"validateWidgetBusinessRules".to_string()));
+
+        // A field with no stated reference contributes no relation map, and the
+        // list must say so — the barrel check reads the list, not the template.
+        let bare = EntityDefinition {
+            name: "Gadget".to_string(),
+            collection: "gadgets".to_string(),
+            fields: vec![described("name", None)],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+        assert!(!schema_file_symbols(&bare, false).contains(&"gadgetRelationTargets".to_string()));
     }
 }

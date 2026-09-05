@@ -114,8 +114,8 @@ import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
   Update{entity_pascal}Input,
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams,
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams,
 }} from '@webapp/domain/{module}/entity/{entity_pascal}.schema';
 import {{ getGrpcChannel, grpcClientFactory }} from '@webapp/infrastructure/grpc';
 
@@ -144,7 +144,7 @@ interface List{entity_pascal}Request {{
     page?: number;
     pageSize?: number;
   }};
-  filter?: {entity_pascal}FilterParams;
+  filter?: {entity_pascal}ListFilterParams;
   sort?: {{
     field?: string;
     direction?: 'ASC' | 'DESC';
@@ -223,7 +223,7 @@ export const {entity_camel}Service: {entity_pascal}Service = {{
   /**
    * List {entity_pascal} entities
    */
-  async list{entity_pascal}(params?: {entity_pascal}QueryParams): Promise<{{
+  async list{entity_pascal}(params?: {entity_pascal}ListQueryParams): Promise<{{
     data: {entity_pascal}[];
     total: number;
   }}> {{
@@ -287,7 +287,7 @@ export const {entity_camel}Service: {entity_pascal}Service = {{
   /**
    * Count {entity_pascal} entities
    */
-  async count(filter?: {entity_pascal}FilterParams): Promise<number> {{
+  async count(filter?: {entity_pascal}ListFilterParams): Promise<number> {{
     const response = await this.list{entity_pascal}({{ filter, pagination: {{ pageSize: 1 }} }});
     return response.total;
   }}

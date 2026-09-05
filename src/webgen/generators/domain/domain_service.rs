@@ -76,8 +76,8 @@ import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
   Update{entity_pascal}Input,
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams,
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams,
 }} from '../entity/{entity_pascal}.schema';
 
 export interface {entity_pascal}Service
@@ -85,8 +85,8 @@ export interface {entity_pascal}Service
     {entity_pascal},
     Create{entity_pascal}Input,
     Update{entity_pascal}Input,
-    {entity_pascal}QueryParams,
-    {entity_pascal}FilterParams
+    {entity_pascal}ListQueryParams,
+    {entity_pascal}ListFilterParams
   > {{}}
 
 const accessor = makeServiceAccessor<{entity_pascal}Service>('{entity_pascal}');

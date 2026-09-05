@@ -47,7 +47,7 @@ pub use value_object::ValueObjectGenerator;
 use crate::webgen::ast::entity::{EntityDefinition, ModelSchema};
 use crate::webgen::ast::HookSchema;
 use crate::webgen::config::Config;
-use crate::webgen::error::Result;
+use crate::webgen::error::{Error, Result};
 use std::path::PathBuf;
 
 /// Result of domain layer generation
@@ -100,6 +100,54 @@ impl DomainGenerationResult {
             )
         }
     }
+}
+
+/// Refuse to emit a module barrel that does not compile.
+///
+/// The entity index re-exports every entity file with `export *`, so two
+/// entities whose decorated export names meet on one symbol produce a
+/// TypeScript barrel that only fails downstream at `tsc` — in a generated
+/// tree the consumer may not edit. Generation fails here instead, naming
+/// both entities and the symbol.
+fn check_entity_barrel_collisions(
+    entities: &[EntityDefinition],
+    hooks: &[HookSchema],
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    let mut owner: HashMap<String, &str> = HashMap::new();
+    let mut collisions: Vec<String> = Vec::new();
+    for entity in entities {
+        let has_hook = hooks
+            .iter()
+            .any(|h| h.model.eq_ignore_ascii_case(&entity.name));
+        let symbols = entity::entity_file_symbols(entity)
+            .into_iter()
+            .chain(entity_schema::schema_file_symbols(entity, has_hook));
+        for symbol in symbols {
+            use std::collections::hash_map::Entry;
+            match owner.entry(symbol) {
+                Entry::Occupied(first) => collisions.push(format!(
+                    "`{}` is exported by both `{}` and `{}`",
+                    first.key(),
+                    first.get(),
+                    entity.name
+                )),
+                Entry::Vacant(slot) => {
+                    slot.insert(entity.name.as_str());
+                }
+            }
+        }
+    }
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Generation(format!(
+        "module barrel collision: {} — the entity index re-exports every entity \
+         file with `export *`, so these symbols cannot coexist; rename one of \
+         the entities (no decorated export shape can dodge the clash)",
+        collisions.join("; ")
+    )))
 }
 
 /// Domain layer generator that orchestrates all domain generators
@@ -158,6 +206,9 @@ impl DomainGenerator {
         let mut result = DomainGenerationResult::new();
         result.entity_count = entities.len();
         result.enum_count = enums.len();
+
+        // Fail before writing anything if the entity barrel cannot compile.
+        check_entity_barrel_collisions(entities, hooks)?;
 
         // Find hook for entity by name matching (model field in HookSchema)
         let find_hook = |entity_name: &str| -> Option<&HookSchema> {
@@ -344,5 +395,63 @@ export * from './specification';
 "#,
             self.config.module
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webgen::ast::entity::{FieldDefinition, FieldType};
+
+    fn entity_named(name: &str) -> EntityDefinition {
+        EntityDefinition {
+            name: name.to_string(),
+            collection: format!("{}s", name.to_lowercase()),
+            fields: vec![FieldDefinition {
+                name: "id".to_string(),
+                type_name: FieldType::Uuid,
+                attributes: vec![],
+                description: None,
+                optional: false,
+                default_value: None,
+            }],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        }
+    }
+
+    #[test]
+    fn a_suffix_form_collision_fails_generation_naming_both_entities() {
+        // Entity `Mailing` decorates to `mailingListFilterSchema`; an entity
+        // literally named `MailingListFilter` claims the same symbol as its
+        // base schema — the collision class the module hit, one segment along.
+        let entities = vec![entity_named("Mailing"), entity_named("MailingListFilter")];
+        let message = check_entity_barrel_collisions(&entities, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("`Mailing` and `MailingListFilter`"),
+            "both entities must be named, got: {message}"
+        );
+        assert!(
+            message.contains("mailingListFilterSchema"),
+            "the colliding symbol must be named, got: {message}"
+        );
+    }
+
+    #[test]
+    fn a_prefix_form_collision_also_fails() {
+        // `CreateUser`'s base schema name equals `User`'s create schema name.
+        let entities = vec![entity_named("User"), entity_named("CreateUser")];
+        assert!(check_entity_barrel_collisions(&entities, &[]).is_err());
+    }
+
+    #[test]
+    fn the_names_that_collided_before_the_rename_now_pass() {
+        // `Mailing` and `MailingFilter` were the live collision; the `List`
+        // segment on the query-side names keeps them apart.
+        let entities = vec![entity_named("Mailing"), entity_named("MailingFilter")];
+        assert!(check_entity_barrel_collisions(&entities, &[]).is_ok());
     }
 }

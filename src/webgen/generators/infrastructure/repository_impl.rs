@@ -74,8 +74,8 @@ import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
   Update{entity_pascal}Input,
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams,
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams,
 }} from '{root}/{module}/domain/entity/{entity_pascal}.schema';
 import type {{ {entity_pascal}Repository }} from '{root}/{module}/domain/repository/{entity_pascal}Repository';
 
@@ -84,8 +84,8 @@ export class {entity_pascal}RepositoryImpl
     {entity_pascal},
     Create{entity_pascal}Input,
     Update{entity_pascal}Input,
-    {entity_pascal}QueryParams,
-    {entity_pascal}FilterParams
+    {entity_pascal}ListQueryParams,
+    {entity_pascal}ListFilterParams
   >
   implements {entity_pascal}Repository
 {{

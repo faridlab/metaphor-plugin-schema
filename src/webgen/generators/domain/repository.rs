@@ -69,8 +69,8 @@ import type {{
   {entity_pascal},
   Create{entity_pascal}Input,
   Update{entity_pascal}Input,
-  {entity_pascal}QueryParams,
-  {entity_pascal}FilterParams,
+  {entity_pascal}ListQueryParams,
+  {entity_pascal}ListFilterParams,
 }} from '../entity/{entity_pascal}.schema';
 
 export interface {entity_pascal}Repository
@@ -78,8 +78,8 @@ export interface {entity_pascal}Repository
     {entity_pascal},
     Create{entity_pascal}Input,
     Update{entity_pascal}Input,
-    {entity_pascal}QueryParams,
-    {entity_pascal}FilterParams
+    {entity_pascal}ListQueryParams,
+    {entity_pascal}ListFilterParams
   > {{}}
 
 /** Back-compat alias for the paginated list response. */

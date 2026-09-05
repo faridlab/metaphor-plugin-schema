@@ -521,6 +521,26 @@ pub(crate) fn escape_single_quoted(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
+/// Every symbol one entity's helper file contributes to the entity barrel.
+///
+/// The entity index re-exports each `./{Entity}` with `export *`; this list,
+/// unioned with the schema file's [`schema_file_symbols`][crate::webgen::generators::domain::entity_schema::schema_file_symbols],
+/// is what the module-barrel collision check reads. The invariant test below
+/// pins it to the template so the two cannot drift.
+pub fn entity_file_symbols(entity: &EntityDefinition) -> Vec<String> {
+    let pascal = to_pascal_case(&entity.name);
+    let mut symbols = vec![
+        format!("create{pascal}"),
+        format!("is{pascal}"),
+        format!("clone{pascal}"),
+        format!("equals{pascal}"),
+    ];
+    if !entity.relations.is_empty() {
+        symbols.push(format!("{pascal}WithRelations"));
+    }
+    symbols
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +591,12 @@ mod tests {
         assert!(content.contains("export const isUser"));
         assert!(content.contains("from '@webapp/shared/entity/helpers'"));
         assert!(!content.contains("export interface User {"));
+
+        // The barrel-symbol list must say exactly what the template exports —
+        // no more (a phantom symbol would fail generation on names that never
+        // collide) and no less (a missing symbol would let a real collision
+        // through). `User` has no relations, so no WithRelations view.
+        assert_eq!(entity_file_symbols(&entity).join(","), "createUser,isUser,cloneUser,equalsUser");
     }
 
     #[test]
