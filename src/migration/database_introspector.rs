@@ -208,6 +208,9 @@ impl DatabaseIntrospector {
                         columns,
                         unique,
                         index_type,
+                        // Predicates are not parsed out of the live DDL here;
+                        // only schema-side snapshots carry them today.
+                        where_predicate: None,
                     },
                 );
             }

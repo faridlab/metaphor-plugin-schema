@@ -114,8 +114,18 @@ pub(super) fn build_schema_snapshot(
         }
 
         let mut indexes = indexmap::IndexMap::new();
+        // Partial-index predicates are rewritten to their final SQL form here —
+        // the only place with the model in hand — so every diff-emitted CREATE
+        // INDEX carries the same WHERE clause the full-regen path emits.
+        let generator = crate::generators::sql::SqlGenerator::new();
         for index in &model.indexes {
             let idx_name = format!("idx_{}_{}", table_name, index.fields.join("_"));
+            let where_predicate = index
+                .attributes
+                .iter()
+                .find(|a| a.name == "where")
+                .and_then(|a| a.get_string_arg())
+                .map(|w| generator.resolve_where_clause(w, model));
             indexes.insert(
                 idx_name.clone(),
                 IndexSnapshot {
@@ -128,6 +138,7 @@ pub(super) fn build_schema_snapshot(
                         IndexType::Fulltext => "gin".to_string(),
                         IndexType::Gin => "gin".to_string(),
                     },
+                    where_predicate,
                 },
             );
         }
@@ -139,6 +150,16 @@ pub(super) fn build_schema_snapshot(
             .iter()
             .any(|f| f.name == "company_id" && !f.has_attribute("global"));
 
+        // Org-scoped (ADR-0028) iff an `org_unit_id` field is present — plus the
+        // per-model root-shared marker the kind guard reads. Same structural rule
+        // as the emission path (`SqlGenerator::org_fence_column`).
+        let org_field = model
+            .fields
+            .iter()
+            .find(|f| f.name == "org_unit_id" && !f.has_attribute("global"));
+        let org_scoped = org_field.is_some();
+        let org_root_shared = org_field.is_some_and(|f| f.has_attribute("org_root_shared"));
+
         snapshot.tables.insert(
             table_name.clone(),
             TableSnapshot {
@@ -148,6 +169,9 @@ pub(super) fn build_schema_snapshot(
                 primary_key,
                 company_scoped,
                 company_fence: resolved.schema.company_fence,
+                org_scoped,
+                org_root_shared,
+                org_fence: resolved.schema.org_fence,
             },
         );
     }

@@ -2,7 +2,7 @@
 //!
 //! Compares database schemas and generates ALTER statements for changes.
 
-use crate::ast::CompanyFence;
+use crate::ast::{CompanyFence, OrgFence};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -35,6 +35,21 @@ pub struct TableSnapshot {
     /// undeclared → `strict`, matching the legacy template.
     #[serde(default)]
     pub company_fence: Option<CompanyFence>,
+    /// Whether this table is org-scoped (ADR-0028): it has an `org_unit_id` column.
+    /// Drives the entitlement-union policy + kind guard in the incremental path.
+    /// `#[serde(default)]` so snapshots serialized before the field deserialize as
+    /// `false` — only the schema-derived `new` snapshot sets it.
+    #[serde(default)]
+    pub org_scoped: bool,
+    /// The per-model `@org_root_shared` marker (ADR-0028): the kind guard admits the
+    /// root node, the home for tenant-shared rows. Only meaningful together with
+    /// `org_scoped`.
+    #[serde(default)]
+    pub org_root_shared: bool,
+    /// The module-level org fence declaration (ADR-0028) in force for this table.
+    /// `None` = undeclared (valid only pre-sweep — no `org_unit_id` column exists).
+    #[serde(default)]
+    pub org_fence: Option<OrgFence>,
 }
 
 /// Snapshot of a column
@@ -54,6 +69,13 @@ pub struct IndexSnapshot {
     pub columns: Vec<String>,
     pub unique: bool,
     pub index_type: String,
+    /// Partial-index predicate in final SQL form (audit sub-keys already
+    /// rewritten to their JSONB expressions), without the leading WHERE.
+    /// Emitted after the column list wherever a diff path (re-)creates the
+    /// index. Snapshots written before this field existed deserialize it as
+    /// `None` — re-diffing against a fresh snapshot restores it.
+    #[serde(default)]
+    pub where_predicate: Option<String>,
 }
 
 /// Snapshot of an enum type
@@ -94,9 +116,35 @@ pub struct TableChange {
     /// ADR-0014 posture flip on an existing table: (old, new) effective fence. Columns and
     /// indexes may be untouched — without this field the flip is invisible to the incremental
     /// path and the old policy template silently stays in place. `None` when the table is new,
-    /// gains `company_id` in this same diff (the gain path installs the fence fresh), or the
-    /// posture is unchanged.
+    /// gains `company_id` in this same diff (the gain path installs the fence fresh), the
+    /// posture is unchanged, or the table is being org re-keyed (the re-key owns its policy
+    /// swap — a flip-to-`none` record here would wrongly disable RLS mid-re-key).
     pub fence_flip: Option<(CompanyFence, CompanyFence)>,
+    /// A company→org scoping-key re-key (ADR-0028): `company_id` removed, `org_unit_id`
+    /// added, both uuid, on an existing table. Detected structurally; the re-key owns its
+    /// ordered emission (add nullable → backfill → NOT NULL → kind guard → re-keyed indexes
+    /// → policy swap → drop the old column) and pulls both columns and their indexes out of
+    /// the naive add/drop/rename paths so they can't double-emit or misorder.
+    pub org_rekey: Option<OrgRekey>,
+}
+
+/// Everything the ordered re-key emission needs (ADR-0028), stashed at detection time
+/// because the generic up/down paths only see the filtered `TableChange`.
+#[derive(Debug, Clone)]
+pub struct OrgRekey {
+    /// The effective company posture being left behind (strict / shared_blank /
+    /// shared_tree) — the down path restores this template.
+    pub old_fence: CompanyFence,
+    /// The per-model `@org_root_shared` marker from the new snapshot: the kind guard
+    /// admits root nodes (the home for tenant-shared rows).
+    pub org_root_shared: bool,
+    /// Re-keyed indexes (they reference `org_unit_id`): built after the backfill in the
+    /// up path — before it, uniqueness would hold over all-NULL keys — and dropped first
+    /// in the down path.
+    pub rekeyed_indexes: Vec<IndexSnapshot>,
+    /// The `company_id` indexes the up path retires (they drop with the column); the
+    /// down path recreates them from these definitions.
+    pub replaced_indexes: Vec<IndexSnapshot>,
 }
 
 /// A possible column rename detected by matching types between added and removed columns.
@@ -197,6 +245,18 @@ impl SchemaDiff {
             }
             if total_cols_modified > 0 {
                 lines.push(format!("  ~ {} column(s) modified", total_cols_modified));
+            }
+
+            let total_rekeys = self
+                .table_changes
+                .values()
+                .filter(|c| c.org_rekey.is_some())
+                .count();
+            if total_rekeys > 0 {
+                lines.push(format!(
+                    "  ~ {} table(s) re-keying company_id to org_unit_id",
+                    total_rekeys
+                ));
             }
         }
         if !self.enums_added.is_empty() {
@@ -299,11 +359,28 @@ fn diff_tables(old: &TableSnapshot, new: &TableSnapshot) -> TableChange {
         }
     }
 
+    // Company→org re-key (ADR-0028): `company_id` among the removed, `org_unit_id`
+    // among the added, both uuid, and the new snapshot is org-scoped. Detected before
+    // the flip below because the re-key owns its policy swap: a computed flip to `none`
+    // would emit `DISABLE ROW LEVEL SECURITY` on a table whose fence is being swapped,
+    // not lifted.
+    let is_rekey = new.org_scoped
+        && change.columns_removed.iter().any(|c| {
+            c == "company_id"
+                && old
+                    .columns
+                    .get(c)
+                    .is_some_and(|col| col.data_type.eq_ignore_ascii_case("uuid"))
+        })
+        && change.columns_added.iter().any(|c| {
+            c.name == "org_unit_id" && c.data_type.eq_ignore_ascii_case("uuid")
+        });
+
     // Posture flip on an existing table (ADR-0014): same columns, different fence
     // declaration → the RLS policy template must be re-emitted. Skipped when `company_id`
     // is newly added here — that path installs the fence from scratch, so a flip record
     // would only duplicate it.
-    if change.columns_added.iter().all(|c| c.name != "company_id") {
+    if !is_rekey && change.columns_added.iter().all(|c| c.name != "company_id") {
         let (old_posture, new_posture) = (effective_posture(old), effective_posture(new));
         if old_posture != new_posture {
             change.fence_flip = Some((old_posture, new_posture));
@@ -333,6 +410,44 @@ fn diff_tables(old: &TableSnapshot, new: &TableSnapshot) -> TableChange {
         if !new.indexes.contains_key(idx_name) {
             change.indexes_removed.push(idx_name.clone());
         }
+    }
+
+    // Populate the re-key and pull its columns/indexes out of the naive paths: the
+    // ordered emission owns them, and the rename heuristic would otherwise suggest
+    // `RENAME COLUMN company_id TO org_unit_id` — which skips the root-anchor backfill
+    // for shared rows and the NOT NULL step entirely.
+    if is_rekey {
+        let rekeyed_indexes: Vec<IndexSnapshot> = change
+            .indexes_added
+            .iter()
+            .filter(|idx| idx.columns.iter().any(|c| c == "org_unit_id"))
+            .cloned()
+            .collect();
+        let replaced_indexes: Vec<IndexSnapshot> = old
+            .indexes
+            .values()
+            .filter(|idx| idx.columns.iter().any(|c| c == "company_id"))
+            .cloned()
+            .collect();
+        let replaced_names: Vec<String> =
+            replaced_indexes.iter().map(|idx| idx.name.clone()).collect();
+        change.columns_removed.retain(|c| c != "company_id");
+        change.columns_added.retain(|c| c.name != "org_unit_id");
+        change
+            .indexes_added
+            .retain(|idx| !idx.columns.iter().any(|c| c == "org_unit_id"));
+        change.indexes_removed.retain(|name| !replaced_names.contains(name));
+        // The rename heuristic will already have paired the two uuid columns —
+        // retract that suggestion here, same reason as above.
+        change
+            .rename_candidates
+            .retain(|r| !(r.old_name == "company_id" && r.new_name == "org_unit_id"));
+        change.org_rekey = Some(OrgRekey {
+            old_fence: effective_posture(old),
+            org_root_shared: new.org_root_shared,
+            rekeyed_indexes,
+            replaced_indexes,
+        });
     }
 
     change
@@ -441,6 +556,7 @@ impl TableChange {
             || !self.indexes_added.is_empty()
             || !self.indexes_removed.is_empty()
             || self.fence_flip.is_some()
+            || self.org_rekey.is_some()
     }
 }
 
@@ -448,6 +564,15 @@ impl EnumChange {
     fn has_changes(&self) -> bool {
         !self.variants_added.is_empty() || !self.variants_removed.is_empty()
     }
+}
+
+/// ` WHERE ...` suffix for a partial index, or empty when the snapshot carries
+/// no predicate.
+fn index_where_suffix(idx: &IndexSnapshot) -> String {
+    idx.where_predicate
+        .as_deref()
+        .map(|p| format!(" WHERE {}", p))
+        .unwrap_or_default()
 }
 
 /// Generate a combined migration SQL (UP + DOWN) from a schema diff.
@@ -569,11 +694,12 @@ pub fn generate_up_migration(
                 let unique = if idx.unique { "UNIQUE " } else { "" };
                 writeln!(
                     output,
-                    "CREATE {}INDEX IF NOT EXISTS {} ON {} ({});",
+                    "CREATE {}INDEX IF NOT EXISTS {} ON {} ({}){};",
                     unique,
                     idx.name,
                     table_name,
-                    idx.columns.join(", ")
+                    idx.columns.join(", "),
+                    index_where_suffix(idx)
                 )
                 .unwrap();
             }
@@ -622,6 +748,86 @@ pub fn generate_up_migration(
                 )
                 .unwrap();
             }
+            writeln!(output).unwrap();
+        }
+
+        // Company→org scoping-key re-key (ADR-0028): the ordered swap. The sequence is
+        // load-bearing — backfill must precede both SET NOT NULL and the re-keyed unique
+        // indexes (uniqueness over all-NULL keys enforces nothing), the kind guard must
+        // precede any write the swapped policy allows, and the old column drops last
+        // (its dependent indexes go with it). RLS stays ENABLED+FORCE throughout: the
+        // fence is being swapped, not lifted. All org statements come from the same
+        // shared helpers the full-regen path uses, so the two can never drift.
+        if let Some(rekey) = &change.org_rekey {
+            let bare = table_name.rsplit('.').next().unwrap_or(table_name);
+            writeln!(output).unwrap();
+            writeln!(
+                output,
+                "-- Org re-key (ADR-0028): swap the tenant scoping key on {table_name}"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS org_unit_id UUID;"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "UPDATE {table_name} SET org_unit_id = company_id WHERE company_id IS NOT NULL;"
+            )
+            .unwrap();
+            if rekey.old_fence == CompanyFence::SharedBlank {
+                writeln!(
+                    output,
+                    "-- shared_blank rows (NULL company_id) anchor on the root node; the\n\
+                     -- entitlement union always contains it, so shared rows stay shared (ADR-0028)."
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "UPDATE {table_name} SET org_unit_id =\n\
+                     (SELECT id FROM organization.org_units WHERE kind = 'root' LIMIT 1)\n\
+                     WHERE org_unit_id IS NULL;"
+                )
+                .unwrap();
+            }
+            writeln!(
+                output,
+                "ALTER TABLE {table_name} ALTER COLUMN org_unit_id SET NOT NULL;"
+            )
+            .unwrap();
+            let (guard_up, _) =
+                crate::generators::sql::org_kind_guard_sql(table_name, rekey.org_root_shared);
+            output.push_str(&guard_up);
+            writeln!(output).unwrap();
+            for idx in &rekey.rekeyed_indexes {
+                let unique = if idx.unique { "UNIQUE " } else { "" };
+                writeln!(
+                    output,
+                    "CREATE {unique}INDEX IF NOT EXISTS {} ON {} ({}){};",
+                    idx.name,
+                    table_name,
+                    idx.columns.join(", "),
+                    index_where_suffix(idx)
+                )
+                .unwrap();
+            }
+            writeln!(
+                output,
+                "DROP POLICY IF EXISTS {bare}_company_isolation ON {table_name};"
+            )
+            .unwrap();
+            let (policy_up, _) = crate::generators::sql::org_rls_sql(
+                table_name,
+                &format!("{bare}_org_unit_isolation"),
+            );
+            output.push_str(&policy_up);
+            writeln!(output).unwrap();
+            writeln!(
+                output,
+                "ALTER TABLE {table_name} DROP COLUMN company_id;"
+            )
+            .unwrap();
             writeln!(output).unwrap();
         }
 
@@ -829,20 +1035,22 @@ pub fn generate_up_migration(
             .unwrap();
             writeln!(
                 output,
-                "-- CREATE {}INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ({});",
+                "-- CREATE {}INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ({}){};",
                 unique,
                 idx.name,
                 table_name,
-                idx.columns.join(", ")
+                idx.columns.join(", "),
+                index_where_suffix(idx)
             )
             .unwrap();
             writeln!(
                 output,
-                "CREATE {}INDEX IF NOT EXISTS {} ON {} ({});",
+                "CREATE {}INDEX IF NOT EXISTS {} ON {} ({}){};",
                 unique,
                 idx.name,
                 table_name,
-                idx.columns.join(", ")
+                idx.columns.join(", "),
+                index_where_suffix(idx)
             )
             .unwrap();
         }
@@ -915,6 +1123,96 @@ pub fn generate_down_migration(diff: &SchemaDiff) -> String {
     }
 
     for (table_name, change) in &diff.table_changes {
+        // Reverse a company→org re-key (ADR-0028): drop the org fence artifacts, then
+        // rebuild company_id by walking each row's node up the org tree to its
+        // company-kind ancestor. Best-effort by design — rows whose chain has no
+        // company ancestor fail loudly rather than being silently coerced to NULLs
+        // past the NOT NULL below. The old company policy and indexes are recreated
+        // from the stashed pre-re-key definitions.
+        if let Some(rekey) = &change.org_rekey {
+            let bare = table_name.rsplit('.').next().unwrap_or(table_name);
+            writeln!(
+                output,
+                "-- Reverse the org re-key on {table_name} (ADR-0028)"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "DROP POLICY IF EXISTS {bare}_org_unit_isolation ON {table_name};"
+            )
+            .unwrap();
+            let (_guard_up, guard_down) =
+                crate::generators::sql::org_kind_guard_sql(table_name, rekey.org_root_shared);
+            output.push_str(&guard_down);
+            for idx in &rekey.rekeyed_indexes {
+                writeln!(output, "DROP INDEX IF EXISTS {};", idx.name).unwrap();
+            }
+            writeln!(
+                output,
+                "ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS company_id UUID;"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "UPDATE {table_name} w SET company_id = (\n\
+                 \x20   WITH RECURSIVE up AS (\n\
+                 \x20       SELECT o.id, o.parent_id, o.kind::text AS kind\n\
+                 \x20       FROM organization.org_units o WHERE o.id = w.org_unit_id\n\
+                 \x20       UNION ALL\n\
+                 \x20       SELECT p.id, p.parent_id, p.kind::text\n\
+                 \x20       FROM organization.org_units p JOIN up u ON p.id = u.parent_id\n\
+                 \x20   )\n\
+                 \x20   SELECT up.id FROM up WHERE up.kind = 'company' LIMIT 1\n\
+                 );"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "DO $$\n\
+                 BEGIN\n\
+                 \x20   IF EXISTS (SELECT 1 FROM {table_name} WHERE company_id IS NULL) THEN\n\
+                 \x20       RAISE EXCEPTION '{bare} rows exist whose org_unit chain has no company ancestor; cannot reverse the re-key';\n\
+                 \x20   END IF;\n\
+                 END $$;"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "ALTER TABLE {table_name} ALTER COLUMN company_id SET NOT NULL;"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "ALTER TABLE {table_name} DROP COLUMN org_unit_id;"
+            )
+            .unwrap();
+            for idx in &rekey.replaced_indexes {
+                let unique = if idx.unique { "UNIQUE " } else { "" };
+                writeln!(
+                    output,
+                    "CREATE {unique}INDEX IF NOT EXISTS {} ON {} ({}){};",
+                    idx.name,
+                    table_name,
+                    idx.columns.join(", "),
+                    index_where_suffix(idx)
+                )
+                .unwrap();
+            }
+            if rekey.old_fence != CompanyFence::None {
+                if matches!(rekey.old_fence, CompanyFence::SharedTree) {
+                    let (helper, _) = crate::generators::sql::company_subtree_helper_sql();
+                    output.push_str(&helper);
+                }
+                let (up, _down) = crate::generators::sql::company_rls_sql(
+                    &rekey.old_fence,
+                    table_name,
+                    &format!("{bare}_company_isolation"),
+                );
+                output.push_str(&up);
+            }
+            writeln!(output).unwrap();
+        }
+
         for col in &change.columns_added {
             writeln!(
                 output,
@@ -1007,6 +1305,9 @@ mod tests {
                 primary_key: None,
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1042,6 +1343,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: true,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let diff = diff_schemas(&old, &new);
@@ -1083,6 +1387,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: true,
                 company_fence: Some(CompanyFence::SharedBlank),
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let up = generate_up_migration(&diff_schemas(&old, &shared_blank), &shared_blank, false);
@@ -1101,6 +1408,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: true,
                 company_fence: Some(CompanyFence::SharedTree),
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let up = generate_up_migration(&diff_schemas(&old, &shared_tree), &shared_tree, false);
@@ -1123,6 +1433,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false, // none-fence modules validate to this shape
                 company_fence: Some(CompanyFence::None),
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let up = generate_up_migration(&diff_schemas(&old, &unfenced), &unfenced, false);
@@ -1145,6 +1458,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false,
                 company_fence: None, // reference data / @global — no fence
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let diff = diff_schemas(&old, &new);
@@ -1179,6 +1495,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let mut new_cols = old_cols.clone();
@@ -1193,6 +1512,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: true,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
         let diff = diff_schemas(&old, &new);
@@ -1221,6 +1543,9 @@ mod tests {
                     primary_key: Some("id".to_string()),
                     company_scoped: true,
                     company_fence: fence,
+                    org_scoped: false,
+                    org_root_shared: false,
+                    org_fence: None,
                 },
             );
             s
@@ -1252,6 +1577,9 @@ mod tests {
                     primary_key: Some("id".to_string()),
                     company_scoped: true,
                     company_fence: Some(fence),
+                    org_scoped: false,
+                    org_root_shared: false,
+                    org_fence: None,
                 },
             );
             s
@@ -1291,6 +1619,9 @@ mod tests {
                         primary_key: Some("id".to_string()),
                         company_scoped: true,
                         company_fence: Some(fence),
+                        org_scoped: false,
+                        org_root_shared: false,
+                        org_fence: None,
                     },
                 );
             }
@@ -1333,6 +1664,9 @@ mod tests {
                     primary_key: Some("id".to_string()),
                     company_scoped: true,
                     company_fence: Some(fence),
+                    org_scoped: false,
+                    org_root_shared: false,
+                    org_fence: None,
                 },
             );
             s
@@ -1391,6 +1725,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1404,6 +1741,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1426,6 +1766,9 @@ mod tests {
                 primary_key: None,
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1492,6 +1835,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1505,6 +1851,9 @@ mod tests {
                 primary_key: Some("id".to_string()),
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1554,6 +1903,9 @@ mod tests {
                 primary_key: None,
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1567,6 +1919,9 @@ mod tests {
                 primary_key: None,
                 company_scoped: false,
                 company_fence: None,
+                org_scoped: false,
+                org_root_shared: false,
+                org_fence: None,
             },
         );
 
@@ -1713,5 +2068,283 @@ mod tests {
         let up = generate_up_migration(&diff, &schema, false);
         assert!(up.contains("POSSIBLE RENAMES"));
         assert!(up.contains("RENAME COLUMN first_name TO full_name"));
+    }
+
+    // ── company→org re-key (ADR-0028) ───────────────────────────────────────────
+
+    fn rekey_col(name: &str, nullable: bool) -> ColumnSnapshot {
+        ColumnSnapshot {
+            name: name.to_string(),
+            data_type: "UUID".to_string(),
+            nullable,
+            default: None,
+            is_unique: false,
+        }
+    }
+
+    fn rekey_text_col(name: &str) -> ColumnSnapshot {
+        ColumnSnapshot {
+            name: name.to_string(),
+            data_type: "TEXT".to_string(),
+            nullable: false,
+            default: None,
+            is_unique: false,
+        }
+    }
+
+    fn rekey_index(cols: &[&str], unique: bool, name: &str) -> IndexSnapshot {
+        IndexSnapshot {
+            name: name.to_string(),
+            columns: cols.iter().map(|c| c.to_string()).collect(),
+            unique,
+            index_type: if unique { "unique" } else { "btree" }.to_string(),
+            where_predicate: None,
+        }
+    }
+
+    /// A company-fenced table (strict, unique `(company_id, code)`) becoming an
+    /// org-scoped table (`org_unit_id`, unique `(org_unit_id, code)`) — the
+    /// inventory warehouses pilot shape.
+    fn rekey_pair() -> (SchemaSnapshot, SchemaSnapshot) {
+        let mut old_cols = IndexMap::new();
+        old_cols.insert("id".to_string(), rekey_col("id", false));
+        old_cols.insert("company_id".to_string(), rekey_col("company_id", false));
+        old_cols.insert("code".to_string(), rekey_text_col("code"));
+        let mut old_idx = IndexMap::new();
+        old_idx.insert(
+            "idx_warehouses_company_id_code".to_string(),
+            rekey_index(&["company_id", "code"], true, "idx_warehouses_company_id_code"),
+        );
+        let old = SchemaSnapshot {
+            tables: IndexMap::from([(
+                "warehouses".to_string(),
+                TableSnapshot {
+                    name: "warehouses".to_string(),
+                    columns: old_cols,
+                    indexes: old_idx,
+                    primary_key: Some("id".to_string()),
+                    company_scoped: true,
+                    company_fence: Some(CompanyFence::Strict),
+                    org_scoped: false,
+                    org_root_shared: false,
+                    org_fence: None,
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let mut new_cols = IndexMap::new();
+        new_cols.insert("id".to_string(), rekey_col("id", false));
+        new_cols.insert("org_unit_id".to_string(), rekey_col("org_unit_id", false));
+        new_cols.insert("code".to_string(), rekey_text_col("code"));
+        let mut new_idx = IndexMap::new();
+        new_idx.insert(
+            "idx_warehouses_org_unit_id_code".to_string(),
+            rekey_index(&["org_unit_id", "code"], true, "idx_warehouses_org_unit_id_code"),
+        );
+        let new = SchemaSnapshot {
+            tables: IndexMap::from([(
+                "warehouses".to_string(),
+                TableSnapshot {
+                    name: "warehouses".to_string(),
+                    columns: new_cols,
+                    indexes: new_idx,
+                    primary_key: Some("id".to_string()),
+                    company_scoped: false,
+                    company_fence: Some(CompanyFence::None),
+                    org_scoped: true,
+                    org_root_shared: false,
+                    org_fence: Some(OrgFence::Strict),
+                },
+            )]),
+            ..Default::default()
+        };
+        (old, new)
+    }
+
+    #[test]
+    fn rekey_is_detected_and_the_naive_paths_suppressed() {
+        let (old, new) = rekey_pair();
+        let diff = diff_schemas(&old, &new);
+        let change = &diff.table_changes["warehouses"];
+        let rekey = change.org_rekey.as_ref().expect("the column pair is a re-key");
+        assert_eq!(rekey.old_fence, CompanyFence::Strict);
+        assert!(
+            change.columns_removed.is_empty(),
+            "company_id leaves the naive drop path — the re-key owns its removal"
+        );
+        assert!(
+            change.columns_added.iter().all(|c| c.name != "org_unit_id"),
+            "org_unit_id leaves the naive add path — the re-key owns its addition"
+        );
+        assert!(
+            change.fence_flip.is_none(),
+            "a flip-to-none record would DISABLE RLS mid-re-key"
+        );
+        assert!(
+            change.rename_candidates.is_empty(),
+            "RENAME COLUMN would skip the backfill and the NOT NULL step entirely"
+        );
+        assert!(
+            change.indexes_added.is_empty() && change.indexes_removed.is_empty(),
+            "both index generations ride the ordered re-key emission"
+        );
+        assert_eq!(rekey.rekeyed_indexes.len(), 1, "the (org_unit_id, code) unique");
+        assert_eq!(rekey.replaced_indexes.len(), 1, "the (company_id, code) unique");
+    }
+
+    /// The emitted order matches the hand-proven pilot migration: add nullable →
+    /// backfill → NOT NULL → kind guard → re-keyed indexes → policy swap → drop the
+    /// old column. RLS is never disabled — the fence is swapped, not lifted.
+    #[test]
+    fn rekey_up_emits_the_pilot_order() {
+        let (old, new) = rekey_pair();
+        let diff = diff_schemas(&old, &new);
+        let up = generate_up_migration(&diff, &new, false);
+        let pos = |needle: &str| {
+            up.find(needle)
+                .unwrap_or_else(|| panic!("missing `{needle}` in:\n{up}"))
+        };
+        let add = pos("ADD COLUMN IF NOT EXISTS org_unit_id UUID");
+        let backfill = pos("SET org_unit_id = company_id");
+        let not_null = pos("ALTER COLUMN org_unit_id SET NOT NULL");
+        let guard = pos("warehouses_org_unit_kind_guard");
+        let index = pos("CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouses_org_unit_id_code");
+        let drop_old_policy = pos("DROP POLICY IF EXISTS warehouses_company_isolation");
+        let new_policy = pos("CREATE POLICY warehouses_org_unit_isolation");
+        let drop_col = pos("DROP COLUMN company_id");
+        assert!(add < backfill, "add before backfill");
+        assert!(backfill < not_null, "backfill before NOT NULL");
+        assert!(not_null < guard, "NOT NULL before the kind guard");
+        assert!(guard < index, "kind guard before the re-keyed indexes");
+        assert!(index < drop_old_policy, "indexes before the policy swap");
+        assert!(drop_old_policy < new_policy, "old policy drops before the org policy lands");
+        assert!(new_policy < drop_col, "the org policy is live before the old column drops");
+        assert!(
+            !up.contains("DISABLE ROW LEVEL SECURITY") && !up.contains("NO FORCE"),
+            "RLS stays enabled and forced throughout:\n{up}"
+        );
+        assert!(
+            up.contains("NOT IN ('company', 'branch')"),
+            "default kind guard:\n{up}"
+        );
+        assert!(
+            up.contains("org_unit_id = ANY(string_to_array(current_setting('app.scope_unit_ids', true), ',')::uuid[])"),
+            "the proven entitlement-union predicate:\n{up}"
+        );
+    }
+
+    /// A `shared_blank` source anchors its shared (NULL company) rows on the root
+    /// node instead of copying NULLs forward.
+    #[test]
+    fn rekey_from_shared_blank_anchors_shared_rows_on_the_root() {
+        let (mut old, new) = rekey_pair();
+        old.tables
+            .values_mut()
+            .for_each(|t| {
+                t.company_fence = Some(CompanyFence::SharedBlank);
+                t.columns.get_mut("company_id").unwrap().nullable = true;
+            });
+        let diff = diff_schemas(&old, &new);
+        let change = &diff.table_changes["warehouses"];
+        let rekey = change.org_rekey.as_ref().expect("still a re-key");
+        assert_eq!(rekey.old_fence, CompanyFence::SharedBlank);
+        let up = generate_up_migration(&diff, &new, false);
+        let anchor = pos_of(&up, "kind = 'root'");
+        let not_null = pos_of(&up, "ALTER COLUMN org_unit_id SET NOT NULL");
+        assert!(
+            anchor < not_null,
+            "shared rows must anchor on the root before NOT NULL:\n{up}"
+        );
+        // ...and a strict source never emits the anchor.
+        let (old_strict, new_strict) = rekey_pair();
+        let strict_up = generate_up_migration(&diff_schemas(&old_strict, &new_strict), &new_strict, false);
+        assert!(
+            !strict_up.contains("kind = 'root'"),
+            "strict sources copy only real company rows:\n{strict_up}"
+        );
+    }
+
+    fn pos_of(haystack: &str, needle: &str) -> usize {
+        haystack
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing `{needle}` in:\n{haystack}"))
+    }
+
+    /// The down path walks the org tree back to the company ancestor, fails loudly
+    /// on unmappable rows, and restores the old company fence + indexes.
+    #[test]
+    fn rekey_down_walks_back_and_restores_the_company_fence() {
+        let (old, new) = rekey_pair();
+        let diff = diff_schemas(&old, &new);
+        let down = generate_down_migration(&diff);
+        assert!(
+            down.contains("WITH RECURSIVE"),
+            "company_id is rebuilt by walking the org tree:\n{down}"
+        );
+        assert!(
+            down.contains("RAISE EXCEPTION"),
+            "unmappable rows fail loudly, never silently NULL:\n{down}"
+        );
+        assert!(
+            down.contains("DROP COLUMN org_unit_id"),
+            "the org column leaves on the way down:\n{down}"
+        );
+        assert!(
+            down.contains("idx_warehouses_company_id_code"),
+            "the replaced index is recreated from its stashed definition:\n{down}"
+        );
+        assert!(
+            down.contains("warehouses_company_isolation"),
+            "the strict company policy template is restored:\n{down}"
+        );
+        assert!(
+            down.contains("DROP POLICY IF EXISTS warehouses_org_unit_isolation"),
+            "the org policy drops first:\n{down}"
+        );
+    }
+
+    /// A partial unique (`WHERE deleted_at IS NULL` in DSL form) keeps its
+    /// predicate on both legs of the re-key — the up side re-creates the
+    /// re-keyed unique with it, the down side restores the company unique
+    /// with it. Without the predicate the diff-emitted unique is silently
+    /// stricter than the declaration (soft-deleted rows collide).
+    #[test]
+    fn rekeyed_partial_indexes_keep_their_where_predicate() {
+        let (mut old, mut new) = rekey_pair();
+        let pred = "(metadata->>'deleted_at') IS NULL".to_string();
+        new.tables
+            .values_mut()
+            .for_each(|t| {
+                t.indexes
+                    .get_mut("idx_warehouses_org_unit_id_code")
+                    .unwrap()
+                    .where_predicate = Some(pred.clone());
+            });
+        old.tables
+            .values_mut()
+            .for_each(|t| {
+                t.indexes
+                    .get_mut("idx_warehouses_company_id_code")
+                    .unwrap()
+                    .where_predicate = Some(pred.clone());
+            });
+
+        let diff = diff_schemas(&old, &new);
+        let up = generate_up_migration(&diff, &new, false);
+        let down = generate_down_migration(&diff);
+        let expected = " WHERE (metadata->>'deleted_at') IS NULL;";
+        assert!(
+            up.contains(&format!(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouses_org_unit_id_code ON warehouses (org_unit_id, code){expected}"
+            )),
+            "the re-keyed unique keeps its partial predicate:\n{up}"
+        );
+        assert!(
+            down.contains(&format!(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouses_company_id_code ON warehouses (company_id, code){expected}"
+            )),
+            "the restored company unique keeps its partial predicate:\n{down}"
+        );
     }
 }
