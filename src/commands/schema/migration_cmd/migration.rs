@@ -125,6 +125,84 @@ pub(in crate::commands::schema) fn execute_migration(
     let up_sql = crate::migration::generate_up_migration(&diff, &new_schema, destructive);
     let down_sql = crate::migration::generate_down_migration(&diff);
 
+    // Chain apply-order guard: replay the module's existing up-chain plus
+    // this migration. A statement referencing a relation no earlier migration
+    // (nor this one) creates is a fresh-database chain break — long-lived
+    // databases drift past it, only the empty-database apply hits it.
+    let migrations_dir = schema_path
+        .parent()
+        .unwrap_or(&schema_path)
+        .join("migrations");
+    let mut chain: Vec<(String, String)> = Vec::new();
+    if migrations_dir.exists() {
+        let mut up_files: Vec<std::path::PathBuf> = fs::read_dir(&migrations_dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().ends_with(".up.sql"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        up_files.sort();
+        for path in up_files {
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let sql = fs::read_to_string(&path)?;
+            chain.push((name, sql));
+        }
+    }
+    chain.push((
+        crate::migration::NEW_MIGRATION_LABEL.to_string(),
+        up_sql.clone(),
+    ));
+    let chain_report = crate::migration::simulate_chain(&chain, pg_schema);
+
+    for req in &chain_report.external_requires {
+        println!(
+            "  {} cross-module relation required at apply time: {} (apply order owned by the service composition)",
+            "ℹ".blue(),
+            req.cyan()
+        );
+    }
+    let (new_violations, old_violations): (Vec<_>, Vec<_>) = chain_report
+        .violations
+        .iter()
+        .partition(|v| v.file == crate::migration::NEW_MIGRATION_LABEL);
+    if !old_violations.is_empty() {
+        println!(
+            "{}",
+            "WARNING: pre-existing chain-order violations (fresh-database applies break; the fix belongs in a NEW migration, never edited into an old file):"
+                .yellow()
+                .bold()
+        );
+        for v in &old_violations {
+            println!(
+                "  {} {}: {} — {}",
+                "!".yellow(),
+                v.file,
+                v.relation,
+                v.statement
+            );
+        }
+    }
+    if !new_violations.is_empty() {
+        for v in &new_violations {
+            eprintln!(
+                "  {} chain-order violation in the generated migration: {} — {}",
+                "✗".red(),
+                v.relation,
+                v.statement
+            );
+        }
+        anyhow::bail!(
+            "the generated migration references relations that do not exist at its \
+             position in the chain; refusing to write it"
+        );
+    }
+
     if preview {
         println!();
         println!("{}", "UP Migration (preview):".green().bold());
