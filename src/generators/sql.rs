@@ -5,7 +5,7 @@
 
 use super::{GenerateError, GeneratedOutput, Generator};
 use crate::ast::{
-    CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, PrimitiveType,
+    CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, OrgFence, PrimitiveType,
     RelationType, TypeRef,
 };
 use crate::resolver::ResolvedSchema;
@@ -326,6 +326,162 @@ pub fn company_subtree_helper_sql() -> (String, String) {
     (up, down)
 }
 
+/// The visibility predicate every org fence enforces on `org_unit_id` (ADR-0028).
+///
+/// The session resolver sets `app.scope_unit_ids` to the comma-joined union of the
+/// entitled subtrees (which always includes the root node). Pure string — shared by
+/// the `USING` and `WITH CHECK` arms of [`org_rls_sql`]. Fail-closed on both unset
+/// and empty shapes: an unset var makes `current_setting(.., true)` NULL, so
+/// `string_to_array(NULL, ..)` is NULL and `= ANY(NULL)` matches nothing; an empty
+/// string parses to an empty array, and `= ANY('{}')` matches nothing. Proven live
+/// against Postgres 16 by backbone-organization's org fence probes.
+pub const ORG_SCOPE_PREDICATE_SQL: &str =
+    "org_unit_id = ANY(string_to_array(current_setting('app.scope_unit_ids', true), ',')::uuid[])";
+
+/// The org Row-Level-Security policy statements for one table (ADR-0028), as
+/// `(up, down)`.
+///
+/// One template — no postures. Shared rows are not a policy variant (ADR-0028
+/// forbids a NULL scoping key): they anchor on the root node, and the
+/// entitlement-union always contains the root, so shared visibility emerges from
+/// the fence itself. The write-path kind guard ([`org_kind_guard_sql`]) is what
+/// separates "root allowed here" (`@org_root_shared`) from "company/branch only"
+/// — enforcement that belongs on writes, not in the read predicate.
+///
+/// Pure SQL, no provenance comments — the single source of truth for the org
+/// fence, shared by the full-regen migration path and the diff-based re-key path
+/// so the two can never drift (same contract as [`company_rls_sql`]). The
+/// `FORCE` is load-bearing for the same reason it is there.
+pub fn org_rls_sql(table_ref: &str, policy_name: &str) -> (String, String) {
+    let predicate = ORG_SCOPE_PREDICATE_SQL;
+    let mut up = String::new();
+    writeln!(up, "ALTER TABLE {} ENABLE ROW LEVEL SECURITY;", table_ref).unwrap();
+    writeln!(up, "ALTER TABLE {} FORCE  ROW LEVEL SECURITY;", table_ref).unwrap();
+    writeln!(
+        up,
+        "DROP POLICY IF EXISTS {} ON {};",
+        policy_name, table_ref
+    )
+    .unwrap();
+    writeln!(up, "CREATE POLICY {} ON {}", policy_name, table_ref).unwrap();
+    writeln!(up, "    FOR ALL").unwrap();
+    writeln!(up, "    USING      ({predicate})").unwrap();
+    writeln!(up, "    WITH CHECK ({predicate});").unwrap();
+
+    let mut down = String::new();
+    writeln!(
+        down,
+        "DROP POLICY IF EXISTS {} ON {};",
+        policy_name, table_ref
+    )
+    .unwrap();
+    writeln!(
+        down,
+        "ALTER TABLE {} NO FORCE ROW LEVEL SECURITY;",
+        table_ref
+    )
+    .unwrap();
+    writeln!(
+        down,
+        "ALTER TABLE {} DISABLE ROW LEVEL SECURITY;",
+        table_ref
+    )
+    .unwrap();
+    (up, down)
+}
+
+/// The write-path kind guard for one org-scoped table (ADR-0028), as `(up, down)`:
+/// a trigger function + `BEFORE INSERT OR UPDATE OF org_unit_id` trigger that
+/// rejects ids not naming a node of the allowed kinds in `organization.org_units`.
+///
+/// The RLS fence polices *reads and scope*; this guard polices *which nodes may
+/// own rows* — a company or branch node by default; the root node additionally
+/// for `@org_root_shared` models (the ADR-0028 home for tenant-shared rows: the
+/// fence's union always contains the root, so root-anchored rows are visible to
+/// every entitled session — the guard is what keeps non-shared tables from
+/// anchoring there). Unknown ids are rejected under both postures; a missing
+/// `organization.org_units` relation surfaces as the unknown-id error, which is
+/// the honest failure for a database without the org spine.
+///
+/// `table_ref` is the qualified `schema.table`; the function is created in the
+/// table's own schema (mirrors the hand-proven pilot migration's naming).
+pub fn org_kind_guard_sql(table_ref: &str, allow_root: bool) -> (String, String) {
+    let bare = table_ref.rsplit('.').next().unwrap_or(table_ref);
+    let fn_name = format!("{bare}_org_unit_kind_guard");
+    // Locate the function in the module's own schema, whatever the migration's
+    // search_path: split the qualified ref, or fall back to the bare name.
+    let fn_ref = match table_ref.rsplit_once('.') {
+        Some((schema, _)) => format!("{schema}.{fn_name}"),
+        None => fn_name.clone(),
+    };
+    let kinds = if allow_root {
+        "('company', 'branch', 'root')"
+    } else {
+        "('company', 'branch')"
+    };
+    let mut up = String::new();
+    writeln!(
+        up,
+        "-- Write-path kind guard (ADR-0028): org_unit_id must name an"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- organization.org_units node of an allowed kind; unknown ids and"
+    )
+    .unwrap();
+    writeln!(up, "-- wrong-kind nodes are rejected at write time.").unwrap();
+    writeln!(
+        up,
+        "CREATE OR REPLACE FUNCTION {fn_ref}() RETURNS trigger AS $$"
+    )
+    .unwrap();
+    writeln!(up, "DECLARE").unwrap();
+    writeln!(up, "    v_kind text;").unwrap();
+    writeln!(up, "BEGIN").unwrap();
+    writeln!(
+        up,
+        "    SELECT kind::text INTO v_kind FROM organization.org_units WHERE id = NEW.org_unit_id;"
+    )
+    .unwrap();
+    writeln!(up, "    IF v_kind IS NULL THEN").unwrap();
+    writeln!(
+        up,
+        "        RAISE EXCEPTION '{bare}.org_unit_id % does not reference an organization.org_units node', NEW.org_unit_id;",
+    )
+    .unwrap();
+    writeln!(up, "    END IF;").unwrap();
+    writeln!(up, "    IF v_kind NOT IN {kinds} THEN").unwrap();
+    let kind_list = if allow_root {
+        "company, branch or root"
+    } else {
+        "company or branch"
+    };
+    writeln!(
+        up,
+        "        RAISE EXCEPTION '{bare}.org_unit_id must reference a {kind_list} node, got a % node', v_kind;"
+    )
+    .unwrap();
+    writeln!(up, "    END IF;").unwrap();
+    writeln!(up, "    RETURN NEW;").unwrap();
+    writeln!(up, "END;").unwrap();
+    writeln!(up, "$$ LANGUAGE plpgsql;").unwrap();
+    writeln!(up).unwrap();
+    writeln!(up, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
+    writeln!(up, "CREATE TRIGGER {fn_name}").unwrap();
+    writeln!(
+        up,
+        "    BEFORE INSERT OR UPDATE OF org_unit_id ON {table_ref}"
+    )
+    .unwrap();
+    writeln!(up, "    FOR EACH ROW EXECUTE FUNCTION {fn_ref}();").unwrap();
+
+    let mut down = String::new();
+    writeln!(down, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
+    writeln!(down, "DROP FUNCTION IF EXISTS {fn_ref}();").unwrap();
+    (up, down)
+}
+
 /// Generates SQL migrations from schema
 pub struct SqlGenerator {
     version: Option<String>,
@@ -543,6 +699,82 @@ impl SqlGenerator {
         down.insert_str(
             0,
             &format!("-- Reverse the company RLS fence for {qualified}\n"),
+        );
+        Some((up, down))
+    }
+
+    /// The org twin of [`company_fence_column`](Self::company_fence_column): a column
+    /// literally named `org_unit_id` fences the table. There is no opt-out posture to
+    /// infer from — a model either carries the scoping key or it doesn't (`@global` on
+    /// an `org_unit_id` column is a validation error: the column IS the tenant scoping
+    /// key, a global org-scoped row is a contradiction; the filter here is defense in
+    /// depth behind that check). Returns the field so callers can read per-model
+    /// attributes (`@org_root_shared`) off it.
+    fn org_fence_column(model: &Model) -> Option<&Field> {
+        model
+            .fields
+            .iter()
+            .find(|f| f.name == "org_unit_id" && !f.has_attribute("global"))
+    }
+
+    /// Emit the org fence migration for one model (ADR-0028), or `None` when the model
+    /// is not org-scoped.
+    ///
+    /// Two artifacts per table, both proven live against Postgres 16 by the
+    /// backbone-organization / backbone-inventory pilots:
+    ///
+    /// - the **entitlement-union RLS policy** ([`org_rls_sql`]) — one template, no
+    ///   postures: reads and writes must satisfy
+    ///   `org_unit_id = ANY(string_to_array(current_setting('app.scope_unit_ids', true), ','))`,
+    ///   the union of the session's entitled subtrees (which always contains the root).
+    ///   Fail-closed on every unset/empty shape — see [`ORG_SCOPE_PREDICATE_SQL`].
+    /// - the **write-path kind guard** ([`org_kind_guard_sql`]) — `org_unit_id` must
+    ///   name a company/branch node (`root` additionally when the field carries
+    ///   `@org_root_shared`, the home for tenant-shared rows: the union always
+    ///   contains the root, so root-anchored rows are shared through the fence
+    ///   itself — ADR-0028 forbids the old NULL-arm escape).
+    ///
+    /// `module_org_fence` undeclared (`None`) + an `org_unit_id` column is a
+    /// validation error — unlike the company fence there is no legacy posture to
+    /// infer, so emission stays silent rather than guessing a fence; the validator is
+    /// what stops that state from reaching codegen.
+    ///
+    /// Pure strings, shared verbatim with the diff-based re-key path (same contract
+    /// as the company twin). Returns `(up_sql, down_sql)`.
+    pub fn generate_org_rls_migration(
+        model: &Model,
+        module_org_fence: Option<&OrgFence>,
+    ) -> Option<(String, String)> {
+        // No org dimension by declaration — nothing is emitted (validation elsewhere
+        // forbids combining this with an org_unit_id column).
+        if matches!(module_org_fence, Some(OrgFence::None)) {
+            return None;
+        }
+        let field = Self::org_fence_column(model)?;
+        // Undeclared + an org column is a validation error; never infer a fence.
+        module_org_fence?;
+        let allow_root = field.has_attribute("org_root_shared");
+        let qualified = model.qualified_table_name();
+        let bare = qualified.rsplit('.').next().unwrap_or(&qualified);
+        let policy = format!("{bare}_org_unit_isolation");
+        let (policy_up, policy_down) = org_rls_sql(&qualified, &policy);
+        let (guard_up, guard_down) = org_kind_guard_sql(&qualified, allow_root);
+        let mut up = format!(
+            "-- Migration: org row-level-security fence for {qualified}\n\
+             -- Generated by metaphor-schema (ADR-0028). org_unit_id is scoped per request\n\
+             -- via `set_config('app.scope_unit_ids', <csv>, true)`, the union of the\n\
+             -- session's entitled subtrees; unset or empty sees zero rows. Shared rows\n\
+             -- anchor on the root node (always in the union), never on a NULL key.\n\n"
+        );
+        up.push_str(&policy_up);
+        up.push('\n');
+        up.push_str(&guard_up);
+        let mut down = guard_down;
+        down.push('\n');
+        down.push_str(&policy_down);
+        down.insert_str(
+            0,
+            &format!("-- Reverse the org fence for {qualified}\n"),
         );
         Some((up, down))
     }
@@ -922,7 +1154,7 @@ impl SqlGenerator {
     /// literals, not already qualified with `table.`) to
     /// `(metadata->>'deleted_at')`. Real columns shadow the JSONB key, so a
     /// model that declares `deleted_at` as a real column is left untouched.
-    fn resolve_where_clause(&self, where_clause: &str, model: &Model) -> String {
+    pub(crate) fn resolve_where_clause(&self, where_clause: &str, model: &Model) -> String {
         const AUDIT_METADATA_KEYS: &[&str] = &[
             "created_at",
             "updated_at",
@@ -1651,6 +1883,72 @@ impl SqlGenerator {
             );
         }
 
+        // 7. Org fence (ADR-0028) — the re-key-sweep destination. One additive
+        // migration per module covering every org-scoped model, emitted after the
+        // company fence (a re-keyed module still emits both files during the sweep:
+        // each declaration governs its own column set, and the company file shrinks
+        // as models drop their `company_id` column). A module with no `org_unit_id`
+        // column on any model — the pre-sweep state of every module — emits no file.
+        // Honors the same `config.generators.rls_migration: false` opt-out.
+        let module_org_fence = schema.schema.org_fence.as_ref();
+        let org_rls: Vec<(String, String)> = schema
+            .schema
+            .models
+            .iter()
+            .filter_map(|m| Self::generate_org_rls_migration(m, module_org_fence))
+            .collect();
+        if !org_rls.is_empty() && emit_rls {
+            let ts = Self::timestamp_for(counter);
+            let mut up = String::new();
+            writeln!(
+                up,
+                "-- Org fence for {} module (ADR-0028): entitlement-union policies",
+                module_name
+            )
+            .unwrap();
+            writeln!(
+                up,
+                "-- Generated by metaphor-schema. The session resolver sets"
+            )
+            .unwrap();
+            writeln!(
+                up,
+                "-- `app.scope_unit_ids` (the union of the entitled subtrees);"
+            )
+            .unwrap();
+            writeln!(
+                up,
+                "-- unset or empty sees zero rows. Kind guards reject writes"
+            )
+            .unwrap();
+            writeln!(
+                up,
+                "-- naming a node of any other kind."
+            )
+            .unwrap();
+            writeln!(up).unwrap();
+            let mut down = String::new();
+            writeln!(
+                down,
+                "-- Down: remove the org fence for {} module",
+                module_name
+            )
+            .unwrap();
+            writeln!(down).unwrap();
+            for (u, d) in &org_rls {
+                writeln!(up, "{}", u).unwrap();
+                writeln!(down, "{}", d).unwrap();
+            }
+            output.add_file(
+                PathBuf::from(format!("migrations/{}_enable_org_fence.up.sql", ts)),
+                up,
+            );
+            output.add_file(
+                PathBuf::from(format!("migrations/{}_enable_org_fence.down.sql", ts)),
+                down,
+            );
+        }
+
         Ok(())
     }
 
@@ -2173,6 +2471,166 @@ mod tests {
         assert!(
             SqlGenerator::generate_rls_migration(&create_test_model(), None).is_none(),
             "a model without company_id is not fenced"
+        );
+    }
+
+    // ── org fence (ADR-0028) ────────────────────────────────────────────────────
+
+    /// An org-scoped model in a named schema, mirroring a re-keyed entity
+    /// (the inventory warehouses pilot shape).
+    fn org_scoped_model() -> Model {
+        let mut model = Model::new("Warehouse");
+        model.schema = Some("inventory".to_string());
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "org_unit_id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("required")],
+                ..Default::default()
+            },
+        ];
+        model
+    }
+
+    /// The declared org fence emits both artifacts: the entitlement-union policy
+    /// (identical arms on USING and WITH CHECK — one template, no postures) and the
+    /// write-path kind guard defaulting to company/branch nodes.
+    #[test]
+    fn org_rls_emits_the_proven_entitlement_union_fence() {
+        let (up, down) = SqlGenerator::generate_org_rls_migration(
+            &org_scoped_model(),
+            Some(&OrgFence::Strict),
+        )
+        .expect("a declared org-scoped model must get the org fence");
+        assert!(
+            up.contains("FORCE  ROW LEVEL SECURITY"),
+            "must FORCE RLS (owner bypass is the whole point of the fence):\n{up}"
+        );
+        assert!(
+            up.contains("ENABLE ROW LEVEL SECURITY"),
+            "must ENABLE RLS:\n{up}"
+        );
+        assert!(
+            up.contains("warehouses_org_unit_isolation"),
+            "policy name from the bare table:\n{up}"
+        );
+        let arms = up.matches("string_to_array(current_setting('app.scope_unit_ids'").count();
+        assert_eq!(
+            arms, 2,
+            "USING and WITH CHECK must carry the same entitlement-union predicate:\n{up}"
+        );
+        assert!(
+            up.contains("org_unit_id = ANY(string_to_array(current_setting('app.scope_unit_ids', true), ',')::uuid[])"),
+            "the proven predicate, verbatim:\n{up}"
+        );
+        assert!(
+            up.contains("inventory.warehouses_org_unit_kind_guard()"),
+            "kind guard function lives in the module's schema:\n{up}"
+        );
+        assert!(
+            up.contains("NOT IN ('company', 'branch')"),
+            "default guard admits company and branch nodes only:\n{up}"
+        );
+        assert!(
+            !up.contains("'root'"),
+            "the default guard must NOT admit root — that is @org_root_shared's call:\n{up}"
+        );
+        assert!(
+            up.contains("BEFORE INSERT OR UPDATE OF org_unit_id"),
+            "guard fires on writes to the scoping key:\n{up}"
+        );
+        // Down reverses both artifacts.
+        assert!(
+            down.contains("DROP POLICY IF EXISTS warehouses_org_unit_isolation"),
+            "down drops the org policy:\n{down}"
+        );
+        assert!(
+            down.contains("DROP FUNCTION IF EXISTS inventory.warehouses_org_unit_kind_guard()"),
+            "down drops the kind guard:\n{down}"
+        );
+    }
+
+    /// `@org_root_shared` widens only the kind guard — the read predicate is
+    /// untouched because sharing rides the union (the root is always in it).
+    #[test]
+    fn org_root_shared_widens_only_the_kind_guard() {
+        let mut model = org_scoped_model();
+        model
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "org_unit_id")
+            .unwrap()
+            .attributes
+            .push(Attribute::new("org_root_shared"));
+        let (up, _down) =
+            SqlGenerator::generate_org_rls_migration(&model, Some(&OrgFence::Strict)).unwrap();
+        assert!(
+            up.contains("NOT IN ('company', 'branch', 'root')"),
+            "root-shared models admit root anchors:\n{up}"
+        );
+        let arms = up.matches("string_to_array(current_setting('app.scope_unit_ids'").count();
+        assert_eq!(
+            arms, 2,
+            "the policy itself stays the single template:\n{up}"
+        );
+    }
+
+    /// The org fence never infers a posture — unlike the company twin, silence is
+    /// silence: an undeclared module (or a `none` declaration) with an org column
+    /// is a validation error, and emission must not paper over it.
+    #[test]
+    fn org_fence_never_infers_a_posture() {
+        assert!(
+            SqlGenerator::generate_org_rls_migration(&org_scoped_model(), None).is_none(),
+            "undeclared + org column must emit nothing (the validator owns that error)"
+        );
+        assert!(
+            SqlGenerator::generate_org_rls_migration(&org_scoped_model(), Some(&OrgFence::None))
+                .is_none(),
+            "org_fence: none + org column must emit nothing (the validator owns that error)"
+        );
+        assert!(
+            SqlGenerator::generate_org_rls_migration(&create_test_model(), Some(&OrgFence::Strict))
+                .is_none(),
+            "no org column, no org fence"
+        );
+    }
+
+    /// The module migration carries every org-scoped model's fence and sorts after
+    /// the create-table migration — same contract as the company fence file.
+    #[test]
+    fn org_fence_module_migration_sorts_after_the_table() {
+        let mut schema = ModuleSchema::new("inventory");
+        schema.models.push(org_scoped_model());
+        schema.org_fence = Some(OrgFence::Strict);
+        let output = SqlGenerator::new()
+            .with_split(true)
+            .generate(&ResolvedSchema { schema })
+            .unwrap();
+        let org_up = output
+            .files
+            .keys()
+            .find(|p| p.to_string_lossy().ends_with("_enable_org_fence.up.sql"))
+            .expect("an org-scoped module must get an enable_org_fence migration");
+        let sql = &output.files[org_up];
+        assert!(
+            sql.contains("warehouses_org_unit_isolation"),
+            "module file carries the per-model policy:\n{sql}"
+        );
+        let table_up = output
+            .files
+            .keys()
+            .find(|p| p.to_string_lossy().ends_with("_create_warehouse_table.up.sql"))
+            .expect("create-table migration");
+        assert!(
+            org_up.to_string_lossy() > table_up.to_string_lossy(),
+            "org fence migration must run after the table exists"
         );
     }
 
