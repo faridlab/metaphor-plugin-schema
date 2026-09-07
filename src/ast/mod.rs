@@ -26,6 +26,7 @@ pub use model::{
     Attribute,
     AttributeValue,
     CompanyFence,
+    OrgFence,
     ComputedDtoField,
     // Domain Event types
     DomainEvent,
@@ -261,6 +262,13 @@ pub struct ModuleSchema {
     /// stray `company_id` columns).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub company_fence: Option<CompanyFence>,
+    /// Module-level org fence declaration (ADR-0028). `None` = undeclared
+    /// (valid only while no model carries `org_unit_id`); `Some(OrgFence::Strict)`
+    /// fences every org-scoped model with the entitlement-union policy and the
+    /// write-path kind guard. Coexists with `company_fence` during the re-key
+    /// sweep — each governs its own column set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_fence: Option<OrgFence>,
 }
 
 impl ModuleSchema {

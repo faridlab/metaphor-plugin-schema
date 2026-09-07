@@ -3,7 +3,7 @@
 //! Validates schema completeness and correctness.
 
 use super::ResolveError;
-use crate::ast::{CompanyFence, Enforcement, ModuleSchema};
+use crate::ast::{CompanyFence, Enforcement, ModuleSchema, OrgFence};
 use std::collections::HashSet;
 
 /// Validates a schema for correctness
@@ -54,6 +54,9 @@ impl<'a> SchemaValidator<'a> {
         // Validate the module-level company fence (ADR-0014)
         errors.extend(self.validate_company_fence());
 
+        // Validate the org fence declaration and org_unit_id columns (ADR-0028)
+        errors.extend(self.validate_org_fence());
+
         // Validate field-level lifecycle declarations (ADR-0016)
         errors.extend(self.validate_lifecycles());
 
@@ -96,6 +99,96 @@ impl<'a> SchemaValidator<'a> {
                 ))
             })
             .collect()
+    }
+
+    /// Validate the module-level `org_fence:` declaration and `org_unit_id` columns
+    /// (ADR-0028).
+    ///
+    /// Unlike the company fence there is no legacy posture to infer: the org fence
+    /// must be declared **before** the first `org_unit_id` column lands, so every
+    /// combination where an org-scoped column exists without a `strict` declaration
+    /// is a hard failure, not a warning. Fatal combinations:
+    ///
+    /// - an `org_unit_id` column with the declaration absent, or declared `none` —
+    ///   both would emit no fence for a scoping key that exists (an unfenced tenant
+    ///   column is worse than none);
+    /// - a model carrying both a non-`@global` `company_id` and an `org_unit_id` —
+    ///   the sanctioned transition is a diff-generated re-key migration that swaps
+    ///   the columns in one step; both on the same model is a state no migration
+    ///   will produce and no runtime fence covers;
+    /// - `@global` on an `org_unit_id` column — the column IS the tenant scoping
+    ///   key, a "global org-scoped row" is a contradiction;
+    /// - `@org_root_shared` on any field other than `org_unit_id` — the attribute
+    ///   widens the scoping key's kind guard; elsewhere it does nothing and only
+    ///   mimics the vocabulary.
+    fn validate_org_fence(&self) -> Vec<ResolveError> {
+        let mut errors = Vec::new();
+        for model in &self.schema.models {
+            // @org_root_shared belongs on the scoping key itself, wherever it landed.
+            if let Some(field) = model
+                .fields
+                .iter()
+                .find(|f| f.has_attribute("org_root_shared") && f.name != "org_unit_id")
+            {
+                errors.push(ResolveError::validation(format!(
+                    "model '{}' puts @org_root_shared on field '{}' — the attribute \
+                     widens the org_unit_id kind guard to the root node and belongs \
+                     on the scoping key itself (ADR-0028)",
+                    model.name, field.name
+                )));
+            }
+
+            if model
+                .fields
+                .iter()
+                .any(|f| f.name == "org_unit_id" && f.has_attribute("global"))
+            {
+                errors.push(ResolveError::validation(format!(
+                    "model '{}' marks 'org_unit_id' @global — the column is the tenant \
+                     scoping key (ADR-0028), a global org-scoped row is a contradiction; \
+                     drop either the column or the @global",
+                    model.name
+                )));
+            }
+
+            let Some(org_field) = model
+                .fields
+                .iter()
+                .find(|f| f.name == "org_unit_id" && !f.has_attribute("global"))
+            else {
+                continue;
+            };
+            if self.schema.org_fence != Some(OrgFence::Strict) {
+                errors.push(ResolveError::validation(format!(
+                    "model '{}' carries an 'org_unit_id' column but the module declares \
+                     no org_fence: strict in index.model.yaml — unlike the legacy company \
+                     fence there is no posture to infer (ADR-0028); declare \
+                     'org_fence: strict' before the first org-scoped column lands",
+                    model.name
+                )));
+            }
+            if org_field.type_ref.is_optional() {
+                errors.push(ResolveError::validation(format!(
+                    "model '{}' declares 'org_unit_id' optional — the org scoping key is \
+                     NOT NULL by law (ADR-0028); shared rows anchor on the root node, \
+                     never on a NULL key",
+                    model.name
+                )));
+            }
+            if model
+                .fields
+                .iter()
+                .any(|f| f.name == "company_id" && !f.has_attribute("global"))
+            {
+                errors.push(ResolveError::validation(format!(
+                    "model '{}' carries both 'company_id' and 'org_unit_id' — the column \
+                     swap is a generated re-key migration, not a schema state (ADR-0028); \
+                     keep company_id and generate the re-key, or drop it if already re-keyed",
+                    model.name
+                )));
+            }
+        }
+        errors
     }
 
     /// Validate field-level `lifecycle:` declarations (ADR-0016).
@@ -746,6 +839,24 @@ fn fence_warnings(schema: &ModuleSchema) -> Vec<String> {
         }
     }
 
+    // Org fence (ADR-0028): a strict declaration with no org-scoped model is dead
+    // vocabulary — it emits nothing. Warning-grade (the company twin treats the
+    // analogous case the same): a module may legitimately declare ahead of its
+    // re-key sweep.
+    if schema.org_fence == Some(OrgFence::Strict)
+        && !schema.models.iter().any(|m| {
+            m.fields
+                .iter()
+                .any(|f| f.name == "org_unit_id" && !f.has_attribute("global"))
+        })
+    {
+        warnings.push(
+            "org_fence: strict is declared but no model carries an 'org_unit_id' column — \
+             the declaration has no effect"
+                .to_string(),
+        );
+    }
+
     warnings
 }
 
@@ -983,6 +1094,140 @@ mod company_fence_tests {
         assert!(
             warnings.len() == 1 && warnings[0].contains("company_fence"),
             "expected exactly the missing-declaration warning, got: {warnings:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod org_fence_tests {
+    use super::*;
+    use crate::ast::{Attribute, Field, Model, PrimitiveType, TypeRef};
+
+    fn id_field() -> Field {
+        let mut f = Field::new("id", TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(Attribute::new("id"));
+        f
+    }
+
+    fn org_model() -> Model {
+        // The scoping key is NOT NULL by law; @exclude_from_foreign_key_check because
+        // organization.org_units lives in another module (the pilot's convention).
+        let mut f = Field::new("org_unit_id", TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(Attribute::new("required"));
+        f.attributes
+            .push(Attribute::new("exclude_from_foreign_key_check"));
+        let mut m = Model::new("Warehouse");
+        m.fields = vec![id_field(), f];
+        m
+    }
+
+    fn schema_with_org_fence(models: Vec<Model>, org_fence: Option<OrgFence>) -> ModuleSchema {
+        let mut s = ModuleSchema::new("test");
+        s.models = models;
+        s.org_fence = org_fence;
+        s
+    }
+
+    fn errors_of(s: &ModuleSchema) -> Vec<String> {
+        match SchemaValidator::new(s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn org_column_without_a_strict_declaration_is_fatal() {
+        for fence in [None, Some(OrgFence::None)] {
+            let s = schema_with_org_fence(vec![org_model()], fence);
+            let errs = errors_of(&s);
+            assert!(
+                errs.iter().any(|e| e.contains("org_fence")),
+                "{fence:?} + org_unit_id must be a hard error naming the declaration, got: {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_strict_with_an_org_column_validates() {
+        let s = schema_with_org_fence(vec![org_model()], Some(OrgFence::Strict));
+        assert!(
+            errors_of(&s).is_empty(),
+            "the sanctioned post-re-key shape must validate"
+        );
+    }
+
+    #[test]
+    fn both_scoping_columns_on_one_model_is_fatal() {
+        let mut m = org_model();
+        let mut c = Field::new("company_id", TypeRef::Primitive(PrimitiveType::Uuid));
+        c.attributes
+            .push(Attribute::new("exclude_from_foreign_key_check"));
+        m.fields.push(c);
+        let s = schema_with_org_fence(vec![m], Some(OrgFence::Strict));
+        let errs = errors_of(&s);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("both 'company_id' and 'org_unit_id'")),
+            "the column swap is a migration, not a schema state, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn global_or_optional_org_column_is_fatal() {
+        let mut global = org_model();
+        global.fields[1].attributes.push(Attribute::new("global"));
+        let errs = errors_of(&schema_with_org_fence(
+            vec![global],
+            Some(OrgFence::Strict),
+        ));
+        assert!(
+            errs.iter().any(|e| e.contains("@global")),
+            "a global org-scoped row is a contradiction, got: {errs:?}"
+        );
+
+        let mut optional = org_model();
+        optional.fields[1].type_ref =
+            TypeRef::optional(TypeRef::Primitive(PrimitiveType::Uuid));
+        let errs = errors_of(&schema_with_org_fence(
+            vec![optional],
+            Some(OrgFence::Strict),
+        ));
+        assert!(
+            errs.iter().any(|e| e.contains("NOT NULL")),
+            "the org scoping key is NOT NULL by law, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn org_root_shared_off_the_scoping_key_is_fatal() {
+        let mut m = org_model();
+        let mut code = Field::new("code", TypeRef::Primitive(PrimitiveType::String));
+        code.attributes.push(Attribute::new("org_root_shared"));
+        m.fields.push(code);
+        let errs = errors_of(&schema_with_org_fence(vec![m], Some(OrgFence::Strict)));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("@org_root_shared") && e.contains("'code'")),
+            "the attribute belongs on the scoping key, got: {errs:?}"
+        );
+        // On the key itself it is the sanctioned shared-row shape.
+        let mut sane = org_model();
+        sane.fields[1].attributes.push(Attribute::new("org_root_shared"));
+        assert!(errors_of(&schema_with_org_fence(vec![sane], Some(OrgFence::Strict))).is_empty());
+    }
+
+    #[test]
+    fn strict_declaration_with_no_org_model_warns() {
+        let mut bare = Model::new("Bare");
+        bare.fields = vec![id_field()];
+        let mut s = schema_with_org_fence(vec![bare], Some(OrgFence::Strict));
+        // The honest no-company shape — otherwise the missing company declaration
+        // short-circuits the warning list before the org block is reached.
+        s.company_fence = Some(CompanyFence::None);
+        let warnings = declaration_warnings(&s);
+        assert!(
+            warnings.iter().any(|w| w.contains("org_fence")),
+            "expected a no-effect org warning, got: {warnings:?}"
         );
     }
 }

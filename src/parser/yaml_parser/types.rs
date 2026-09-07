@@ -2,7 +2,7 @@
 //!
 //! All `YamlXxx` structs that map directly to YAML schema file structure.
 
-use crate::ast::{CommitPolicy, CompanyFence, Enforcement, JobPosture, Lifecycle, LifecycleShape};
+use crate::ast::{CommitPolicy, CompanyFence, Enforcement, JobPosture, Lifecycle, LifecycleShape, OrgFence};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -751,6 +751,12 @@ pub struct YamlModelIndexSchema {
     /// per-model inference (backward compatible).
     #[serde(default)]
     pub company_fence: Option<CompanyFence>,
+    /// Module-level org fence declaration (ADR-0028): `strict` / `none`.
+    /// Absent is valid only while no model carries an `org_unit_id` column
+    /// (validated); `strict` fences every org-scoped model with the
+    /// entitlement-union policy and the write-path kind guard.
+    #[serde(default)]
+    pub org_fence: Option<OrgFence>,
 }
 
 /// A shared type definition that can be:

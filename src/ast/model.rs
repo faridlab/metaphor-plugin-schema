@@ -483,6 +483,34 @@ pub enum CompanyFence {
     None,
 }
 
+/// The module-level org fence declaration (ADR-0028).
+///
+/// Declared in `index.model.yaml` as `org_fence:`; drives the entitlement-union RLS
+/// emission for every model carrying an `org_unit_id` column. Coexists with
+/// `company_fence` during the re-key sweep: each declaration governs its own column
+/// set (a model is company-fenced via `company_id`, org-fenced via `org_unit_id` —
+/// never both, validated as an error). Once a module's sweep completes,
+/// `company_fence` drops to `none` and only `org_fence` remains.
+///
+/// `Option<OrgFence>::None` (undeclared) combined with a model that carries
+/// `org_unit_id` is a validation error — unlike the company fence there is no legacy
+/// posture to infer, so the declaration must be explicit before the first
+/// org-scoped column lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrgFence {
+    /// Org-scoped models are fenced by the session's entitlement-union over
+    /// `app.scope_unit_ids`: `org_unit_id` is NOT NULL and must name a company or
+    /// branch node (a per-model `@org_root_shared` widens the write-path kind
+    /// guard to the root node — the ADR-0028 replacement for the old NULL-arm
+    /// shared escape; the union always contains the root, so root-anchored rows
+    /// are shared through the fence itself, never through NULL).
+    Strict,
+    /// No org dimension at all — nothing is emitted (must not be combined with an
+    /// `org_unit_id` column; validated as an error).
+    None,
+}
+
 /// Foreign key action for ON DELETE and ON UPDATE
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
