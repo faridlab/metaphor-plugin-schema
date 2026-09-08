@@ -50,6 +50,13 @@ metaphor schema status sapiens
 
 # Find hand-written references to handlers the generator won't emit
 metaphor schema doctor sapiens
+
+# Emit the composition-installed tenancy decorator from a backend-service's
+# tenancy.yaml (ADR-0029) — run from the composing service's directory
+metaphor schema tenancy --preview
+
+# Coverage doctor: verify a live database against the descriptor
+metaphor schema tenancy --check --database-url "$DATABASE_URL"
 ```
 
 ## Schema Example

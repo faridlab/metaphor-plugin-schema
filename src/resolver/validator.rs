@@ -789,18 +789,15 @@ pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
     warnings
 }
 
-/// Fence warnings for [`declaration_warnings`] — see ADR-0014.
+/// Fence warnings for [`declaration_warnings`] — see ADR-0014 and ADR-0029.
+///
+/// Under ADR-0029 modules are tenant-agnostic: an absent `company_fence:` declaration
+/// is the intended end state and warns nothing (the strip sweep is tracked by
+/// `validate-workspace`'s progress note, which counts modules still declaring). The
+/// warnings below fire only while a declaration survives and says something odd.
 fn fence_warnings(schema: &ModuleSchema) -> Vec<String> {
     let Some(fence) = schema.company_fence else {
-        // ADR-0014 sweep: every module declares an explicit posture. Undeclared is the
-        // warning generate shows (never a gate here — legacy modules must still regen);
-        // `validate` / `validate-workspace` make the same condition a hard failure.
-        return vec![
-            "no 'company_fence:' declaration in index.model.yaml — ADR-0014 requires an \
-             explicit posture per module (strict | shared_blank | shared_tree | none); \
-             'metaphor schema validate-workspace' lists every undeclared module"
-                .to_string(),
-        ];
+        return Vec::new();
     };
 
     let fenced: Vec<&crate::ast::Model> = schema
@@ -1085,15 +1082,16 @@ mod company_fence_tests {
     }
 
     #[test]
-    fn undeclared_module_warns_on_generate() {
-        // ADR-0014: `generate` stays warning-only (unswept legacy modules must still
-        // regen), but the missing declaration is no longer SILENT — the warning points
-        // at `validate-workspace`, where the same gap is a hard failure.
+    fn undeclared_module_is_silent_under_composition_tenancy() {
+        // ADR-0029: modules are tenant-agnostic; an absent `company_fence:`
+        // declaration is the intended end state and must not warn (or gate)
+        // anywhere. Sweep progress lives in validate-workspace's note, which
+        // counts modules still DECLARING.
         let s = schema_with_fence(vec![company_model(false)], None);
         let warnings = declaration_warnings(&s);
         assert!(
-            warnings.len() == 1 && warnings[0].contains("company_fence"),
-            "expected exactly the missing-declaration warning, got: {warnings:?}"
+            warnings.is_empty(),
+            "undeclared tenancy must be warning-free, got: {warnings:?}"
         );
     }
 }

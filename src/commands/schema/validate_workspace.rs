@@ -5,10 +5,11 @@
 //! every module listed in `metaphor.yaml`, builds a registry of module → entities, and reports every
 //! cross-module FK that dangles — the check that would have caught `corpus.Organization`.
 //!
-//! It is also the ADR-0014 sweep gate: every schema module must declare an explicit
-//! `company_fence:` posture in `index.model.yaml` (`strict | shared_blank | shared_tree | none`).
-//! An undeclared module is a hard failure here and in per-module `validate`; `schema generate`
-//! keeps it warning-only so unswept legacy modules can still regenerate.
+//! It is also the tenancy-declaration sweep progress report: under ADR-0029 modules are
+//! tenant-agnostic, so an ABSENT `company_fence:` declaration is the intended end state. A
+//! surviving declaration (still-fenced, not-yet-stripped module) is counted as a note, not a
+//! failure — the strip sweep retires them one module per train. A future train inverts this to
+//! fail on any surviving declaration once the sweep completes.
 
 use std::collections::HashSet;
 
@@ -24,7 +25,7 @@ use super::module_loader::build_module_schema;
 
 pub(super) fn execute_validate_workspace() -> Result<()> {
     println!(
-        "{} cross-module foreign keys + company-fence declarations",
+        "{} cross-module foreign keys + tenancy-declaration sweep progress",
         "Validating".green().bold()
     );
 
@@ -37,7 +38,7 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
     let mut all_refs: Vec<CrossModuleFkRef> = Vec::new();
     let mut modules_scanned = 0usize;
     let mut parse_failures: Vec<String> = Vec::new();
-    let mut fence_errors: Vec<String> = Vec::new();
+    let mut still_declaring: Vec<String> = Vec::new();
 
     for project in ws.projects() {
         // Build the schema dir straight from the project's own path (`<project>/schema`), not via a
@@ -70,15 +71,12 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
             ));
         }
 
-        // ADR-0014 sweep gate — an undeclared posture is a hard failure, not a warning: the fence
-        // posture decides which RLS policy template a module's tables get, so "forgot to declare"
-        // must never ride through as an implicit default.
-        if schema.company_fence.is_none() {
-            fence_errors.push(format!(
-                "{}: no 'company_fence:' declaration in index.model.yaml — ADR-0014 requires \
-                 an explicit posture per module (strict | shared_blank | shared_tree | none)",
-                project.name
-            ));
+        // Tenancy sweep progress (ADR-0029): modules are tenant-agnostic, so a missing
+        // declaration is the goal, not a gap. Count the modules still carrying one — those
+        // await their strip release; the count is a note so the sweep's remaining work is
+        // visible on every workspace validation without gating anything.
+        if schema.company_fence.is_some() {
+            still_declaring.push(project.name.clone());
         }
 
         // Key the registry by the schema module name (`corpus`, `sapiens`) — the name FK refs use,
@@ -90,9 +88,8 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
         modules_scanned += 1;
     }
 
-    let mut errors = validate_cross_module_fks(&registry, &all_refs);
+    let errors = validate_cross_module_fks(&registry, &all_refs);
     let dangling = errors.len();
-    errors.extend(fence_errors.iter().cloned());
 
     println!(
         "  scanned {} module(s), {} cross-module reference(s) (direct fields + shared types)",
@@ -111,10 +108,22 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
         }
     }
 
+    if !still_declaring.is_empty() {
+        println!(
+            "  {} {} module(s) still declare a company_fence posture — tenant-agnostic under \
+             ADR-0029; each retires with its strip release:",
+            "sweep:".yellow().bold(),
+            still_declaring.len()
+        );
+        for name in &still_declaring {
+            println!("    - {name}");
+        }
+    }
+
     if errors.is_empty() {
         println!();
         println!(
-            "{} every cross-module foreign key resolves and every module declares a fence posture",
+            "{} every cross-module foreign key resolves",
             "Validation passed:".green().bold()
         );
         return Ok(());
@@ -125,9 +134,7 @@ pub(super) fn execute_validate_workspace() -> Result<()> {
     }
     println!();
     anyhow::bail!(
-        "validation failed: {} dangling cross-module reference(s), {} missing company_fence \
-         declaration(s)",
-        dangling,
-        fence_errors.len()
+        "validation failed: {} dangling cross-module reference(s)",
+        dangling
     );
 }

@@ -482,6 +482,331 @@ pub fn org_kind_guard_sql(table_ref: &str, allow_root: bool) -> (String, String)
     (up, down)
 }
 
+// ── Composition-installed tenancy decorator (ADR-0029) ───────────────────────
+//
+// Modules ship no scoping columns; the composing backend-service owns a
+// `tenancy.yaml` descriptor and the decorator below installs the org-unit fence
+// on the tables it lists. Runtime SQL is the ADR-0028 shape verbatim — the
+// fence, the kind guard, and the session semantics are the same; what moved is
+// the installation owner. The chain is ADDITIVE-ONLY: it knows nothing about
+// company artifacts (their removal is the module strip's job) and re-runnable:
+// every statement is guarded so a partially-applied file converges on re-run.
+
+/// One per-unit unique the decorator installs: `(org_unit_id, fields...)`,
+/// optionally partial on a raw SQL predicate carried verbatim from the
+/// descriptor (e.g. a soft-delete nuller).
+pub struct TenancyUnique {
+    pub fields: Vec<String>,
+    pub where_clause: Option<String>,
+}
+
+/// One table the service's tenancy descriptor wants org-scoped.
+pub struct TenancyTableTarget {
+    /// Unqualified schema name (e.g. `party`).
+    pub schema: String,
+    /// Bare table name (e.g. `parties`).
+    pub table: String,
+    /// Whether root-node anchoring is allowed on this table (ADR-0028 shared rows).
+    pub allow_root: bool,
+    pub uniques: Vec<TenancyUnique>,
+}
+
+impl TenancyTableTarget {
+    pub fn qualified(&self) -> String {
+        format!("{}.{}", self.schema, self.table)
+    }
+
+    /// Same naming law as the module-emitted org fence, so `--check` finds
+    /// decorator policies by the name modules would have used.
+    pub fn policy_name(&self) -> String {
+        format!("{}_org_unit_isolation", self.table)
+    }
+
+    fn unique_index_name(&self, unique: &TenancyUnique) -> String {
+        format!("uq_{}_org_unit_id_{}", self.table, unique.fields.join("_"))
+    }
+}
+
+/// The decorator statements for one table, as `(up, down)`.
+///
+/// The column lands nullable, is backfilled from `company_id` when that column
+/// still exists (the org spine copied company ids verbatim — identity-stable),
+/// and is only then sealed `NOT NULL` with the acting-unit DEFAULT. An unbound
+/// insert (no `app.acting_unit_id` on the connection) violates NOT NULL loudly —
+/// the designed failure for scripts that forgot to bind a scope.
+pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
+    let qualified = target.qualified();
+    let policy = target.policy_name();
+    let (policy_up, policy_down) = org_rls_sql(&qualified, &policy);
+    let (guard_up, guard_down) = org_kind_guard_sql(&qualified, target.allow_root);
+
+    let mut up = String::new();
+    writeln!(
+        up,
+        "-- ══ {qualified}: install the org-unit scoping column (ADR-0029) ══"
+    )
+    .unwrap();
+    writeln!(up, "ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS org_unit_id uuid;").unwrap();
+    writeln!(up).unwrap();
+    writeln!(
+        up,
+        "-- Backfill only while the module still carries company_id (the org spine"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- copied company ids verbatim, so values are identity-stable); then seal."
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- Stripped and fresh-empty tables have no source column and nothing to move."
+    )
+    .unwrap();
+    writeln!(up, "DO $$").unwrap();
+    writeln!(up, "BEGIN").unwrap();
+    writeln!(
+        up,
+        "    IF EXISTS (SELECT 1 FROM information_schema.columns"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "               WHERE table_schema = '{}' AND table_name = '{}'",
+        target.schema, target.table
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "                 AND column_name = 'company_id') THEN"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "        UPDATE {qualified} SET org_unit_id = company_id WHERE org_unit_id IS NULL;"
+    )
+    .unwrap();
+    writeln!(up, "    END IF;").unwrap();
+    writeln!(
+        up,
+        "    IF EXISTS (SELECT 1 FROM {qualified} WHERE org_unit_id IS NULL) THEN"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "        RAISE EXCEPTION '{qualified}: rows with NULL org_unit_id and no company_id to backfill from — the org spine must cover every company before this table can be sealed';"
+    )
+    .unwrap();
+    writeln!(up, "    END IF;").unwrap();
+    writeln!(
+        up,
+        "    ALTER TABLE {qualified} ALTER COLUMN org_unit_id SET NOT NULL;"
+    )
+    .unwrap();
+    writeln!(up, "END $$;").unwrap();
+    writeln!(up).unwrap();
+    writeln!(
+        up,
+        "ALTER TABLE {qualified} ALTER COLUMN org_unit_id SET DEFAULT nullif(current_setting('app.acting_unit_id', true), '')::uuid;"
+    )
+    .unwrap();
+    writeln!(up).unwrap();
+    writeln!(
+        up,
+        "-- Fence + write-path kind guard + per-unit uniques: the ADR-0028 runtime"
+    )
+    .unwrap();
+    writeln!(up, "-- shape, installed by the composer.").unwrap();
+    up.push_str(&policy_up);
+    up.push('\n');
+    up.push_str(&guard_up);
+    for unique in &target.uniques {
+        let name = target.unique_index_name(unique);
+        let where_sql = unique
+            .where_clause
+            .as_deref()
+            .map(|w| format!(" WHERE {w}"))
+            .unwrap_or_default();
+        writeln!(
+            up,
+            "CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {qualified} (org_unit_id, {}){};",
+            unique.fields.join(", "),
+            where_sql
+        )
+        .unwrap();
+    }
+    writeln!(up).unwrap();
+
+    let mut down = String::new();
+    for unique in &target.uniques {
+        writeln!(
+            down,
+            "DROP INDEX IF EXISTS {};",
+            target.unique_index_name(unique)
+        )
+        .unwrap();
+    }
+    down.push_str(&guard_down);
+    down.push('\n');
+    down.push_str(&policy_down);
+    writeln!(
+        down,
+        "ALTER TABLE {qualified} ALTER COLUMN org_unit_id DROP DEFAULT;"
+    )
+    .unwrap();
+    writeln!(down, "ALTER TABLE {qualified} DROP COLUMN IF EXISTS org_unit_id;").unwrap();
+
+    (up, down)
+}
+
+/// The deny-by-default coverage event trigger, as `(up, down)`.
+///
+/// Any table later created in a scoped schema — by a module upgrade, by hand —
+/// gets RLS `ENABLE` + `FORCE` and a deny policy (`USING (false) WITH CHECK
+/// (false)`): locked for every role without `BYPASSRLS`, the table owner
+/// included, until the descriptor covers it. Fail loud, not leak. Recursion is
+/// structurally safe: the function's own DDL (ALTER TABLE / CREATE POLICY /
+/// COMMENT) carries command tags outside the filter's `IN`-list, so a nested
+/// firing is a no-op (proven on PostgreSQL 16). `pg_event_trigger_ddl_commands()`
+/// has no `object_name` column — `object_identity` arrives pre-quoted and is
+/// used verbatim, and the bare name for the policy comes from `pg_class`.
+pub fn tenancy_deny_event_trigger_sql(scoped_schemas: &[String]) -> (String, String) {
+    let schemas_sql = scoped_schemas
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut up = String::new();
+    writeln!(
+        up,
+        "-- ══ Deny-by-default coverage over the scoped schemas (ADR-0029) ══"
+    )
+    .unwrap();
+    writeln!(up, "CREATE SCHEMA IF NOT EXISTS tenancy;").unwrap();
+    writeln!(
+        up,
+        "CREATE OR REPLACE FUNCTION tenancy.deny_undecorated_table() RETURNS event_trigger"
+    )
+    .unwrap();
+    writeln!(up, "LANGUAGE plpgsql AS $$").unwrap();
+    writeln!(up, "DECLARE").unwrap();
+    writeln!(up, "    cmd record;").unwrap();
+    writeln!(up, "    t text;").unwrap();
+    writeln!(up, "BEGIN").unwrap();
+    writeln!(
+        up,
+        "    FOR cmd IN SELECT * FROM pg_event_trigger_ddl_commands()"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "             WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')"
+    )
+    .unwrap();
+    writeln!(up, "               AND schema_name IN ({schemas_sql})").unwrap();
+    writeln!(up, "    LOOP").unwrap();
+    writeln!(
+        up,
+        "        SELECT c.relname INTO t FROM pg_class c WHERE c.oid = cmd.objid;"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "        EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', cmd.object_identity);"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "        EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', cmd.object_identity);"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "        EXECUTE format('CREATE POLICY %I ON %s FOR ALL USING (false) WITH CHECK (false)', t || '_deny', cmd.object_identity);"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "        EXECUTE format('COMMENT ON POLICY %I ON %s IS ''tenancy: table created in a scoped schema without a tenancy descriptor entry — locked until the descriptor covers it (ADR-0029)''', t || '_deny', cmd.object_identity);"
+    )
+    .unwrap();
+    writeln!(up, "    END LOOP;").unwrap();
+    writeln!(up, "END $$;").unwrap();
+    writeln!(up).unwrap();
+    // No CREATE EVENT TRIGGER IF NOT EXISTS exists in PostgreSQL — the drop-first
+    // pair keeps an unrecorded re-run from dying on a duplicate object.
+    writeln!(up, "DROP EVENT TRIGGER IF EXISTS tenancy_deny_undecorated_table;").unwrap();
+    writeln!(
+        up,
+        "CREATE EVENT TRIGGER tenancy_deny_undecorated_table ON ddl_command_end"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "    EXECUTE FUNCTION tenancy.deny_undecorated_table();"
+    )
+    .unwrap();
+
+    let mut down = String::new();
+    writeln!(
+        down,
+        "DROP EVENT TRIGGER IF EXISTS tenancy_deny_undecorated_table;"
+    )
+    .unwrap();
+    writeln!(
+        down,
+        "DROP FUNCTION IF EXISTS tenancy.deny_undecorated_table();"
+    )
+    .unwrap();
+    // No CASCADE: if anything else moved into the schema, the drop fails loudly
+    // instead of taking it with the decorator.
+    writeln!(down, "DROP SCHEMA IF EXISTS tenancy;").unwrap();
+
+    (up, down)
+}
+
+/// The full decorator chain for a service, as `(up, down)`.
+///
+/// Provenance note: this header deliberately does NOT carry the
+/// `Generated by metaphor-schema` marker — that exact string is what
+/// `schema generate --force` uses to sweep generated migrations, and the
+/// decorator is service-owned, not generator-swept.
+pub fn tenancy_decorator_chain(
+    targets: &[TenancyTableTarget],
+    scoped_schemas: &[String],
+) -> (String, String) {
+    let mut up = String::from(
+        "-- Tenancy decorator chain — emitted by `metaphor schema tenancy` from tenancy.yaml.\n\
+         -- Composition-installed tenancy (ADR-0029): modules ship no scoping columns; the\n\
+         -- composing service installs org-unit fencing on the tables its descriptor lists.\n\
+         -- Additive-only (nothing is removed — the module's own strip migration drops the\n\
+         -- legacy company artifacts once org_unit_id is populated) and re-runnable (every\n\
+         -- statement is guarded; a partially-applied file converges on re-run).\n\n",
+    );
+    let mut down = String::from(
+        "-- Tenancy decorator reversal — emitted by `metaphor schema tenancy`.\n\
+         -- Drops the decorator's artifacts. Destructive: org_unit_id and its data are\n\
+         -- removed (a dev-stage posture; the up chain can re-backfill from company_id\n\
+         -- only while that column still exists).\n\n",
+    );
+
+    for target in targets {
+        let (t_up, t_down) = tenancy_table_sql(target);
+        up.push_str(&t_up);
+        down.push_str(&t_down);
+        down.push('\n');
+    }
+
+    if !scoped_schemas.is_empty() {
+        let (e_up, e_down) = tenancy_deny_event_trigger_sql(scoped_schemas);
+        up.push_str(&e_up);
+        down.push_str(&e_down);
+    }
+
+    (up, down)
+}
+
 /// Generates SQL migrations from schema
 pub struct SqlGenerator {
     version: Option<String>,

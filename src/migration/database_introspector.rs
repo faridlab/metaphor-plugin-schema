@@ -72,6 +72,12 @@ impl DatabaseIntrospector {
                     // against it emits a full install (DROP IF EXISTS + new template),
                     // which is correct regardless of which template was live before.
                     company_fence: None,
+                    // And the same trio for the org key (ADR-0028): the introspected
+                    // side never decides fence posture — only the schema-derived `new`
+                    // snapshot does — so all three stay neutral.
+                    org_scoped: false,
+                    org_root_shared: false,
+                    org_fence: None,
                 },
             );
         }

@@ -12,6 +12,7 @@ mod migrations;
 mod module_loader;
 mod openapi_collect;
 mod parse;
+mod tenancy;
 mod undeclared;
 mod validate;
 mod validate_workspace;
@@ -24,6 +25,7 @@ use doctor::execute_doctor;
 use generate::execute_generate;
 use migration_cmd::{execute_migration, execute_status};
 use parse::execute_parse;
+use tenancy::execute_tenancy;
 use undeclared::execute_undeclared;
 use validate::execute_validate;
 use validate_workspace::execute_validate_workspace;
@@ -279,6 +281,32 @@ pub enum SchemaAction {
         /// Consumer app/project name (auto-detected from CWD if omitted)
         module: Option<String>,
     },
+    /// Emit or verify the composition-installed tenancy decorator (ADR-0029)
+    ///
+    /// Reads the composing backend-service's `tenancy.yaml` descriptor and
+    /// resolves each listed table against the workspace's module schemas.
+    /// Default mode writes the decorator migration chain (ADD COLUMN
+    /// org_unit_id with guarded company_id backfill, org RLS policy, kind
+    /// guard, per-unit uniques, deny-by-default event trigger) into
+    /// `--output` (the service's migrations/ dir). The chain is service-owned:
+    /// list it under `user_owned:` in metaphor.codegen.yaml.
+    Tenancy {
+        /// Directory to write the migration pair into (default: migrations/)
+        #[arg(short, long, default_value = "migrations")]
+        output: PathBuf,
+
+        /// Print the chain without writing files
+        #[arg(long)]
+        preview: bool,
+
+        /// Coverage doctor: verify a live database against the descriptor
+        #[arg(long)]
+        check: bool,
+
+        /// Database URL for --check (falls back to DATABASE_URL env)
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, clap::ValueEnum)]
@@ -366,5 +394,11 @@ pub fn execute(action: SchemaAction) -> Result<()> {
             execute_undeclared(&module)
         }
         SchemaAction::OpenapiCollect { module } => openapi_collect::execute_openapi_collect(module),
+        SchemaAction::Tenancy {
+            output,
+            preview,
+            check,
+            database_url,
+        } => execute_tenancy(&output, preview, check, database_url),
     }
 }
