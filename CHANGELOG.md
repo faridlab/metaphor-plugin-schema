@@ -7,6 +7,19 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-09-09
+
+### Fixed
+
+- **Expression fields in per-unit uniques no longer break index names.** A descriptor unique may
+  name an expression column (`lower(name)` — case-insensitive uniqueness walls are a legitimate
+  ask), and the column list always carried it verbatim, but the derived index identifier joined
+  the raw fields, so `uq_tags_org_unit_id_lower(name)` — not a legal identifier — was emitted
+  (and `--check` looked for the same broken name). The name law now collapses every run of
+  characters outside `[A-Za-z0-9_]` into a single `_` (`lower(name)` → `lower_name`); plain
+  columns pass through unchanged. Emission and `--check` share one derivation, so the chain and
+  its verification stay welded.
+
 ## [0.15.1] — 2026-09-09
 
 ### Added

@@ -362,11 +362,9 @@ async fn check_coverage(
         }
 
         for unique in &target.uniques {
-            let name = format!(
-                "uq_{}_org_unit_id_{}",
-                target.table,
-                unique.fields.join("_")
-            );
+            // Same derivation as the emitter — expression fields (`lower(name)`)
+            // sanitize to identifier-safe name parts on both sides.
+            let name = target.unique_index_name(unique);
             let idx: Option<(String,)> = sqlx::query_as(
                 "SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = $2 \
                  AND indexname = $3",
@@ -492,6 +490,35 @@ mod tests {
     fn empty_scoped_schemas_omits_event_trigger() {
         let (up, _down) = tenancy_decorator_chain(&[sample_target()], &[]);
         assert!(!up.contains("CREATE EVENT TRIGGER"));
+    }
+
+    #[test]
+    fn expression_fields_get_identifier_safe_index_names() {
+        let target = TenancyTableTarget {
+            schema: "blog".into(),
+            table: "tags".into(),
+            allow_root: false,
+            uniques: vec![
+                TenancyUnique {
+                    fields: vec!["lower(name)".into()],
+                    where_clause: None,
+                },
+                TenancyUnique {
+                    fields: vec!["slug".into()],
+                    where_clause: None,
+                },
+            ],
+        };
+        let (up, down) = tenancy_decorator_chain(&[target], &["blog".to_string()]);
+
+        // The expression rides verbatim into the column list…
+        assert!(up.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_org_unit_id_lower_name ON blog.tags (org_unit_id, lower(name));"
+        ));
+        // …while its punctuation never leaks into the identifier itself.
+        assert!(!up.contains("uq_tags_org_unit_id_lower(name)"));
+        assert!(down.contains("DROP INDEX IF EXISTS uq_tags_org_unit_id_lower_name;"));
+        assert!(down.contains("DROP INDEX IF EXISTS uq_tags_org_unit_id_slug;"));
     }
 
     #[test]

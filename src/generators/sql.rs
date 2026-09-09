@@ -599,8 +599,38 @@ impl TenancyTableTarget {
         format!("{}_org_unit_isolation", self.table)
     }
 
-    fn unique_index_name(&self, unique: &TenancyUnique) -> String {
-        format!("uq_{}_org_unit_id_{}", self.table, unique.fields.join("_"))
+    /// Derives the per-unit index name from the unique's fields.
+    ///
+    /// Fields may be expressions (`lower(name)`) — case-insensitive uniqueness
+    /// walls are a legitimate descriptor ask — but an identifier can't carry
+    /// the punctuation those bring. Every run of characters outside
+    /// `[A-Za-z0-9_]` collapses to a single `_` (edges trimmed), so
+    /// `lower(name)` names as `lower_name` while plain columns pass through
+    /// untouched. `--check` re-derives through this same method, keeping the
+    /// emission and verification laws welded. A table that genuinely has a
+    /// column spelled like a sanitized expression would collide — rename one
+    /// of the two uniques in the descriptor.
+    pub fn unique_index_name(&self, unique: &TenancyUnique) -> String {
+        let joined = unique
+            .fields
+            .iter()
+            .map(|f| {
+                let mut sanitized = String::new();
+                let mut in_run = false;
+                for c in f.chars() {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        sanitized.push(c);
+                        in_run = false;
+                    } else if !in_run {
+                        sanitized.push('_');
+                        in_run = true;
+                    }
+                }
+                sanitized.trim_matches('_').to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("_");
+        format!("uq_{}_org_unit_id_{}", self.table, joined)
     }
 }
 
