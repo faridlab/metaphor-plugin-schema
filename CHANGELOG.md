@@ -7,6 +7,20 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-09-09
+
+### Added
+
+- **Insert-path unit stamp in the tenancy decorator.** Every decorated table now also gets a
+  `BEFORE INSERT` trigger (`<table>_org_unit_fill`) that fills a NULL `org_unit_id` from the
+  acting-unit session variable. The column DEFAULT only applies when an INSERT omits the column —
+  a writer that names every column (an ORM mapping the whole row type) inserts an explicit NULL
+  and bypasses it, so such writes failed the kind guard with `<NULL>`. The stamp's name sorts
+  ahead of the kind guard's, so the guard validates the stamped id and the row-level-security
+  `WITH CHECK` — evaluated after BEFORE triggers — sees the final row. An unbound scope stays
+  NULL and is still refused loudly; stamping never widens what an unscoped writer can do.
+  `metaphor schema tenancy --check` now verifies the trigger per table alongside the kind guard.
+
 ## [0.15.0] — 2026-09-08
 
 ### Added

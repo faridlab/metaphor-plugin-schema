@@ -390,6 +390,83 @@ pub fn org_rls_sql(table_ref: &str, policy_name: &str) -> (String, String) {
     (up, down)
 }
 
+/// The insert-path unit stamp for one org-scoped table (ADR-0029), as `(up, down)`:
+/// a trigger function + `BEFORE INSERT` trigger that fills a NULL `org_unit_id`
+/// from the acting-unit session variable.
+///
+/// The column DEFAULT already resolves `app.acting_unit_id`, but a DEFAULT only
+/// applies when the INSERT omits the column — a writer that names every column
+/// (an ORM mapping the whole row type) inserts an explicit NULL and bypasses it.
+/// The stamp runs ahead of the kind guard (this trigger's name sorts first, and
+/// same-event triggers fire in name order), so the guard validates the stamped
+/// id and the row-level-security `WITH CHECK` — evaluated after BEFORE triggers
+/// — sees the final row. An unbound scope leaves the NULL in place, and the
+/// NOT NULL constraint or kind guard still refuses loudly: stamping never
+/// widens what an unscoped writer can do.
+///
+/// `table_ref` is the qualified `schema.table`; the function lives in the
+/// table's own schema, mirroring the kind guard's placement and naming.
+pub fn org_unit_fill_sql(table_ref: &str) -> (String, String) {
+    let bare = table_ref.rsplit('.').next().unwrap_or(table_ref);
+    let fn_name = format!("{bare}_org_unit_fill");
+    let fn_ref = match table_ref.rsplit_once('.') {
+        Some((schema, _)) => format!("{schema}.{fn_name}"),
+        None => fn_name.clone(),
+    };
+    let mut up = String::new();
+    writeln!(
+        up,
+        "-- Insert-path unit stamp (ADR-0029): fill a NULL org_unit_id from the"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- acting-unit session variable before the kind guard runs (trigger"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- names sort first). Writers that name every column — an ORM mapping"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- the whole row type — insert an explicit NULL that bypasses the"
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "-- column DEFAULT; an unbound scope stays NULL and is refused loudly."
+    )
+    .unwrap();
+    writeln!(
+        up,
+        "CREATE OR REPLACE FUNCTION {fn_ref}() RETURNS trigger AS $$"
+    )
+    .unwrap();
+    writeln!(up, "BEGIN").unwrap();
+    writeln!(up, "    IF NEW.org_unit_id IS NULL THEN").unwrap();
+    writeln!(
+        up,
+        "        NEW.org_unit_id := nullif(current_setting('app.acting_unit_id', true), '')::uuid;"
+    )
+    .unwrap();
+    writeln!(up, "    END IF;").unwrap();
+    writeln!(up, "    RETURN NEW;").unwrap();
+    writeln!(up, "END;").unwrap();
+    writeln!(up, "$$ LANGUAGE plpgsql;").unwrap();
+    writeln!(up).unwrap();
+    writeln!(up, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
+    writeln!(up, "CREATE TRIGGER {fn_name}").unwrap();
+    writeln!(up, "    BEFORE INSERT ON {table_ref}").unwrap();
+    writeln!(up, "    FOR EACH ROW EXECUTE FUNCTION {fn_ref}();").unwrap();
+
+    let mut down = String::new();
+    writeln!(down, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
+    writeln!(down, "DROP FUNCTION IF EXISTS {fn_ref}();").unwrap();
+    (up, down)
+}
+
 /// The write-path kind guard for one org-scoped table (ADR-0028), as `(up, down)`:
 /// a trigger function + `BEFORE INSERT OR UPDATE OF org_unit_id` trigger that
 /// rejects ids not naming a node of the allowed kinds in `organization.org_units`.
@@ -539,6 +616,7 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
     let policy = target.policy_name();
     let (policy_up, policy_down) = org_rls_sql(&qualified, &policy);
     let (guard_up, guard_down) = org_kind_guard_sql(&qualified, target.allow_root);
+    let (fill_up, fill_down) = org_unit_fill_sql(&qualified);
 
     let mut up = String::new();
     writeln!(
@@ -620,6 +698,7 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
     up.push_str(&policy_up);
     up.push('\n');
     up.push_str(&guard_up);
+    up.push_str(&fill_up);
     for unique in &target.uniques {
         let name = target.unique_index_name(unique);
         let where_sql = unique
@@ -647,6 +726,8 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
         .unwrap();
     }
     down.push_str(&guard_down);
+    down.push('\n');
+    down.push_str(&fill_down);
     down.push('\n');
     down.push_str(&policy_down);
     writeln!(

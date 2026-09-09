@@ -341,6 +341,26 @@ async fn check_coverage(
             ));
         }
 
+        // The insert-path unit stamp: same introspection as the guard, and its
+        // name must sort before the guard's so it stamps NULL ids first.
+        let fill: Option<(String,)> = sqlx::query_as(
+            "SELECT tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relname = $2 AND t.tgname = $3 AND NOT t.tgisinternal",
+        )
+        .bind(&target.schema)
+        .bind(&target.table)
+        .bind(format!("{}_org_unit_fill", target.table))
+        .fetch_optional(&pool)
+        .await
+        .context("trigger introspection failed")?;
+        if fill.is_none() {
+            gaps.push(format!(
+                "{qualified}: unit-fill trigger {}_org_unit_fill missing",
+                target.table
+            ));
+        }
+
         for unique in &target.uniques {
             let name = format!(
                 "uq_{}_org_unit_id_{}",
@@ -429,6 +449,13 @@ mod tests {
         assert!(up.contains("app.acting_unit_id"));
         assert!(up.contains("parties_org_unit_isolation"));
         assert!(up.contains("parties_org_unit_kind_guard"));
+        assert!(up.contains("parties_org_unit_fill"));
+        assert!(up.contains("CREATE TRIGGER parties_org_unit_fill"));
+        assert!(up.contains("BEFORE INSERT ON party.parties"));
+        // The stamp resolves the acting unit and leaves unbound scopes NULL.
+        assert!(up.contains(
+            "nullif(current_setting('app.acting_unit_id', true), '')::uuid"
+        ));
         assert!(up.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_parties_org_unit_id_party_code"));
         assert!(up.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_parties_org_unit_id_npwp"));
         assert!(up.contains("WHERE npwp IS NOT NULL"));
@@ -456,6 +483,8 @@ mod tests {
         let uniques_pos = down.find("DROP INDEX IF EXISTS uq_parties_org_unit_id_party_code");
         let column_pos = down.find("DROP COLUMN IF EXISTS org_unit_id");
         assert!(uniques_pos.unwrap() < column_pos.unwrap());
+        assert!(down.contains("DROP TRIGGER IF EXISTS parties_org_unit_fill"));
+        assert!(down.contains("DROP FUNCTION IF EXISTS party.parties_org_unit_fill"));
         assert!(down.contains("DROP EVENT TRIGGER IF EXISTS tenancy_deny_undecorated_table"));
     }
 
