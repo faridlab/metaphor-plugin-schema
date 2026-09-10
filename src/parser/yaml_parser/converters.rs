@@ -164,6 +164,13 @@ impl YamlModel {
             model.attributes.push(Attribute::new("read_only"));
         }
 
+        // Enroll in data-change audit capture (ADR-0025): the generator emits
+        // the per-table trigger migration calling the composed auditlog
+        // module's capture function.
+        if self.audited == Some(true) {
+            model.attributes.push(Attribute::new("audited"));
+        }
+
         // Combine local types with shared types for lookup (local takes precedence)
         let mut all_types = shared_types.clone();
         for (name, fields) in local_types {

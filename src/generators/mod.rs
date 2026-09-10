@@ -4,6 +4,7 @@
 //! into various output formats.
 
 pub mod audit_triggers;
+pub mod data_change_audit;
 pub mod auth;
 pub mod bulk_operations;
 pub mod computed;
@@ -44,6 +45,7 @@ pub mod handlers_module;
 pub mod routes_composer;
 
 pub use audit_triggers::AuditTriggersGenerator;
+pub use data_change_audit::DataChangeAuditGenerator;
 pub use auth::AuthGenerator;
 pub use bulk_operations::BulkOperationsGenerator;
 pub use computed::ComputedGenerator;
@@ -546,6 +548,7 @@ pub fn generate_all_with_options(
             GenerationTarget::Seeder,
             GenerationTarget::IntegrationTest,
             GenerationTarget::AuditTriggers,
+            GenerationTarget::DataChangeAudit,
             // Framework compliance generators
             GenerationTarget::AppState,
             GenerationTarget::RoutesComposer,
@@ -604,6 +607,9 @@ pub fn generate_all_with_options(
                         IntegrationTestGenerator::new().generate(s)?
                     }
                     GenerationTarget::AuditTriggers => AuditTriggersGenerator::new().generate(s)?,
+                    GenerationTarget::DataChangeAudit => {
+                        DataChangeAuditGenerator::new().generate(s)?
+                    }
                     // Framework compliance generators
                     GenerationTarget::AppState => AppStateGenerator::new().generate(s)?,
                     GenerationTarget::RoutesComposer => {
@@ -661,6 +667,7 @@ pub enum GenerationTarget {
     Seeder,
     IntegrationTest,
     AuditTriggers,
+    DataChangeAudit,
     // Framework compliance targets
     AppState,
     RoutesComposer,
@@ -712,6 +719,9 @@ impl GenerationTarget {
             "audit-triggers" | "audit_triggers" | "audit-trigger" | "audit_trigger" => {
                 Some(Self::AuditTriggers)
             }
+            "data-change-audit" | "data_change_audit" | "audited" | "data-audit" => {
+                Some(Self::DataChangeAudit)
+            }
             // Framework compliance generators
             "app-state" | "app_state" | "appstate" => Some(Self::AppState),
             "routes-composer" | "routes_composer" => Some(Self::RoutesComposer),
@@ -756,6 +766,7 @@ impl GenerationTarget {
             Self::Seeder,
             Self::IntegrationTest,
             Self::AuditTriggers,
+            Self::DataChangeAudit,
             // Framework compliance generators
             Self::AppState,
             Self::RoutesComposer,

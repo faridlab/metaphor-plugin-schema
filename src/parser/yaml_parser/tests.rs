@@ -1117,3 +1117,46 @@ models:
         );
     }
 }
+
+#[test]
+fn test_audited_key_sets_the_audited_attribute() {
+    let yaml = r#"
+models:
+  - name: Quote
+    collection: quotes
+    audited: true
+    fields:
+      id: uuid
+      label: string
+"#;
+    let schema = parse_model_yaml_str(yaml).unwrap();
+    let model = schema
+        .models
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_model_with_context(&IndexMap::new(), &IndexMap::new())
+        .unwrap();
+    assert!(
+        model.has_attribute("audited"),
+        "audited: true must set the @audited model attribute"
+    );
+
+    // Absent key → no attribute (enrollment is per-model opt-in).
+    let yaml = r#"
+models:
+  - name: Draft
+    collection: drafts
+    fields:
+      id: uuid
+"#;
+    let schema = parse_model_yaml_str(yaml).unwrap();
+    let model = schema
+        .models
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_model_with_context(&IndexMap::new(), &IndexMap::new())
+        .unwrap();
+    assert!(!model.has_attribute("audited"));
+}

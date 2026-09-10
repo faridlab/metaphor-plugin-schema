@@ -73,6 +73,7 @@ fn target_label(t: &GenerationTarget) -> &'static str {
         GenerationTarget::Seeder => "seeder",
         GenerationTarget::IntegrationTest => "integration-test",
         GenerationTarget::AuditTriggers => "audit-triggers",
+        GenerationTarget::DataChangeAudit => "data-change-audit",
         GenerationTarget::AppState => "app-state",
         GenerationTarget::RoutesComposer => "routes-composer",
         GenerationTarget::HandlersModule => "handlers-module",

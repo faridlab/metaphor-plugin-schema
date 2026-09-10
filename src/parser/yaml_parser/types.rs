@@ -127,6 +127,13 @@ pub struct YamlModel {
     /// be created/updated/deleted through generic CRUD.
     #[serde(default)]
     pub read_only: Option<bool>,
+    /// Enroll this entity in data-change audit capture (ADR-0025): the
+    /// generator emits one migration per audited table attaching the
+    /// row-level trigger that calls the composed backbone-auditlog module's
+    /// capture function. Every INSERT/UPDATE/DELETE lands in the central
+    /// audit trail inside the same transaction.
+    #[serde(default)]
+    pub audited: Option<bool>,
     /// Extend shared types - fields from these types are injected into the model as table columns
     /// Example: extends: [Metadata] will inject created_at, updated_at, etc. as columns
     #[serde(default)]
