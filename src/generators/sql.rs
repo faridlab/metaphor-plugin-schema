@@ -630,7 +630,16 @@ impl TenancyTableTarget {
             })
             .collect::<Vec<_>>()
             .join("_");
+        // PostgreSQL truncates identifiers to 63 bytes (NAMEDATALEN - 1) when they
+        // land in the catalog: a longer CREATE INDEX name is stored truncated, so a
+        // check comparing the untruncated derivation would report an existing index
+        // as missing. Cap the derivation at the same limit — the emitted name and
+        // the verified name stay welded to what the catalog actually holds. The
+        // sanitized parts are ASCII, so bytes and chars coincide.
         format!("uq_{}_org_unit_id_{}", self.table, joined)
+            .chars()
+            .take(63)
+            .collect()
     }
 }
 
