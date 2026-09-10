@@ -722,6 +722,13 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
     .unwrap();
     writeln!(up, "END $$;").unwrap();
     writeln!(up).unwrap();
+    // The migration runs in one transaction, and modules may declare family
+    // constraints DEFERRABLE INITIALLY DEFERRED — their checks would fire at
+    // COMMIT, outside this migration's own error context. Force them to
+    // validate here, right after the rows moved, so a violation names this
+    // migration instead of surfacing as an opaque commit-time failure.
+    writeln!(up, "SET CONSTRAINTS ALL IMMEDIATE;").unwrap();
+    writeln!(up).unwrap();
     writeln!(
         up,
         "ALTER TABLE {qualified} ALTER COLUMN org_unit_id SET DEFAULT nullif(current_setting('app.acting_unit_id', true), '')::uuid;"
@@ -2756,6 +2763,39 @@ fn resolve_relation_target_table(
 mod tests {
     use super::*;
     use crate::ast::{Attribute, AttributeValue, ModuleSchema, PrimitiveType};
+
+    #[test]
+    fn tenancy_seal_forces_deferred_constraints_to_check_inside_the_migration() {
+        let target = TenancyTableTarget {
+            schema: "party".to_string(),
+            table: "parties".to_string(),
+            allow_root: false,
+            uniques: vec![TenancyUnique {
+                fields: vec!["name".to_string()],
+                where_clause: None,
+            }],
+        };
+        let (up, _down) = tenancy_table_sql(&target);
+        // The seal DO-block must be followed by an immediate-constraints switch:
+        // deferred family checks would otherwise fire at COMMIT, outside the
+        // migration's own error context.
+        let seal_end = up
+            .find("END $$;")
+            .expect("the seal DO-block terminator");
+        let set_pos = up
+            .find("SET CONSTRAINTS ALL IMMEDIATE;")
+            .expect("the immediate-constraints statement");
+        assert!(
+            set_pos > seal_end,
+            "SET CONSTRAINTS must follow the seal block:\n{up}"
+        );
+        // It is its own statement, terminated for the migration runner.
+        let stmt = &up[set_pos..];
+        assert!(
+            stmt.starts_with("SET CONSTRAINTS ALL IMMEDIATE;"),
+            "the statement carries its own terminator:\n{up}"
+        );
+    }
 
     fn create_test_model() -> Model {
         let mut model = Model::new("User");
