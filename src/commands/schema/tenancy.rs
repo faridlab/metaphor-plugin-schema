@@ -112,7 +112,27 @@ pub(super) fn execute_tenancy(
     let stem = if descriptor.scoped_schemas.is_empty() {
         "tenancy".to_string()
     } else {
-        format!("tenancy_{}", descriptor.scoped_schemas.join("_"))
+        // Path components cap at 255 bytes on the common filesystems, and the
+        // schema enumeration grows with every module a service composes, so an
+        // unbounded join eventually fails to write. Cap the enumeration and
+        // pin the full list with a short stable digest (FNV-1a over the exact
+        // joined string): the same descriptor always emits the same stem, and
+        // two descriptors that differ only past the cap still get different
+        // names instead of colliding on a shared truncation.
+        let joined = descriptor.scoped_schemas.join("_");
+        const CAP: usize = 160;
+        if joined.len() <= CAP {
+            format!("tenancy_{joined}")
+        } else {
+            let digest = joined
+                .bytes()
+                .fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+            let mut cut = CAP;
+            while !joined.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            format!("tenancy_{}_{digest:08x}", &joined[..cut])
+        }
     };
     fs::create_dir_all(output)?;
     let up_path = output.join(format!("{ts}_{stem}.up.sql"));
