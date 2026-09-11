@@ -712,7 +712,16 @@ impl DtoGenerator {
             } else if self.is_auto_field(&field.name) {
                 // other auto fields (created_at, updated_at, etc.) are Option<T>, initialize to None
                 let field_name = escape_rust_keyword(&field.name);
-                writeln!(output, "            {}: None,", field_name).unwrap();
+                if self.is_field_optional(model, &field.name) {
+                    writeln!(output, "            {}: None,", field_name).unwrap();
+                } else if matches!(field.type_ref, TypeRef::Primitive(PrimitiveType::Json)) {
+                    // a non-optional raw json field renders as serde_json::Value in the
+                    // entity — mirror the column default so generic creates don't write
+                    // an explicit NULL into a NOT NULL column
+                    writeln!(output, "            {}: serde_json::json!({{}}),", field_name).unwrap();
+                } else {
+                    writeln!(output, "            {}: Default::default(),", field_name).unwrap();
+                }
             } else if self.is_excluded_from_dto(field) {
                 // @exclude_from_dto fields are absent from the Create DTO — default them
                 // (the field's type must implement Default, or carry @default at the DB layer).
