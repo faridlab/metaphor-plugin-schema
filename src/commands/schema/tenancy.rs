@@ -21,7 +21,7 @@ use colored::Colorize;
 use serde::Deserialize;
 
 use crate::generators::sql::{
-    tenancy_decorator_chain, TenancyTableTarget, TenancyUnique,
+    tenancy_decorator_chain, tenancy_table_sql, TenancyTableTarget, TenancyUnique,
 };
 
 use super::discovery::find_schema_files;
@@ -536,6 +536,28 @@ mod tests {
     fn empty_scoped_schemas_omits_event_trigger() {
         let (up, _down) = tenancy_decorator_chain(&[sample_target()], &[]);
         assert!(!up.contains("CREATE EVENT TRIGGER"));
+    }
+
+    #[test]
+    fn allow_root_tables_gain_a_root_anchor_backfill_arm() {
+        let target = TenancyTableTarget {
+            schema: "inventory".into(),
+            table: "locations".into(),
+            allow_root: true,
+            uniques: vec![],
+        };
+        let (up, _down) = tenancy_decorator_chain(&[target], &["inventory".to_string()]);
+
+        // Shared rows (never company-owned) anchor at the tenant's root node — the
+        // one node every entitled scope union contains.
+        assert!(up.contains("WHERE kind = 'root' ORDER BY id LIMIT 1"));
+        // And the seal names the missing root when it fires.
+        assert!(up.contains("no root org node to anchor shared rows"));
+
+        // A strict table gets neither the arm nor the root-flavored seal message.
+        let (strict_up, _strict_down) = tenancy_table_sql(&sample_target());
+        assert!(!strict_up.contains("WHERE kind = 'root' ORDER BY id LIMIT 1"));
+        assert!(!strict_up.contains("no root org node to anchor shared rows"));
     }
 
     #[test]

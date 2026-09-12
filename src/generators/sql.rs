@@ -650,6 +650,11 @@ impl TenancyTableTarget {
 /// and is only then sealed `NOT NULL` with the acting-unit DEFAULT. An unbound
 /// insert (no `app.acting_unit_id` on the connection) violates NOT NULL loudly —
 /// the designed failure for scripts that forgot to bind a scope.
+///
+/// `allow_root` tables carry an extra backfill arm: shared rows that never had a
+/// company (NULL `company_id`) anchor at the tenant's root org node instead of
+/// failing the seal — the root is the one node every entitled scope union
+/// contains, so a root-anchored row is visible to every scope that should see it.
 pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
     let qualified = target.qualified();
     let policy = target.policy_name();
@@ -675,6 +680,18 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
         "-- copied company ids verbatim, so values are identity-stable); then seal."
     )
     .unwrap();
+    if target.allow_root {
+        writeln!(
+            up,
+            "-- Shared rows anchor at the tenant root (the one node every entitled"
+        )
+        .unwrap();
+        writeln!(
+            up,
+            "-- scope union contains) when they never carried a company."
+        )
+        .unwrap();
+    }
     writeln!(
         up,
         "-- Stripped and fresh-empty tables have no source column and nothing to move."
@@ -704,16 +721,36 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
     )
     .unwrap();
     writeln!(up, "    END IF;").unwrap();
+    if target.allow_root {
+        // The subquery yields NULL when the spine has no root node — the UPDATE
+        // then sets NULL over NULL (a no-op) and the seal below fires loudly, so
+        // a mis-provisioned spine cannot pass silently.
+        writeln!(up, "    UPDATE {qualified}").unwrap();
+        writeln!(
+            up,
+            "       SET org_unit_id = (SELECT id FROM organization.org_units WHERE kind = 'root' ORDER BY id LIMIT 1)"
+        )
+        .unwrap();
+        writeln!(up, "     WHERE org_unit_id IS NULL;").unwrap();
+    }
     writeln!(
         up,
         "    IF EXISTS (SELECT 1 FROM {qualified} WHERE org_unit_id IS NULL) THEN"
     )
     .unwrap();
-    writeln!(
-        up,
-        "        RAISE EXCEPTION '{qualified}: rows with NULL org_unit_id and no company_id to backfill from — the org spine must cover every company before this table can be sealed';"
-    )
-    .unwrap();
+    if target.allow_root {
+        writeln!(
+            up,
+            "        RAISE EXCEPTION '{qualified}: rows with NULL org_unit_id remain — no company_id to backfill from and no root org node to anchor shared rows; provision the tenant root before this table can be sealed';"
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            up,
+            "        RAISE EXCEPTION '{qualified}: rows with NULL org_unit_id and no company_id to backfill from — the org spine must cover every company before this table can be sealed';"
+        )
+        .unwrap();
+    }
     writeln!(up, "    END IF;").unwrap();
     writeln!(
         up,
