@@ -46,6 +46,17 @@ pub(crate) struct TenancyTableEntry {
     module: String,
     /// Bare table name as the module's model collection (`parties`).
     table: String,
+    /// Explicit Postgres schema for a `migration_only` table — the module's
+    /// models cannot supply it, so the descriptor must.
+    #[serde(default)]
+    schema: Option<String>,
+    /// The table lives in the module's SQL migrations, not its schema models
+    /// (no model to resolve): skip the model lookup and trust `schema`.
+    /// Resolution still requires the module to be a workspace project and the
+    /// schema to be in `scoped_schemas`; a typo'd table name dies at
+    /// `--check`, which introspects the live database per target.
+    #[serde(default)]
+    migration_only: bool,
     /// Kind-guard allowance for root-node anchoring (tenant-shared rows).
     #[serde(default)]
     allow_root: bool,
@@ -196,44 +207,59 @@ fn resolve_targets(cwd: &Path, descriptor: &TenancyDescriptor) -> Result<Vec<Ten
         let project = ws
             .project_by_name(&entry.module)
             .with_context(|| format!("module '{}' is not a project in metaphor.yaml", entry.module))?;
-        let schema_dir = ws.project_path(project).join("schema");
-        anyhow::ensure!(
-            schema_dir.is_dir(),
-            "project '{}' has no schema/ directory ({})",
-            entry.module,
-            schema_dir.display()
-        );
-        let files = find_schema_files(&schema_dir)?;
-        let (module_schema, parse_errors) = build_module_schema(&entry.module, &files)?;
-        anyhow::ensure!(
-            parse_errors.is_empty(),
-            "module '{}' has schema parse errors: {parse_errors:?}",
-            entry.module
-        );
 
-        let model = module_schema
-            .models
-            .iter()
-            .find(|m| m.collection_name() == entry.table)
-            .with_context(|| {
+        let schema = if entry.migration_only {
+            // Migration-only table: no model to resolve against — the
+            // descriptor names the schema explicitly.
+            entry.schema.clone().with_context(|| {
                 format!(
-                    "module '{}' defines no table '{}' (collections: {})",
-                    entry.module,
-                    entry.table,
-                    module_schema
-                        .models
-                        .iter()
-                        .map(|m| m.collection_name())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "table '{}.{}' is migration_only but declares no schema: — \
+                     the module's models cannot supply it, the descriptor must",
+                    entry.module, entry.table
                 )
-            })?;
+            })?
+        } else {
+            let schema_dir = ws.project_path(project).join("schema");
+            anyhow::ensure!(
+                schema_dir.is_dir(),
+                "project '{}' has no schema/ directory ({})",
+                entry.module,
+                schema_dir.display()
+            );
+            let files = find_schema_files(&schema_dir)?;
+            let (module_schema, parse_errors) = build_module_schema(&entry.module, &files)?;
+            anyhow::ensure!(
+                parse_errors.is_empty(),
+                "module '{}' has schema parse errors: {parse_errors:?}",
+                entry.module
+            );
 
-        let schema = model
-            .schema
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "public".to_string());
+            let model = module_schema
+                .models
+                .iter()
+                .find(|m| m.collection_name() == entry.table)
+                .with_context(|| {
+                    format!(
+                        "module '{}' defines no table '{}' (collections: {}) — \
+                         if the table exists only in the module's SQL migrations, \
+                         mark the entry migration_only: true and name its schema:",
+                        entry.module,
+                        entry.table,
+                        module_schema
+                            .models
+                            .iter()
+                            .map(|m| m.collection_name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
+
+            model
+                .schema
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "public".to_string())
+        };
         anyhow::ensure!(
             descriptor.scoped_schemas.contains(&schema),
             "table {}.{} resolves to schema '{}' which is not in scoped_schemas — \
@@ -565,6 +591,28 @@ tables:
             d.tables[0].uniques[0].r#where.as_deref(),
             Some("(metadata->>'deleted_at') IS NULL")
         );
+    }
+
+    #[test]
+    fn descriptor_parses_migration_only_entries() {
+        let yaml = "\
+version: 1
+scoped_schemas: [party, promo]
+tables:
+  - module: backbone-party
+    table: parties
+    allow_root: false
+  - module: backbone-promo
+    table: coupon_claims
+    schema: promo
+    migration_only: true
+    allow_root: false
+";
+        let d: TenancyDescriptor = serde_yaml::from_str(yaml).unwrap();
+        assert!(!d.tables[0].migration_only);
+        assert_eq!(d.tables[0].schema, None);
+        assert!(d.tables[1].migration_only);
+        assert_eq!(d.tables[1].schema.as_deref(), Some("promo"));
     }
 
     #[test]
