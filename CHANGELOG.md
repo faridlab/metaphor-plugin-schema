@@ -7,6 +7,29 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.16.6] — 2026-09-14
+
+### Fixed
+
+- Module-level hook files are read instead of silently discarded. A hook file
+  that states module-wide invariants names its `module:`; only an entity-level
+  one names a `model:`. Two things conspired to drop the former: the
+  list-format parser required `model:` and gave up when it was absent, and the
+  index detector treated any file carrying `module:` as an index. The caller
+  accepts only a hook, so an index verdict surfaced as "unparseable" — and
+  since a parse failure is a warning that still exits zero, nineteen modules'
+  rule registers vanished from generated output with no signal beyond a line in
+  the log.
+
+  A file that declares its own `rules:` is now a hook whatever else it carries,
+  and the list parser accepts `module:` alongside `model:`.
+
+- The list form's `assert:` and `error_code:` are carried instead of dropped.
+  `assert:` is that dialect's spelling of the human statement of an invariant,
+  so it lands in `message`; it is prose, not an evaluable expression, and is
+  deliberately never promoted to `condition`, which would generate validation
+  code from a sentence.
+
 ## [0.15.2] — 2026-09-09
 
 ### Fixed

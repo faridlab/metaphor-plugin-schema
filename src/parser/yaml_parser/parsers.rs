@@ -118,7 +118,19 @@ pub fn is_hook_index_file(content: &str) -> bool {
         .lines()
         .any(|l| l.trim() == "scheduled_jobs:");
 
-    (has_module || has_imports || has_events || has_scheduled_jobs)
+    // A file that declares its own `rules:` is a hook, whatever else it carries.
+    // `module:` alone is not enough to call something an index: a module-level
+    // hook — module-wide invariants with no per-entity lifecycle — names its
+    // module too, and classifying it as an index swallowed it silently. The
+    // caller only accepts a Hook result, so an index verdict surfaced as
+    // "unparseable" and the file's rules were dropped with a warning that
+    // exited zero.
+    let has_rules = processed_content
+        .lines()
+        .any(|l| l.trim_end() == "rules:" || l.trim_end().starts_with("rules: "));
+
+    !has_rules
+        && (has_module || has_imports || has_events || has_scheduled_jobs)
         && !processed_content
             .lines()
             .take(10)
@@ -309,8 +321,15 @@ fn parse_hook_yaml_list_format(content: &str) -> Option<YamlHookSchema> {
     let value: Value = serde_yaml::from_str(&processed).ok()?;
     let mapping = value.as_mapping()?;
 
-    // Must have `model:` field to be a hook file
-    let model_name = mapping.get(&Value::String("model".into()))?.as_str()?;
+    // A hook file names what it hooks. An entity-level file names its `model:`;
+    // a module-level one — module-wide invariants, no per-entity lifecycle —
+    // names its `module:`. Accepting only the first made every module-level
+    // file fall through to the error path, where the caller reported it as
+    // unparseable and dropped its rules with a warning that exited zero.
+    let model_name = mapping
+        .get(&Value::String("model".into()))
+        .or_else(|| mapping.get(&Value::String("module".into())))?
+        .as_str()?;
 
     // Build the YamlHookSchema directly with only name, model, and rules
     // States/triggers/computed use complex nested types that differ between
@@ -342,14 +361,21 @@ fn parse_hook_yaml_list_format(content: &str) -> Option<YamlHookSchema> {
                         .unwrap_or("")
                         .to_string();
 
+                    // `assert:` is the module-level register's spelling of the same
+                    // thing: a human statement of the invariant. It is prose, not an
+                    // evaluable expression, so it lands in `message` and never in
+                    // `condition` — promoting it would generate validation code from
+                    // a sentence.
                     let message = rule_mapping
                         .get(&Value::String("message".into()))
+                        .or_else(|| rule_mapping.get(&Value::String("assert".into())))
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
 
                     let code = rule_mapping
                         .get(&Value::String("code".into()))
+                        .or_else(|| rule_mapping.get(&Value::String("error_code".into())))
                         .and_then(|v| v.as_str())
                         .map(String::from);
 
