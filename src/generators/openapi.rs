@@ -20,12 +20,32 @@ pub struct OpenApiGenerator {
     split: bool,
 }
 
+/// The URL path a model's routes are actually mounted under.
+///
+/// Routes mount beneath their Postgres schema name — `/api/v1/organization/companies`,
+/// not `/api/v1/companies` — so a document that omits the segment describes an API
+/// that does not answer. The schema is read the same way the SQL generator reads it
+/// (`model.schema`), which is what keeps the document and the table in agreement.
+///
+/// A model in `public` keeps the bare path: it has no module segment to mount under.
+fn mounted_base_path(model: &Model, model_plural: &str) -> String {
+    match model.schema.as_deref().filter(|s| !s.is_empty() && *s != "public") {
+        Some(schema) => format!("/api/v1/{}/{}", schema, model_plural),
+        None => format!("/api/v1/{}", model_plural),
+    }
+}
+
 impl OpenApiGenerator {
     pub fn new() -> Self {
         Self {
             title: "Backbone API".to_string(),
             version: "1.0.0".to_string(),
-            server_url: "http://localhost:3000".to_string(),
+            // A relative base, not an absolute one. No caller configures this,
+            // so an absolute default is simply a wrong host in every document
+            // it is emitted into; `/` resolves against whatever host serves the
+            // document, which is correct everywhere. Override with
+            // `with_server_url` when a document must name an external host.
+            server_url: "/".to_string(),
             split: false,
         }
     }
@@ -126,7 +146,7 @@ impl OpenApiGenerator {
     fn write_model_paths(&self, output: &mut String, model: &Model) -> Result<(), GenerateError> {
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
-        let base_path = format!("/api/v1/{}", model_plural);
+        let base_path = mounted_base_path(model, &model_plural);
         let tag = pluralize(&model.name);
 
         // Collection endpoints
@@ -1243,7 +1263,7 @@ impl OpenApiGenerator {
         for model in &schema.schema.models {
             let model_snake = to_snake_case(&model.name);
             let model_plural = pluralize(&model_snake);
-            let base_path = format!("/api/v1/{}", model_plural);
+            let base_path = mounted_base_path(model, &model_plural);
 
             // Reference to entity file for collection endpoints
             writeln!(output, "  {}:", base_path).unwrap();
@@ -1371,7 +1391,7 @@ impl OpenApiGenerator {
         let mut output = String::new();
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
-        let base_path = format!("/api/v1/{}", model_plural);
+        let base_path = mounted_base_path(model, &model_plural);
         let tag = pluralize(&model.name);
 
         // OpenAPI header
@@ -1933,6 +1953,58 @@ mod tests {
         assert!(output
             .files
             .contains_key(&PathBuf::from("schema/openapi/openapi.yaml")));
+    }
+
+    /// A model that names a Postgres schema mounts under it, so the document
+    /// has to say so. Without the segment every path it lists returns 404 —
+    /// which is worse than an absent document, because a consumer cannot tell a
+    /// wrong path from a permissions problem.
+    #[test]
+    fn paths_carry_the_schema_segment_the_routes_mount_under() {
+        let mut schema = create_test_schema();
+        for model in &mut schema.schema.models {
+            model.schema = Some("organization".to_string());
+        }
+        let output = OpenApiGenerator::new().generate(&schema).unwrap();
+        let spec = output
+            .files
+            .get(&PathBuf::from("schema/openapi/openapi.yaml"))
+            .unwrap();
+
+        assert!(spec.contains("/api/v1/organization/users:"), "collection path missing its schema segment");
+        assert!(spec.contains("/api/v1/organization/users/{id}:"), "item path missing its schema segment");
+        assert!(spec.contains("/api/v1/organization/users/trash:"), "sub-resource path missing its schema segment");
+        // The bare path must be gone, not merely accompanied.
+        assert!(!spec.contains("\n  /api/v1/users:"), "the unmounted path is still emitted");
+    }
+
+    /// The default server must not name a host the service does not listen on.
+    #[test]
+    fn the_default_server_is_relative_not_a_guessed_host() {
+        let schema = create_test_schema();
+        let output = OpenApiGenerator::new().generate(&schema).unwrap();
+        let spec = output
+            .files
+            .get(&PathBuf::from("schema/openapi/openapi.yaml"))
+            .unwrap();
+        assert!(spec.contains("- url: /"));
+        assert!(!spec.contains("localhost:3000"), "a guessed host reached the document");
+    }
+
+    /// `public` has no module segment to mount under, so it keeps the bare path.
+    #[test]
+    fn a_public_schema_model_keeps_the_bare_path() {
+        let mut schema = create_test_schema();
+        for model in &mut schema.schema.models {
+            model.schema = Some("public".to_string());
+        }
+        let output = OpenApiGenerator::new().generate(&schema).unwrap();
+        let spec = output
+            .files
+            .get(&PathBuf::from("schema/openapi/openapi.yaml"))
+            .unwrap();
+        assert!(spec.contains("/api/v1/users:"));
+        assert!(!spec.contains("/api/v1/public/users:"));
     }
 
     #[test]
