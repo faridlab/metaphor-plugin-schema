@@ -156,9 +156,15 @@ pub fn parse_hook_yaml_flexible(content: &str) -> Result<YamlHookParseResult> {
     match parse_hook_yaml_str(content) {
         Ok(hook) => Ok(YamlHookParseResult::Hook(hook)),
         Err(_) => {
-            // Standard parsing failed — try list-based format (model: X, rules as sequence)
-            if let Some(hook) = parse_hook_yaml_list_format(content) {
-                return Ok(YamlHookParseResult::Hook(hook));
+            // Standard parsing failed — try list-based format (model: X, rules as sequence).
+            // Never when the file already declared itself an index: the list parser
+            // also accepts `module:`, so it would match such a file and return an
+            // empty hook, turning a precise "bad posture `whenever`" into silence.
+            // A file that says what it is gets diagnosed as that thing.
+            if index_err.is_none() {
+                if let Some(hook) = parse_hook_yaml_list_format(content) {
+                    return Ok(YamlHookParseResult::Hook(hook));
+                }
             }
 
             // If list-format also failed, try index as fallback
