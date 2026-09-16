@@ -365,7 +365,10 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
   }
 
   async count(filters?: F): Promise<number> {
-    const res = await handle<{ count: number }>(
+    // `handleEntity`, not `handle`: the endpoint answers `{ success, data }`
+    // and only `handleEntity` unwraps it. Read raw, `res.count` is undefined —
+    // which is not an error anywhere, just a number that silently is not one.
+    const res = await handleEntity<{ count: number }>(
       await httpRequest(this.url('/count' + buildQuery(filters as Record<string, unknown>)), {
         method: 'GET',
         headers: this.headers(),
@@ -463,7 +466,7 @@ export abstract class SoftDeleteCrudApiClient<T, C, U, Q = unknown, F = unknown>
   }
 
   async countDeleted(): Promise<number> {
-    const res = await handle<{ count: number }>(
+    const res = await handleEntity<{ count: number }>(
       await httpRequest(this.url('/trash/count'), { method: 'GET', headers: this.headers() }),
     );
     return res.count;
