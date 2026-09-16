@@ -92,6 +92,51 @@ const CRUD_SERVICE: &str = r#"/**
 
 import type { PaginatedResponse } from '../types/pagination';
 
+/**
+ * What to group by and what to reduce, mirroring the endpoint's own grammar.
+ *
+ * Omit `groupBy` for a single total over the whole filtered set.
+ */
+export interface AggregateSpec {
+  groupBy?: string;
+  sum?: string[];
+  avg?: string[];
+  min?: string[];
+  max?: string[];
+  /** Cap on the number of groups. The reply says whether it bit. */
+  groupLimit?: number;
+}
+
+/** One group, or the overall total, which has the same shape with a null key. */
+export interface AggregateGroup {
+  /**
+   * The grouped value. Null is a real answer — rows whose column is null are
+   * not the same as no rows — and is also what the overall total carries.
+   */
+  key: string | null;
+  count: number;
+  /**
+   * Keyed by column name, valued as STRINGS.
+   *
+   * Postgres `numeric` carries more precision than a JSON double, and money
+   * columns are exactly where that rounding would show, so the server declines
+   * to narrow them on the way out. Convert at the point of display, where the
+   * rounding is visible.
+   */
+  sum?: Record<string, string | null>;
+  avg?: Record<string, string | null>;
+  min?: Record<string, string | null>;
+  max?: Record<string, string | null>;
+}
+
+export interface AggregateResult {
+  groups: AggregateGroup[];
+  total: AggregateGroup;
+  /** True when `groupLimit` dropped groups, so a partial chart is never
+   *  mistaken for a complete one. */
+  truncated: boolean;
+}
+
 export interface CrudService<T, C, U, Q = unknown, F = unknown> {
   getById(id: string): Promise<T>;
   getAll(params?: Q, filters?: F): Promise<PaginatedResponse<T>>;
@@ -105,6 +150,9 @@ export interface CrudService<T, C, U, Q = unknown, F = unknown> {
   upsert(input: C): Promise<T>;
   exists(id: string): Promise<boolean>;
   count(filters?: F): Promise<number>;
+  /** Group and reduce server-side over the same rows `getAll` would return
+   *  (GET /aggregate). One request answers a whole chart. */
+  aggregate(spec?: AggregateSpec, filters?: F): Promise<AggregateResult>;
   /** Soft-delete many entities by id, atomically (POST /delete/bulk). */
   bulkDelete(ids: string[]): Promise<{ soft_deleted: number }>;
   /** Full-update many entities, atomically (PUT /bulk). */
@@ -162,6 +210,7 @@ const CRUD_REPOSITORY: &str = r#"/**
  * @module shared/crud/CrudRepository
  */
 
+import type { AggregateResult, AggregateSpec } from './CrudService';
 import type { PaginatedResponse } from '../types/pagination';
 
 export interface DeleteResult {
@@ -185,6 +234,7 @@ export interface CrudRepository<T, C, U, Q = unknown, F = unknown> {
   delete(id: string): Promise<DeleteResult>;
   exists(id: string): Promise<boolean>;
   count(filters?: F): Promise<number>;
+  aggregate(spec?: AggregateSpec, filters?: F): Promise<AggregateResult>;
   bulkCreate(inputs: C[]): Promise<T[]>;
   upsert(input: C): Promise<T>;
   createMany(inputs: C[]): Promise<BatchResult>;
@@ -201,7 +251,13 @@ const BASE_API_CLIENT: &str = r#"/**
 
 import { httpRequest } from '../http';
 import type { PaginatedResponse } from '../types/pagination';
-import type { CrudService, SoftDeleteCrudService, BulkResult } from './CrudService';
+import type {
+  AggregateResult,
+  AggregateSpec,
+  BulkResult,
+  CrudService,
+  SoftDeleteCrudService,
+} from './CrudService';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 const API_VERSION = 'v1';
@@ -377,6 +433,37 @@ export abstract class BaseCrudApiClient<T, C, U, Q = unknown, F = unknown>
     return res.count;
   }
 
+  async aggregate(spec: AggregateSpec = {}, filters?: F): Promise<AggregateResult> {
+    // The aggregate's own grammar rides alongside the ordinary filters. They
+    // cannot collide: the endpoint strips these six keys before the remainder
+    // is read as column predicates.
+    const query: Record<string, unknown> = { ...(filters as Record<string, unknown>) };
+    if (spec.groupBy) query.group_by = spec.groupBy;
+    if (spec.sum?.length) query.sum = spec.sum.join(',');
+    if (spec.avg?.length) query.avg = spec.avg.join(',');
+    if (spec.min?.length) query.min = spec.min.join(',');
+    if (spec.max?.length) query.max = spec.max.join(',');
+    if (spec.groupLimit) query.group_limit = String(spec.groupLimit);
+
+    // `handleEntity`, not `handle`: the endpoint answers in the standard
+    // `{ success, data }` envelope, and only `handleEntity` unwraps it. Reading
+    // the raw body would leave every field undefined and render an empty chart
+    // with no error anywhere.
+    const res = await handleEntity<AggregateResult>(
+      await httpRequest(this.url('/aggregate' + buildQuery(query)), {
+        method: 'GET',
+        headers: this.headers(),
+      }),
+    );
+    // Defaulted rather than trusted: a caller drawing a chart should get an
+    // empty one, not a crash, if the envelope ever arrives short.
+    return {
+      groups: res.groups ?? [],
+      total: res.total ?? { key: null, count: 0 },
+      truncated: res.truncated ?? false,
+    };
+  }
+
   async bulkCreate(inputs: C[]): Promise<T[]> {
     return handle<T[]>(
       await httpRequest(this.url('/bulk'), {
@@ -509,7 +596,7 @@ const BASE_REPO_IMPL: &str = r#"/**
 
 import { CrudApiError } from './BaseCrudApiClient';
 import type { BatchResult, CrudRepository, DeleteResult } from './CrudRepository';
-import type { CrudService } from './CrudService';
+import type { AggregateSpec, CrudService } from './CrudService';
 
 export abstract class BaseRepositoryImpl<T, C, U, Q = unknown, F = unknown>
   implements CrudRepository<T, C, U, Q, F>
@@ -551,6 +638,9 @@ export abstract class BaseRepositoryImpl<T, C, U, Q = unknown, F = unknown>
   }
   count(filters?: F) {
     return this.service.count(filters);
+  }
+  aggregate(spec?: AggregateSpec, filters?: F) {
+    return this.service.aggregate(spec, filters);
   }
 
   async delete(id: string): Promise<DeleteResult> {
