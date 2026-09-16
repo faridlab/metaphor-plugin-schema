@@ -1549,10 +1549,17 @@ impl RustGenerator {
         // Field-level security: @private (owner/root-only) and @owner (the tenant-id
         // column). Emitted as RESPONSE keys (camelCase) to match the serialized
         // response the handler prunes — see backbone-core's apply_field_security.
+        // `@sensitive` counts too, and in practice it is the one authors reach
+        // for: every secret in the tree is marked `@sensitive` and not one field
+        // anywhere declares `@private`. A password hash carrying
+        // `@sensitive` with the description "never exposed in API" was being
+        // serialized to any caller, because the attribute the author wrote was
+        // not the attribute the pruner read. Two spellings for one intent, and
+        // only one of them wired up, is a gap nobody can see from the schema.
         let private_fields: Vec<String> = model
             .fields
             .iter()
-            .filter(|f| f.has_attribute("private"))
+            .filter(|f| f.has_attribute("private") || f.has_attribute("sensitive"))
             .map(|f| crate::webgen::parser::to_camel_case(&f.name))
             .collect();
         let owner_field: Option<String> = model
