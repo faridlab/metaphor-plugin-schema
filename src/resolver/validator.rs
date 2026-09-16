@@ -649,9 +649,31 @@ impl<'a> SchemaValidator<'a> {
 
         // Validate rules have conditions and messages
         for rule in &hook.rules {
-            if rule.message.is_empty() {
+            // A message is what a person reads when the rule refuses them, so
+            // an assertion without one is a real defect. But not every rule
+            // asserts: some declare behaviour instead, such as an idempotency
+            // key (`unique_on` + `on_conflict`), and those have nothing to say
+            // because they never refuse anything.
+            //
+            // A rule with no assertion parses to the trivial condition `true`,
+            // which is how they are told apart. Demanding a message from the
+            // declarative ones failed ten modules outright once their hook
+            // files started being read rather than silently discarded.
+            let asserts_something = {
+                use crate::ast::expressions::{Expression, Literal};
+                match &rule.condition {
+                    // No `condition:` in the source parses to an empty raw
+                    // expression; the default when one is absent entirely is
+                    // the trivial `true`. Neither asserts anything.
+                    Expression::Raw(text) => !text.trim().is_empty(),
+                    Expression::Literal(Literal::Bool(true)) => false,
+                    _ => true,
+                }
+            };
+            if rule.message.is_empty() && asserts_something {
                 errors.push(ResolveError::validation(format!(
-                    "Rule '{}' in hook '{}' has no message",
+                    "Rule '{}' in hook '{}' asserts a condition but has no message, \
+                     so a caller it refuses is told nothing",
                     rule.name, hook.name
                 )));
             }

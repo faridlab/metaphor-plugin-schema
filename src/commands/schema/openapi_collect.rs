@@ -54,11 +54,19 @@ pub(super) fn execute_openapi_collect(module: Option<String>) -> Result<()> {
     )?;
 
     // Modules to vendor: explicit list, else the app's declared dependencies.
-    let modules: Vec<String> = if vendor.modules.is_empty() {
+    let mut modules: Vec<String> = if vendor.modules.is_empty() {
         project.depends_on.clone()
     } else {
         vendor.modules.clone()
     };
+    if !vendor.exclude.is_empty() {
+        let before = modules.len();
+        modules.retain(|m| !vendor.exclude.contains(m));
+        let dropped = before - modules.len();
+        if dropped > 0 {
+            println!("  ⏭️  excluded {dropped} module(s): {}", vendor.exclude.join(", "));
+        }
+    }
     if modules.is_empty() {
         anyhow::bail!(
             "no modules to collect — set `openapi_vendor.modules` or `depends_on` for '{}'",
@@ -66,6 +74,7 @@ pub(super) fn execute_openapi_collect(module: Option<String>) -> Result<()> {
         );
     }
 
+    let mut vendored: std::collections::HashSet<String> = std::collections::HashSet::new();
     let dest_dir = app_path.join(&vendor.dest);
     fs::create_dir_all(&dest_dir)
         .with_context(|| format!("failed to create dest dir {}", dest_dir.display()))?;
@@ -100,10 +109,30 @@ pub(super) fn execute_openapi_collect(module: Option<String>) -> Result<()> {
             shown.display()
         );
         copied += 1;
+        vendored.insert(format!("{short}.openapi.yaml"));
+    }
+
+    // Remove documents this app no longer vendors. Without this, excluding a
+    // module leaves its document behind and it keeps being served: an exclusion
+    // that does not remove is not an exclusion. Only files in the vendored
+    // naming shape are touched, so anything else the destination holds is left
+    // alone.
+    let mut pruned = 0usize;
+    if let Ok(existing) = fs::read_dir(&dest_dir) {
+        for entry in existing.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".openapi.yaml") && !vendored.contains(&name) {
+                if fs::remove_file(entry.path()).is_ok() {
+                    println!("  \u{2717} {name} (no longer vendored, removed)");
+                    pruned += 1;
+                }
+            }
+        }
     }
 
     println!(
-        "Collected {copied} spec(s), {skipped} skipped. Rebuild the app to embed the updated specs."
+        "Collected {copied} spec(s), {skipped} skipped, {pruned} removed. \
+         Rebuild the app to embed the updated specs."
     );
     Ok(())
 }

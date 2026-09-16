@@ -37,6 +37,14 @@ pub(super) struct OpenapiVendor {
     /// `depends_on` from `metaphor.yaml`.
     #[serde(default)]
     pub modules: Vec<String>,
+    /// Modules to leave out, applied after the list above is resolved.
+    ///
+    /// For a module that is pinned but composed nowhere: its generated document
+    /// describes routes that do not exist, and a document listing
+    /// resolvable-looking paths that 404 is worse than an absent one, because a
+    /// consumer cannot tell a wrong path from a permissions problem.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 /// Load the `openapi_vendor` section from `metaphor.codegen.yaml` in `output_dir`,
