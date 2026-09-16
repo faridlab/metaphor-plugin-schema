@@ -7,6 +7,43 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-16
+
+### Added
+
+- The generated CRUD client carries `aggregate(spec, filters)`, so a consumer
+  can group and reduce server-side instead of spending one request per value it
+  wants counted. It reaches `GET /{collection}/aggregate` with the endpoint's
+  own grammar — `group_by`, `sum`, `avg`, `min`, `max`, `group_limit`, column
+  lists comma-separated — alongside the ordinary row filters, which cannot
+  collide with it because the endpoint strips those six keys before reading the
+  rest as predicates. `AggregateSpec`, `AggregateGroup` and `AggregateResult`
+  are emitted beside it.
+
+  Reductions are typed as **strings**, deliberately. Postgres `numeric` carries
+  more precision than a JSON double and money columns are exactly where that
+  rounding would show, so the server declines to narrow them and neither does
+  the client; a caller converts at the point of display. `AggregateResult`
+  also carries `truncated`, so a chart cut short by `group_limit` can say so
+  rather than pass for a complete one.
+
+### Fixed
+
+- The generated `count()` and `countDeleted()` read their response with
+  `handle`, which returns the raw body — but these endpoints answer in the
+  `{ success, data }` envelope, and only `handleEntity` unwraps it. Every call
+  therefore returned `undefined`: no throw, no type error, just a number that
+  silently was not one, for every entity in every module. It went unnoticed
+  because consumers had worked around it — reading a list with a page size of
+  one and taking its `total` — rather than calling `count()` at all.
+
+### Changed
+
+- **Breaking for hand-written implementors.** `aggregate()` is a required
+  member of the `CrudService` and `CrudRepository` interfaces. Anything
+  implementing either by hand must add it; anything extending the generated
+  base classes inherits it and needs no change.
+
 ## [0.16.6] — 2026-09-14
 
 ### Fixed
