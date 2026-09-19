@@ -210,6 +210,9 @@ export const list{entity_pascal}QuerySchema = z.object({{
     search: z.string().optional(),
     filters: z.record(z.unknown()).optional(),
     include: z.array(z.string()).optional(),
+    after: z.string().optional(),
+    before: z.string().optional(),
+    estimate: z.boolean().optional(),
   }}).default({{}}),
 }});
 
@@ -226,6 +229,10 @@ export interface List{entity_pascal}Query {{
     search?: string;
     filters?: {entity_pascal}ListFilterParams;
     include?: string[];
+    // Keyset paging: the cursor the previous page carried (hasMore/nextCursor).
+    after?: string;
+    before?: string;
+    estimate?: boolean;
   }};
 }}
 
@@ -240,6 +247,12 @@ export interface List{entity_pascal}QueryResult {{
   totalPages: number;
   hasNext: boolean;
   hasPrev: boolean;
+  // Present in keyset mode: hasMore is authoritative over nextCursor;
+  // countMode 'none' means total was not counted (0 does NOT mean no rows).
+  nextCursor?: string;
+  prevCursor?: string;
+  hasMore?: boolean;
+  countMode?: 'exact' | 'estimate' | 'none';
 }}
 
 // ============================================================================

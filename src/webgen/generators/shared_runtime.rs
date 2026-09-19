@@ -71,6 +71,13 @@ export interface PaginatedResponse<T> {
   totalPages: number;
   hasNext: boolean;
   hasPrev: boolean;
+  // Present when the list was served in keyset mode (after=/before=):
+  // hasMore is authoritative over nextCursor's presence (a backwards page
+  // always carries a cursor); countMode 'none' means total was not counted.
+  nextCursor?: string;
+  prevCursor?: string;
+  hasMore?: boolean;
+  countMode?: 'exact' | 'estimate' | 'none';
 }
 
 /** Common list query parameters. */
@@ -80,6 +87,11 @@ export interface PaginationParams {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   search?: string;
+  // Keyset paging: pass the cursor the previous page carried. ask for
+  // estimate counting instead of exact when the walk is long.
+  after?: string;
+  before?: string;
+  estimate?: boolean;
 }
 "#;
 
@@ -267,6 +279,13 @@ export interface ApiResponseMeta {
   page: number;
   limit: number;
   total_pages: number;
+  // Keyset mode (after=/before=): the cursor envelope. Absent in offset
+  // mode. count_mode 'none' means "not counted" — total 0 then does NOT
+  // mean "no rows". has_more is authoritative over next_cursor's presence.
+  next_cursor?: string;
+  prev_cursor?: string;
+  has_more?: boolean;
+  count_mode?: 'exact' | 'estimate' | 'none';
 }
 
 /** Flat paginated API response: { success, data, meta }. */
@@ -349,6 +368,10 @@ function toPaginated<T>(res: PaginatedApiResponse<T>): PaginatedResponse<T> {
     totalPages: meta.total_pages,
     hasNext: meta.page < meta.total_pages,
     hasPrev: meta.page > 1,
+    nextCursor: meta.next_cursor,
+    prevCursor: meta.prev_cursor,
+    hasMore: meta.has_more,
+    countMode: meta.count_mode,
   };
 }
 
