@@ -17,16 +17,20 @@ use crate::utils::to_snake_case;
 use std::collections::HashMap;
 use std::fmt::Write;
 
+const SKIP_CREATE: &[&str] = &[
+            "created_at", "updated_at", "deleted_at", "created_by", "updated_by", "deleted_by",
+        ];
+        const SKIP_UPDATE: &[&str] = &["created_at", "deleted_at", "created_by", "deleted_by"];
+
 /// Whether any emitted field's value is a date literal, which builds itself
 /// from `Utc::now()` inline and so needs the chrono import without the `now`
 /// binding.
-fn payload_has_date<'a>(mut fields: impl Iterator<Item = &'a crate::ast::Field>) -> bool {
+fn payload_has_date<'a>(
+    mut fields: impl Iterator<Item = &'a crate::ast::Field>,
+    skip: &[&str],
+) -> bool {
     fields.any(|f| {
-        if [
-            "created_at", "updated_at", "deleted_at", "created_by", "updated_by", "deleted_by",
-        ]
-            .contains(&f.name.as_str())
-        {
+        if skip.contains(&f.name.as_str()) {
             return false;
         }
         if f.name.ends_with("_at") {
@@ -47,13 +51,12 @@ fn payload_has_date<'a>(mut fields: impl Iterator<Item = &'a crate::ast::Field>)
 /// managed-timestamp name (`*_at`) or a datetime/timestamp primitive. The
 /// binding is emitted only then — a payload without such fields left it
 /// unused, and the generated tree warned.
-fn payload_uses_now<'a>(mut fields: impl Iterator<Item = &'a crate::ast::Field>) -> bool {
+fn payload_uses_now<'a>(
+    mut fields: impl Iterator<Item = &'a crate::ast::Field>,
+    skip: &[&str],
+) -> bool {
     fields.any(|f| {
-        if [
-            "created_at", "updated_at", "deleted_at", "created_by", "updated_by", "deleted_by",
-        ]
-            .contains(&f.name.as_str())
-        {
+        if skip.contains(&f.name.as_str()) {
             return false;
         }
         if f.name.ends_with("_at") {
@@ -948,11 +951,24 @@ impl IntegrationTestGenerator {
         // chrono is imported only when a payload value names Utc: the `now`
         // binding for *_at and datetime/timestamp fields, or the inline
         // Utc::now() a date field's value builds.
-        let needs_utc = payload_uses_now(model.fields.iter())
-            || payload_uses_now(model.fields.iter().filter(|f| f.name != "id"))
-            || payload_has_date(model.fields.iter());
+        let needs_utc = payload_uses_now(model.fields.iter(), SKIP_CREATE)
+            || payload_uses_now(
+                model.fields.iter().filter(|f| f.name != "id"),
+                SKIP_UPDATE,
+            )
+            || payload_has_date(model.fields.iter(), SKIP_CREATE)
+            || payload_has_date(
+                model.fields.iter().filter(|f| f.name != "id"),
+                SKIP_UPDATE,
+            );
         if needs_utc {
             writeln!(output, "use chrono::Utc;").unwrap();
+        }
+        // Only a file whose seed_dependencies override names the ApiTest type
+        // needs it in scope: the CRUD base calls its methods, the per-entity
+        // files that override nothing never name it.
+        if !fk_deps.is_empty() {
+            writeln!(output, "use crate::integration::framework::ApiTest;").unwrap();
         }
         writeln!(output, "use serde_json::{{json, Value}};").unwrap();
         writeln!(output, "use uuid::Uuid;").unwrap();
@@ -1002,7 +1018,7 @@ impl IntegrationTestGenerator {
             "    fn generate_create_payload(&self, _utils: &CommonUtils) -> Value {{"
         )
         .unwrap();
-        if payload_uses_now(model.fields.iter()) {
+        if payload_uses_now(model.fields.iter(), SKIP_CREATE) {
             writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
         }
         writeln!(output, "        json!({{").unwrap();
@@ -1042,6 +1058,7 @@ impl IntegrationTestGenerator {
                 .fields
                 .iter()
                 .filter(|f| f.name != "id"),
+            SKIP_UPDATE,
         ) {
             writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
         }
