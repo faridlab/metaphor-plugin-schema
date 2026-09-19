@@ -16,6 +16,60 @@ use crate::resolver::ResolvedSchema;
 use crate::utils::to_snake_case;
 use std::collections::HashMap;
 use std::fmt::Write;
+
+/// Whether any emitted field's value is a date literal, which builds itself
+/// from `Utc::now()` inline and so needs the chrono import without the `now`
+/// binding.
+fn payload_has_date<'a>(mut fields: impl Iterator<Item = &'a crate::ast::Field>) -> bool {
+    fields.any(|f| {
+        if [
+            "created_at", "updated_at", "deleted_at", "created_by", "updated_by", "deleted_by",
+        ]
+            .contains(&f.name.as_str())
+        {
+            return false;
+        }
+        if f.name.ends_with("_at") {
+            return false; // its value is the `now` binding, not a date literal
+        }
+        if !f.is_required() {
+            return false; // the emitted value is null; it names nothing
+        }
+        let mut ty = &f.type_ref;
+        while let TypeRef::Optional(inner) = ty {
+            ty = inner.as_ref();
+        }
+        matches!(ty, TypeRef::Primitive(PrimitiveType::Date))
+    })
+}
+
+/// Whether any field the payload loop will emit needs the `now` binding: a
+/// managed-timestamp name (`*_at`) or a datetime/timestamp primitive. The
+/// binding is emitted only then — a payload without such fields left it
+/// unused, and the generated tree warned.
+fn payload_uses_now<'a>(mut fields: impl Iterator<Item = &'a crate::ast::Field>) -> bool {
+    fields.any(|f| {
+        if [
+            "created_at", "updated_at", "deleted_at", "created_by", "updated_by", "deleted_by",
+        ]
+            .contains(&f.name.as_str())
+        {
+            return false;
+        }
+        if f.name.ends_with("_at") {
+            return true;
+        }
+        let mut ty = &f.type_ref;
+        while let TypeRef::Optional(inner) = ty {
+            ty = inner.as_ref();
+        }
+        matches!(
+            ty,
+            TypeRef::Primitive(PrimitiveType::DateTime | PrimitiveType::Timestamp)
+        )
+    })
+}
+
 use std::path::PathBuf;
 
 /// Generates integration tests from schema
@@ -50,9 +104,10 @@ impl IntegrationTestGenerator {
         }
         writeln!(output).unwrap();
 
-        // Re-exports
+        // Re-exports. The BASE's types are consumed by the per-entity files
+        // through their explicit imports, not through this glob — a glob
+        // nothing reads from is an unused-import warning in every module.
         writeln!(output, "// Re-exports for convenience").unwrap();
-        writeln!(output, "pub use crud_test_base::*;").unwrap();
         for model in models {
             let snake_name = to_snake_case(&model.name);
             writeln!(output, "pub use {}_api_test::*;", snake_name).unwrap();
@@ -81,7 +136,6 @@ impl IntegrationTestGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "use serde_json::{{json, Value}};").unwrap();
-        writeln!(output, "use std::time::Instant;").unwrap();
         writeln!(output, "use uuid::Uuid;").unwrap();
         writeln!(output).unwrap();
 
@@ -113,7 +167,6 @@ impl IntegrationTestGenerator {
         writeln!(output, "    pub base_path: String,").unwrap();
         writeln!(output, "    pub entity_name: String,").unwrap();
         writeln!(output, "    pub supports_soft_delete: bool,").unwrap();
-        writeln!(output, "    pub supports_bulk: bool,").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -127,7 +180,6 @@ impl IntegrationTestGenerator {
         writeln!(output, "            base_path: base_path.to_string(),").unwrap();
         writeln!(output, "            entity_name: entity_name.to_string(),").unwrap();
         writeln!(output, "            supports_soft_delete: true,").unwrap();
-        writeln!(output, "            supports_bulk: true,").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
@@ -374,7 +426,6 @@ impl IntegrationTestGenerator {
             "        let test_name = format!(\"{{}} - List\", self.config.entity_name);"
         )
         .unwrap();
-        writeln!(output, "        let start = Instant::now();").unwrap();
         writeln!(output).unwrap();
         writeln!(
             output,
@@ -894,7 +945,15 @@ impl IntegrationTestGenerator {
         writeln!(output, "//! Tests the {} CRUD API endpoints.", pascal_name).unwrap();
         writeln!(output).unwrap();
 
-        writeln!(output, "use chrono::Utc;").unwrap();
+        // chrono is imported only when a payload value names Utc: the `now`
+        // binding for *_at and datetime/timestamp fields, or the inline
+        // Utc::now() a date field's value builds.
+        let needs_utc = payload_uses_now(model.fields.iter())
+            || payload_uses_now(model.fields.iter().filter(|f| f.name != "id"))
+            || payload_has_date(model.fields.iter());
+        if needs_utc {
+            writeln!(output, "use chrono::Utc;").unwrap();
+        }
         writeln!(output, "use serde_json::{{json, Value}};").unwrap();
         writeln!(output, "use uuid::Uuid;").unwrap();
         writeln!(output).unwrap();
@@ -904,7 +963,6 @@ impl IntegrationTestGenerator {
             "use super::crud_test_base::{{CrudTestConfig, GenericCrudTest, TestDataGenerator}};"
         )
         .unwrap();
-        writeln!(output, "use crate::integration::framework::ApiTest;").unwrap();
         writeln!(output, "use crate::integration::helpers::CommonUtils;").unwrap();
         writeln!(output).unwrap();
 
@@ -944,7 +1002,9 @@ impl IntegrationTestGenerator {
             "    fn generate_create_payload(&self, _utils: &CommonUtils) -> Value {{"
         )
         .unwrap();
-        writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
+        if payload_uses_now(model.fields.iter()) {
+            writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
+        }
         writeln!(output, "        json!({{").unwrap();
 
         // Generate fields
@@ -977,7 +1037,14 @@ impl IntegrationTestGenerator {
             "    fn generate_update_payload(&self, id: &str, _utils: &CommonUtils) -> Value {{"
         )
         .unwrap();
-        writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
+        if payload_uses_now(
+            model
+                .fields
+                .iter()
+                .filter(|f| f.name != "id"),
+        ) {
+            writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
+        }
         writeln!(output, "        json!({{").unwrap();
         writeln!(output, "            \"id\": id,").unwrap();
 
