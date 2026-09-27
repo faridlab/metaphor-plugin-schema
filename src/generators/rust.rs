@@ -1479,8 +1479,10 @@ impl RustGenerator {
 
     /// Generate `impl backbone_orm::EntityRepoMeta for {Name}` block.
     ///
-    /// `column_types()` — hints for UUID and enum fields so `run_filtered_query`
-    /// can emit the right PostgreSQL type casts.
+    /// `column_types()` — hints for UUID, enum and temporal fields so
+    /// `run_filtered_query` can emit the right PostgreSQL type casts
+    /// (filters arrive as text; `date = $1` without a cast dies on
+    /// "operator does not exist: date = text").
     /// `search_fields()` — text fields eligible for full-text `search=` queries.
     fn generate_entity_repo_meta_impl(
         &self,
@@ -1506,6 +1508,31 @@ impl RustGenerator {
                 is_uuid && (f.name == "id" || f.name.ends_with("_id"))
             })
             .map(|f| f.name.as_str())
+            .collect();
+
+        // Collect temporal column hints: date/datetime/timestamp/time fields
+        // cast on the filter's bound parameter (filters arrive as text and
+        // PostgreSQL has no implicit date-vs-text comparison).
+        let temporal_cols: Vec<(&str, &str)> = model
+            .fields
+            .iter()
+            .filter_map(|f| {
+                let t = match &f.type_ref {
+                    TypeRef::Primitive(p) => Some(p),
+                    TypeRef::Optional(inner) => match inner.as_ref() {
+                        TypeRef::Primitive(p) => Some(p),
+                        _ => None,
+                    },
+                    _ => None,
+                }?;
+                let pg = match t {
+                    PrimitiveType::Date => "date",
+                    PrimitiveType::DateTime | PrimitiveType::Timestamp => "timestamptz",
+                    PrimitiveType::Time => "time",
+                    _ => return None,
+                };
+                Some((f.name.as_str(), pg))
+            })
             .collect();
 
         // Collect enum column hints: field -> snake_case pg type name
@@ -1637,7 +1664,7 @@ impl RustGenerator {
             "    fn column_types() -> std::collections::HashMap<String, String> {{"
         )
         .unwrap();
-        if uuid_cols.is_empty() && enum_cols.is_empty() {
+        if uuid_cols.is_empty() && enum_cols.is_empty() && temporal_cols.is_empty() {
             writeln!(output, "        std::collections::HashMap::new()").unwrap();
         } else {
             writeln!(
@@ -1653,6 +1680,13 @@ impl RustGenerator {
                 .unwrap();
             }
             for (col, pg_type) in &enum_cols {
+                writeln!(
+                    output,
+                    "        m.insert(\"{col}\".to_string(), \"{pg_type}\".to_string());"
+                )
+                .unwrap();
+            }
+            for (col, pg_type) in &temporal_cols {
                 writeln!(
                     output,
                     "        m.insert(\"{col}\".to_string(), \"{pg_type}\".to_string());"

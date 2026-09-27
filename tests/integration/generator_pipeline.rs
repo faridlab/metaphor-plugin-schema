@@ -578,3 +578,67 @@ fn test_generators_work_without_ddd_features() {
         "Generators should produce output for basic models"
     );
 }
+
+/// Temporal cast hints (#519): date/datetime/timestamp/time fields must
+/// land in column_types() so filtered queries cast the text parameter —
+/// the class of bug where `date = $1` died on "operator does not exist:
+/// date = text" and every module hand-patched its entities.
+#[test]
+fn test_rust_generator_emits_temporal_cast_hints() {
+    let yaml = r#"
+models:
+  - name: Probe
+    collection: probes
+    description: "temporal hint probe"
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+      when_date:
+        type: date
+        attributes: ["@required"]
+      when_time:
+        type: time
+      when_at:
+        type: datetime
+      pinned_until:
+        type: timestamp?
+      owner_id:
+        type: uuid
+        attributes: ["@required"]
+      name:
+        type: string
+"#;
+    let yaml_schema = parse_model_yaml_str(yaml).expect("Failed to parse probe YAML");
+    let mut schema = create_test_schema();
+    for yaml_model in yaml_schema.models {
+        schema.models.push(yaml_model.into_model().unwrap());
+    }
+    let resolved = create_resolved_schema(schema);
+    let generator = RustGenerator::new();
+    let output = generator
+        .generate(&resolved)
+        .expect("RustGenerator should succeed");
+
+    let entity = output
+        .files
+        .iter()
+        .find(|(path, _)| path.ends_with("probe.rs"))
+        .expect("probe entity generated");
+    let src = &entity.1;
+    for (field, hint) in [
+        ("when_date", "date"),
+        ("when_time", "time"),
+        ("when_at", "timestamptz"),
+        ("pinned_until", "timestamptz"),
+        ("owner_id", "uuid"),
+    ] {
+        let needle = format!("m.insert(\"{field}\".to_string(), \"{hint}\".to_string());");
+        assert!(
+            src.contains(&needle),
+            "column_types must carry {field} -> {hint}\n---\n{src}"
+        );
+    }
+    // A non-temporal, non-uuid field never lands in the map.
+    assert!(!src.contains("m.insert(\"name\""));
+}
