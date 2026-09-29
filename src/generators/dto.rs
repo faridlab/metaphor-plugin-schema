@@ -718,7 +718,12 @@ impl DtoGenerator {
                     // a non-optional raw json field renders as serde_json::Value in the
                     // entity — mirror the column default so generic creates don't write
                     // an explicit NULL into a NOT NULL column
-                    writeln!(output, "            {}: serde_json::json!({{}}),", field_name).unwrap();
+                    writeln!(
+                        output,
+                        "            {}: serde_json::json!({{}}),",
+                        field_name
+                    )
+                    .unwrap();
                 } else {
                     writeln!(output, "            {}: Default::default(),", field_name).unwrap();
                 }

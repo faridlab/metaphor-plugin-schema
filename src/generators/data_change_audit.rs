@@ -113,11 +113,7 @@ impl DataChangeAuditGenerator {
         )
         .unwrap();
         writeln!(out).unwrap();
-        writeln!(
-            out,
-            "CREATE TRIGGER {trigger_name}"
-        )
-        .unwrap();
+        writeln!(out, "CREATE TRIGGER {trigger_name}").unwrap();
         writeln!(
             out,
             "    AFTER INSERT OR UPDATE OR DELETE ON {qualified_table}"
@@ -259,9 +255,7 @@ mod tests {
             .all(|p| !p.to_string_lossy().contains("drafts")));
 
         let content = output.files.get(&PathBuf::from(up)).unwrap();
-        assert!(content.contains(
-            "CREATE TRIGGER quotes_data_change_audit"
-        ));
+        assert!(content.contains("CREATE TRIGGER quotes_data_change_audit"));
         assert!(content.contains("AFTER INSERT OR UPDATE OR DELETE"));
         assert!(
             content.contains("FOR EACH ROW EXECUTE FUNCTION auditlog.capture_data_change('id');"),
@@ -348,7 +342,9 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert!(
-            names.iter().any(|n| n.starts_with("20260426220005_add_data_change_audit")),
+            names
+                .iter()
+                .any(|n| n.starts_with("20260426220005_add_data_change_audit")),
             "enum(1)+models(1)+3 = slot 5, got {names:?}"
         );
     }

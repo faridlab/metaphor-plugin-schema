@@ -66,7 +66,13 @@ pub fn simulate_chain(migrations: &[(String, String)], own_schema: &str) -> Chai
             let lower_words: Vec<&str> = lower.iter().map(|s| s.as_str()).collect();
             let ctes = cte_names(&words);
             classify_statement(
-                &lower_words, own_schema, file, &stmt, &ctes, &mut existing, &mut report,
+                &lower_words,
+                own_schema,
+                file,
+                &stmt,
+                &ctes,
+                &mut existing,
+                &mut report,
             );
         }
     }
@@ -307,8 +313,18 @@ fn classify_statement(
             while i < words.len()
                 && !matches!(
                     words[i],
-                    "table" | "index" | "policy" | "trigger" | "view" | "sequence" | "type"
-                        | "schema" | "extension" | "function" | "procedure" | "domain"
+                    "table"
+                        | "index"
+                        | "policy"
+                        | "trigger"
+                        | "view"
+                        | "sequence"
+                        | "type"
+                        | "schema"
+                        | "extension"
+                        | "function"
+                        | "procedure"
+                        | "domain"
                         | "materialized"
                 )
             {
@@ -395,9 +411,7 @@ fn relation_key(token: &str, own_schema: &str) -> Option<String> {
     let parts: Vec<&str> = cleaned.split('.').collect();
     match parts.as_slice() {
         [name] => Some(name.to_lowercase()),
-        [schema, name] if schema.eq_ignore_ascii_case(own_schema) => {
-            Some(name.to_lowercase())
-        }
+        [schema, name] if schema.eq_ignore_ascii_case(own_schema) => Some(name.to_lowercase()),
         [schema, name] => Some(format!("{}.{}", schema.to_lowercase(), name.to_lowercase())),
         _ => None,
     }
@@ -634,8 +648,14 @@ mod tests {
     #[test]
     fn in_order_chain_passes() {
         let report = check(&[
-            ("001.up.sql", "CREATE TABLE inventory.warehouses (id uuid PRIMARY KEY);"),
-            ("002.up.sql", "ALTER TABLE inventory.warehouses ADD COLUMN code text;"),
+            (
+                "001.up.sql",
+                "CREATE TABLE inventory.warehouses (id uuid PRIMARY KEY);",
+            ),
+            (
+                "002.up.sql",
+                "ALTER TABLE inventory.warehouses ADD COLUMN code text;",
+            ),
             (
                 "003.up.sql",
                 "CREATE UNIQUE INDEX idx_w ON inventory.warehouses (code);
@@ -652,7 +672,10 @@ mod tests {
                 "001.up.sql",
                 "ALTER TABLE inventory.later_table ADD COLUMN x integer;",
             ),
-            ("002.up.sql", "CREATE TABLE inventory.later_table (id uuid);"),
+            (
+                "002.up.sql",
+                "CREATE TABLE inventory.later_table (id uuid);",
+            ),
         ]);
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].file, "001.up.sql");
@@ -731,7 +754,10 @@ mod tests {
     fn unqualified_names_default_to_the_module_schema() {
         let report = check(&[
             ("001.up.sql", "CREATE TABLE warehouses (id uuid);"),
-            ("002.up.sql", "UPDATE warehouses SET x = 1 WHERE company_id IS NOT NULL;"),
+            (
+                "002.up.sql",
+                "UPDATE warehouses SET x = 1 WHERE company_id IS NOT NULL;",
+            ),
         ]);
         assert!(report.violations.is_empty(), "{report:?}");
     }
@@ -739,7 +765,10 @@ mod tests {
     #[test]
     fn insert_and_delete_targets_are_checked() {
         let report = check(&[
-            ("001.up.sql", "INSERT INTO missing (id) VALUES (gen_random_uuid());"),
+            (
+                "001.up.sql",
+                "INSERT INTO missing (id) VALUES (gen_random_uuid());",
+            ),
             ("002.up.sql", "DELETE FROM also_missing;"),
         ]);
         assert_eq!(report.violations.len(), 2, "{report:?}");

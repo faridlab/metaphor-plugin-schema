@@ -93,9 +93,8 @@ pub(super) fn execute_tenancy(
     if check {
         #[cfg(feature = "database")]
         {
-            let url = database_url.context(
-                "--check needs a database URL (--database-url or DATABASE_URL)",
-            )?;
+            let url = database_url
+                .context("--check needs a database URL (--database-url or DATABASE_URL)")?;
             let rt = tokio::runtime::Runtime::new()
                 .context("failed to create tokio runtime for --check")?;
             return rt.block_on(check_coverage(&descriptor, &targets, &url));
@@ -135,9 +134,9 @@ pub(super) fn execute_tenancy(
         if joined.len() <= CAP {
             format!("tenancy_{joined}")
         } else {
-            let digest = joined
-                .bytes()
-                .fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+            let digest = joined.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+                (h ^ b as u64).wrapping_mul(0x100000001b3)
+            });
             let mut cut = CAP;
             while !joined.is_char_boundary(cut) {
                 cut -= 1;
@@ -148,8 +147,7 @@ pub(super) fn execute_tenancy(
     fs::create_dir_all(output)?;
     let up_path = output.join(format!("{ts}_{stem}.up.sql"));
     let down_path = output.join(format!("{ts}_{stem}.down.sql"));
-    fs::write(&up_path, &up)
-        .with_context(|| format!("failed to write {}", up_path.display()))?;
+    fs::write(&up_path, &up).with_context(|| format!("failed to write {}", up_path.display()))?;
     fs::write(&down_path, &down)
         .with_context(|| format!("failed to write {}", down_path.display()))?;
 
@@ -170,8 +168,8 @@ pub(super) fn execute_tenancy(
 }
 
 fn load_descriptor(path: &Path) -> Result<TenancyDescriptor> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     parse_descriptor(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
@@ -204,9 +202,12 @@ fn resolve_targets(cwd: &Path, descriptor: &TenancyDescriptor) -> Result<Vec<Ten
 
     let mut targets = Vec::with_capacity(descriptor.tables.len());
     for entry in &descriptor.tables {
-        let project = ws
-            .project_by_name(&entry.module)
-            .with_context(|| format!("module '{}' is not a project in metaphor.yaml", entry.module))?;
+        let project = ws.project_by_name(&entry.module).with_context(|| {
+            format!(
+                "module '{}' is not a project in metaphor.yaml",
+                entry.module
+            )
+        })?;
 
         let schema = if entry.migration_only {
             // Migration-only table: no model to resolve against — the
@@ -435,8 +436,9 @@ async fn check_coverage(
                 .await
                 .context("event-trigger introspection failed")?;
         if evt.is_none() {
-            gaps.push("deny-by-default event trigger tenancy_deny_undecorated_table missing"
-                .to_string());
+            gaps.push(
+                "deny-by-default event trigger tenancy_deny_undecorated_table missing".to_string(),
+            );
         }
     }
 
@@ -482,10 +484,7 @@ mod tests {
 
     #[test]
     fn chain_is_guarded_and_marker_free() {
-        let (up, down) = tenancy_decorator_chain(
-            &[sample_target()],
-            &["party".to_string()],
-        );
+        let (up, down) = tenancy_decorator_chain(&[sample_target()], &["party".to_string()]);
 
         // Every statement class the re-run story depends on.
         assert!(up.contains("ADD COLUMN IF NOT EXISTS org_unit_id"));
@@ -497,9 +496,7 @@ mod tests {
         assert!(up.contains("CREATE TRIGGER parties_org_unit_fill"));
         assert!(up.contains("BEFORE INSERT ON party.parties"));
         // The stamp resolves the acting unit and leaves unbound scopes NULL.
-        assert!(up.contains(
-            "nullif(current_setting('app.acting_unit_id', true), '')::uuid"
-        ));
+        assert!(up.contains("nullif(current_setting('app.acting_unit_id', true), '')::uuid"));
         assert!(up.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_parties_org_unit_id_party_code"));
         assert!(up.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_parties_org_unit_id_npwp"));
         assert!(up.contains("WHERE npwp IS NOT NULL"));
@@ -608,7 +605,10 @@ tables:
         assert_eq!(d.tables.len(), 1);
         assert_eq!(d.tables[0].module, "backbone-party");
         assert!(!d.tables[0].allow_root);
-        assert_eq!(d.tables[0].uniques[0].fields, vec!["party_code".to_string()]);
+        assert_eq!(
+            d.tables[0].uniques[0].fields,
+            vec!["party_code".to_string()]
+        );
         assert_eq!(
             d.tables[0].uniques[0].r#where.as_deref(),
             Some("(metadata->>'deleted_at') IS NULL")
@@ -646,8 +646,8 @@ tables:
 
     #[test]
     fn descriptor_rejects_empty_table_list() {
-        let err = parse_descriptor("version: 1\nscoped_schemas: [party]\ntables: []\n")
-            .unwrap_err();
+        let err =
+            parse_descriptor("version: 1\nscoped_schemas: [party]\ntables: []\n").unwrap_err();
         assert!(err.to_string().contains("no tables"), "got: {err}");
     }
 }

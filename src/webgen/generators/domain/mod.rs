@@ -118,12 +118,12 @@ fn check_entity_barrel_collisions(
     let mut owner: HashMap<String, &str> = HashMap::new();
     let mut collisions: Vec<String> = Vec::new();
     for entity in entities {
-        let has_hook = hooks
+        let entity_hook = hooks
             .iter()
-            .any(|h| h.model.eq_ignore_ascii_case(&entity.name));
+            .find(|h| h.model.eq_ignore_ascii_case(&entity.name));
         let symbols = entity::entity_file_symbols(entity)
             .into_iter()
-            .chain(entity_schema::schema_file_symbols(entity, has_hook));
+            .chain(entity_schema::schema_file_symbols(entity, entity_hook));
         for symbol in symbols {
             use std::collections::hash_map::Entry;
             match owner.entry(symbol) {

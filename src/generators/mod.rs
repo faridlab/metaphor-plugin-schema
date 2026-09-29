@@ -4,12 +4,12 @@
 //! into various output formats.
 
 pub mod audit_triggers;
-pub mod data_change_audit;
 pub mod auth;
 pub mod bulk_operations;
 pub mod computed;
 pub mod config;
 pub mod cqrs;
+pub mod data_change_audit;
 pub mod domain_service;
 pub mod events;
 pub mod flow;
@@ -45,12 +45,12 @@ pub mod handlers_module;
 pub mod routes_composer;
 
 pub use audit_triggers::AuditTriggersGenerator;
-pub use data_change_audit::DataChangeAuditGenerator;
 pub use auth::AuthGenerator;
 pub use bulk_operations::BulkOperationsGenerator;
 pub use computed::ComputedGenerator;
 pub use config::ConfigGenerator;
 pub use cqrs::CqrsGenerator;
+pub use data_change_audit::DataChangeAuditGenerator;
 pub use domain_service::DomainServiceGenerator;
 pub use events::EventsGenerator;
 pub use flow::FlowGenerator;

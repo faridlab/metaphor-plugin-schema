@@ -18,9 +18,14 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 const SKIP_CREATE: &[&str] = &[
-            "created_at", "updated_at", "deleted_at", "created_by", "updated_by", "deleted_by",
-        ];
-        const SKIP_UPDATE: &[&str] = &["created_at", "deleted_at", "created_by", "deleted_by"];
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "created_by",
+    "updated_by",
+    "deleted_by",
+];
+const SKIP_UPDATE: &[&str] = &["created_at", "deleted_at", "created_by", "deleted_by"];
 
 /// Whether any emitted field's value is a date literal, which builds itself
 /// from `Utc::now()` inline and so needs the chrono import without the `now`
@@ -952,15 +957,9 @@ impl IntegrationTestGenerator {
         // binding for *_at and datetime/timestamp fields, or the inline
         // Utc::now() a date field's value builds.
         let needs_utc = payload_uses_now(model.fields.iter(), SKIP_CREATE)
-            || payload_uses_now(
-                model.fields.iter().filter(|f| f.name != "id"),
-                SKIP_UPDATE,
-            )
+            || payload_uses_now(model.fields.iter().filter(|f| f.name != "id"), SKIP_UPDATE)
             || payload_has_date(model.fields.iter(), SKIP_CREATE)
-            || payload_has_date(
-                model.fields.iter().filter(|f| f.name != "id"),
-                SKIP_UPDATE,
-            );
+            || payload_has_date(model.fields.iter().filter(|f| f.name != "id"), SKIP_UPDATE);
         if needs_utc {
             writeln!(output, "use chrono::Utc;").unwrap();
         }
@@ -1053,13 +1052,7 @@ impl IntegrationTestGenerator {
             "    fn generate_update_payload(&self, id: &str, _utils: &CommonUtils) -> Value {{"
         )
         .unwrap();
-        if payload_uses_now(
-            model
-                .fields
-                .iter()
-                .filter(|f| f.name != "id"),
-            SKIP_UPDATE,
-        ) {
+        if payload_uses_now(model.fields.iter().filter(|f| f.name != "id"), SKIP_UPDATE) {
             writeln!(output, "        let now = Utc::now().to_rfc3339();").unwrap();
         }
         writeln!(output, "        json!({{").unwrap();

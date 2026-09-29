@@ -5,8 +5,8 @@
 
 use super::{GenerateError, GeneratedOutput, Generator};
 use crate::ast::{
-    CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, OrgFence, PrimitiveType,
-    RelationType, TypeRef,
+    CompanyFence, EnumDef, Field, ForeignKeyAction, Index, IndexType, Model, OrgFence,
+    PrimitiveType, RelationType, TypeRef,
 };
 use crate::resolver::ResolvedSchema;
 use crate::utils::{pluralize, to_snake_case};
@@ -668,7 +668,11 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
         "-- ══ {qualified}: install the org-unit scoping column (ADR-0029) ══"
     )
     .unwrap();
-    writeln!(up, "ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS org_unit_id uuid;").unwrap();
+    writeln!(
+        up,
+        "ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS org_unit_id uuid;"
+    )
+    .unwrap();
     writeln!(up).unwrap();
     writeln!(
         up,
@@ -710,11 +714,7 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
         target.schema, target.table
     )
     .unwrap();
-    writeln!(
-        up,
-        "                 AND column_name = 'company_id') THEN"
-    )
-    .unwrap();
+    writeln!(up, "                 AND column_name = 'company_id') THEN").unwrap();
     writeln!(
         up,
         "        UPDATE {qualified} SET org_unit_id = company_id WHERE org_unit_id IS NULL;"
@@ -818,7 +818,11 @@ pub fn tenancy_table_sql(target: &TenancyTableTarget) -> (String, String) {
         "ALTER TABLE {qualified} ALTER COLUMN org_unit_id DROP DEFAULT;"
     )
     .unwrap();
-    writeln!(down, "ALTER TABLE {qualified} DROP COLUMN IF EXISTS org_unit_id;").unwrap();
+    writeln!(
+        down,
+        "ALTER TABLE {qualified} DROP COLUMN IF EXISTS org_unit_id;"
+    )
+    .unwrap();
 
     (up, down)
 }
@@ -900,17 +904,17 @@ pub fn tenancy_deny_event_trigger_sql(scoped_schemas: &[String]) -> (String, Str
     writeln!(up).unwrap();
     // No CREATE EVENT TRIGGER IF NOT EXISTS exists in PostgreSQL — the drop-first
     // pair keeps an unrecorded re-run from dying on a duplicate object.
-    writeln!(up, "DROP EVENT TRIGGER IF EXISTS tenancy_deny_undecorated_table;").unwrap();
+    writeln!(
+        up,
+        "DROP EVENT TRIGGER IF EXISTS tenancy_deny_undecorated_table;"
+    )
+    .unwrap();
     writeln!(
         up,
         "CREATE EVENT TRIGGER tenancy_deny_undecorated_table ON ddl_command_end"
     )
     .unwrap();
-    writeln!(
-        up,
-        "    EXECUTE FUNCTION tenancy.deny_undecorated_table();"
-    )
-    .unwrap();
+    writeln!(up, "    EXECUTE FUNCTION tenancy.deny_undecorated_table();").unwrap();
 
     let mut down = String::new();
     writeln!(
@@ -1261,10 +1265,7 @@ impl SqlGenerator {
         let mut down = guard_down;
         down.push('\n');
         down.push_str(&policy_down);
-        down.insert_str(
-            0,
-            &format!("-- Reverse the org fence for {qualified}\n"),
-        );
+        down.insert_str(0, &format!("-- Reverse the org fence for {qualified}\n"));
         Some((up, down))
     }
 
@@ -2410,11 +2411,7 @@ impl SqlGenerator {
                 "-- unset or empty sees zero rows. Kind guards reject writes"
             )
             .unwrap();
-            writeln!(
-                up,
-                "-- naming a node of any other kind."
-            )
-            .unwrap();
+            writeln!(up, "-- naming a node of any other kind.").unwrap();
             writeln!(up).unwrap();
             let mut down = String::new();
             writeln!(
@@ -2816,9 +2813,7 @@ mod tests {
         // The seal DO-block must be followed by an immediate-constraints switch:
         // deferred family checks would otherwise fire at COMMIT, outside the
         // migration's own error context.
-        let seal_end = up
-            .find("END $$;")
-            .expect("the seal DO-block terminator");
+        let seal_end = up.find("END $$;").expect("the seal DO-block terminator");
         let set_pos = up
             .find("SET CONSTRAINTS ALL IMMEDIATE;")
             .expect("the immediate-constraints statement");
@@ -3025,11 +3020,9 @@ mod tests {
     /// write-path kind guard defaulting to company/branch nodes.
     #[test]
     fn org_rls_emits_the_proven_entitlement_union_fence() {
-        let (up, down) = SqlGenerator::generate_org_rls_migration(
-            &org_scoped_model(),
-            Some(&OrgFence::Strict),
-        )
-        .expect("a declared org-scoped model must get the org fence");
+        let (up, down) =
+            SqlGenerator::generate_org_rls_migration(&org_scoped_model(), Some(&OrgFence::Strict))
+                .expect("a declared org-scoped model must get the org fence");
         assert!(
             up.contains("FORCE  ROW LEVEL SECURITY"),
             "must FORCE RLS (owner bypass is the whole point of the fence):\n{up}"
@@ -3042,7 +3035,9 @@ mod tests {
             up.contains("warehouses_org_unit_isolation"),
             "policy name from the bare table:\n{up}"
         );
-        let arms = up.matches("string_to_array(current_setting('app.scope_unit_ids'").count();
+        let arms = up
+            .matches("string_to_array(current_setting('app.scope_unit_ids'")
+            .count();
         assert_eq!(
             arms, 2,
             "USING and WITH CHECK must carry the same entitlement-union predicate:\n{up}"
@@ -3096,7 +3091,9 @@ mod tests {
             up.contains("NOT IN ('company', 'branch', 'root')"),
             "root-shared models admit root anchors:\n{up}"
         );
-        let arms = up.matches("string_to_array(current_setting('app.scope_unit_ids'").count();
+        let arms = up
+            .matches("string_to_array(current_setting('app.scope_unit_ids'")
+            .count();
         assert_eq!(
             arms, 2,
             "the policy itself stays the single template:\n{up}"
@@ -3148,7 +3145,10 @@ mod tests {
         let table_up = output
             .files
             .keys()
-            .find(|p| p.to_string_lossy().ends_with("_create_warehouse_table.up.sql"))
+            .find(|p| {
+                p.to_string_lossy()
+                    .ends_with("_create_warehouse_table.up.sql")
+            })
             .expect("create-table migration");
         assert!(
             org_up.to_string_lossy() > table_up.to_string_lossy(),

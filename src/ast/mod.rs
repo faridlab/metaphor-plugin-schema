@@ -26,7 +26,6 @@ pub use model::{
     Attribute,
     AttributeValue,
     CompanyFence,
-    OrgFence,
     ComputedDtoField,
     // Domain Event types
     DomainEvent,
@@ -62,6 +61,7 @@ pub use model::{
     Lifecycle,
     LifecycleShape,
     Model,
+    OrgFence,
     // Presentation layer types
     Presentation,
     // CQRS Projection types

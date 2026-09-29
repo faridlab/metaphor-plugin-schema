@@ -29,7 +29,11 @@ pub struct OpenApiGenerator {
 ///
 /// A model in `public` keeps the bare path: it has no module segment to mount under.
 fn mounted_base_path(model: &Model, model_plural: &str) -> String {
-    match model.schema.as_deref().filter(|s| !s.is_empty() && *s != "public") {
+    match model
+        .schema
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "public")
+    {
         Some(schema) => format!("/api/v1/{}/{}", schema, model_plural),
         None => format!("/api/v1/{}", model_plural),
     }
@@ -1971,11 +1975,23 @@ mod tests {
             .get(&PathBuf::from("schema/openapi/openapi.yaml"))
             .unwrap();
 
-        assert!(spec.contains("/api/v1/organization/users:"), "collection path missing its schema segment");
-        assert!(spec.contains("/api/v1/organization/users/{id}:"), "item path missing its schema segment");
-        assert!(spec.contains("/api/v1/organization/users/trash:"), "sub-resource path missing its schema segment");
+        assert!(
+            spec.contains("/api/v1/organization/users:"),
+            "collection path missing its schema segment"
+        );
+        assert!(
+            spec.contains("/api/v1/organization/users/{id}:"),
+            "item path missing its schema segment"
+        );
+        assert!(
+            spec.contains("/api/v1/organization/users/trash:"),
+            "sub-resource path missing its schema segment"
+        );
         // The bare path must be gone, not merely accompanied.
-        assert!(!spec.contains("\n  /api/v1/users:"), "the unmounted path is still emitted");
+        assert!(
+            !spec.contains("\n  /api/v1/users:"),
+            "the unmounted path is still emitted"
+        );
     }
 
     /// The default server must not name a host the service does not listen on.
@@ -1988,7 +2004,10 @@ mod tests {
             .get(&PathBuf::from("schema/openapi/openapi.yaml"))
             .unwrap();
         assert!(spec.contains("- url: /"));
-        assert!(!spec.contains("localhost:3000"), "a guessed host reached the document");
+        assert!(
+            !spec.contains("localhost:3000"),
+            "a guessed host reached the document"
+        );
     }
 
     /// `public` has no module segment to mount under, so it keeps the bare path.

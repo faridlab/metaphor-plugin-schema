@@ -99,6 +99,10 @@ impl EntitySchemaGenerator {
             String::new()
         };
 
+        // The lifecycle section (state machine + permissions) rides the same
+        // file when the hook schema states either.
+        let lifecycle = self.generate_lifecycle_section(entity, hooks);
+
         // Generate IP schema if needed
         let ip_schema = if uses_ip {
             r#"
@@ -224,7 +228,7 @@ export const {entity_camel}ListFilterSchema = z.object({{
  * Filter parameters type
  */
 export type {entity_pascal}ListFilterParams = z.infer<typeof {entity_camel}ListFilterSchema>;
-{relation_targets}{hook_validations}
+{relation_targets}{hook_validations}{lifecycle}
 // ============================================================================
 // Validation Helpers
 // ============================================================================
@@ -275,6 +279,7 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             filter_fields = self.generate_filter_field_schemas(entity, enums),
             relation_targets = self.generate_relation_targets(entity),
             hook_validations = hook_validations,
+            lifecycle = lifecycle,
         )
     }
 
@@ -421,6 +426,173 @@ const {name_camel}Schema = z.enum({name}Values);
     /// another module. The schema records the real target in the field's note, in
     /// prose — which no consumer can read. This turns the ones stated confidently
     /// into data, and stays silent about the rest.
+    /// The lifecycle section of the schema file: the hook schema's state
+    /// machine and role permissions as plain typed data, so record screens
+    /// can mirror the schema's lifecycle without hand-copying it. The server
+    /// stays the authority; this only reflects what the schema states.
+    fn generate_lifecycle_section(
+        &self,
+        entity: &EntityDefinition,
+        hooks: Option<&HookSchema>,
+    ) -> String {
+        let Some(hook_schema) = hooks else {
+            return String::new();
+        };
+        let mut section = String::new();
+        let pascal = to_pascal_case(&entity.name);
+        let camel = to_camel_case(&entity.name);
+
+        if let Some(machine) = &hook_schema.state_machine {
+            let states = {
+                let mut names: Vec<&str> = machine.states.keys().map(|s| s.as_str()).collect();
+                names.sort();
+                names
+                    .iter()
+                    .map(|name| {
+                        let def = &machine.states[*name];
+                        format!(
+                            "    {{ name: \"{}\", isInitial: {}, isFinal: {} }},",
+                            def.name, def.is_initial, def.is_final
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let transitions = machine
+                .transitions
+                .iter()
+                .map(|t| {
+                    let from = t
+                        .from_states()
+                        .iter()
+                        .map(|s| format!("\"{s}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let roles = if t.roles.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ", roles: [{}]",
+                            t.roles
+                                .iter()
+                                .map(|r| format!("\"{r}\""))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    let condition = t.condition.as_ref().map_or(String::new(), |c| {
+                        format!(", condition: \"{}\"", c.replace('"', "\\\""))
+                    });
+                    let message = t.message.as_ref().map_or(String::new(), |m| {
+                        format!(", message: \"{}\"", m.replace('"', "\\\""))
+                    });
+                    format!(
+                        "    {{ name: \"{}\", from: [{from}], to: \"{}\"{roles}{condition}{message} }},",
+                        t.name, t.to_state
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            section.push_str(&format!(
+                r#"// ============================================================================
+// Lifecycle (from hook.yaml — the schema's own state machine)
+// ============================================================================
+
+/**
+ * The record's lifecycle exactly as the schema states it: the state field,
+ * every state, and every transition with its guard roles. The server remains
+ * the authority; this mirrors the schema so screens need not hand-copy it.
+ */
+export const {camel}Lifecycle = {{
+  stateField: "{state_field}",
+  states: [
+{states}
+  ],
+  transitions: [
+{transitions}
+  ],
+}} as const;
+
+export type {pascal}Lifecycle = typeof {camel}Lifecycle;
+
+/**
+ * May transition `name` fire from state `from`? Pure data walk.
+ */
+export function can{pascal}Transition(from: string, name: string): boolean {{
+  return {camel}Lifecycle.transitions.some(
+    (t) => t.name === name && (t.from as readonly string[]).includes(from),
+  );
+}}
+
+/**
+ * Every transition that may fire from state `from`.
+ */
+export function {camel}TransitionsFrom(from: string) {{
+  return {camel}Lifecycle.transitions.filter(
+    (t) => (t.from as readonly string[]).includes(from),
+  );
+}}
+
+"#,
+                camel = camel,
+                pascal = pascal,
+                state_field = machine.state_field,
+                states = states,
+                transitions = transitions,
+            ));
+        }
+
+        if !hook_schema.permissions.is_empty() {
+            let mut roles: Vec<&String> = hook_schema.permissions.keys().collect();
+            roles.sort();
+            let perms = roles
+                .iter()
+                .map(|role| {
+                    let set = &hook_schema.permissions[*role];
+                    let list = |v: &[crate::webgen::ast::state_machine::PermissionRule]| {
+                        v.iter()
+                            .map(|p| {
+                                let action = &p.action;
+                                match &p.condition {
+                                    Some(c) => format!(
+                                        "{{ action: \"{action}\", condition: \"{}\" }}",
+                                        c.replace('"', "\\\"")
+                                    ),
+                                    None => format!("{{ action: \"{action}\" }}"),
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    format!(
+                        "  {role}: {{ allow: [{}], deny: [{}] }},",
+                        list(&set.allow),
+                        list(&set.deny)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            section.push_str(&format!(
+                r#"// ============================================================================
+// Permissions (from hook.yaml — the schema's role rules)
+// ============================================================================
+
+/**
+ * Role permissions exactly as the schema states them. The server remains
+ * the authority; this mirrors the schema for UI gating.
+ */
+export const {camel}Permissions = {{
+{perms}
+}} as const;
+
+"#,
+                camel = camel,
+                perms = perms,
+            ));
+        }
+        section
+    }
+
     fn generate_relation_targets(&self, entity: &EntityDefinition) -> String {
         let entries: Vec<String> = entity
             .fields
@@ -741,7 +913,8 @@ fn describing(field: &FieldDefinition, schema: String) -> String {
 /// barrel merges. The domain generator refuses to emit a module where two
 /// entities claim the same symbol; this list is what that check reads, and the
 /// invariant test below pins it to the template so the two cannot drift.
-pub fn schema_file_symbols(entity: &EntityDefinition, has_hook: bool) -> Vec<String> {
+pub fn schema_file_symbols(entity: &EntityDefinition, hooks: Option<&HookSchema>) -> Vec<String> {
+    let has_hook = hooks.is_some();
     let pascal = to_pascal_case(&entity.name);
     let camel = to_camel_case(&entity.name);
     let mut symbols = vec![
@@ -770,6 +943,18 @@ pub fn schema_file_symbols(entity: &EntityDefinition, has_hook: bool) -> Vec<Str
     if has_hook {
         symbols.push(format!("validate{pascal}BusinessRules"));
     }
+    // The lifecycle artifacts ride only when the hook schema states a
+    // machine, and the permissions map only when it states roles.
+    if let Some(hook_schema) = hooks {
+        if hook_schema.state_machine.is_some() {
+            symbols.push(format!("{camel}Lifecycle"));
+            symbols.push(format!("can{pascal}Transition"));
+            symbols.push(format!("{camel}TransitionsFrom"));
+        }
+        if !hook_schema.permissions.is_empty() {
+            symbols.push(format!("{camel}Permissions"));
+        }
+    }
     if entity.fields.iter().any(|f| target_of(f).is_some()) {
         symbols.push(format!("{camel}RelationTargets"));
     }
@@ -780,6 +965,7 @@ pub fn schema_file_symbols(entity: &EntityDefinition, has_hook: bool) -> Vec<Str
 mod tests {
     use super::*;
     use crate::webgen::ast::entity::FieldAttribute;
+    use std::collections::HashMap;
 
     fn test_config() -> Config {
         Config::new("test_module")
@@ -787,7 +973,105 @@ mod tests {
             .with_dry_run(true)
     }
 
+    fn hooked_entity_with_machine() -> (EntityDefinition, HookSchema) {
+        let entity = EntityDefinition {
+            name: "Offer".to_string(),
+            collection: "offers".to_string(),
+            fields: vec![FieldDefinition {
+                name: "status".to_string(),
+                type_name: FieldType::String,
+                attributes: vec![],
+                description: None,
+                optional: false,
+                default_value: None,
+            }],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+        let mut states = HashMap::new();
+        states.insert(
+            "draft".to_string(),
+            crate::webgen::ast::state_machine::StateDefinition {
+                name: "draft".to_string(),
+                is_initial: true,
+                is_final: false,
+                on_enter: vec![],
+                on_exit: vec![],
+            },
+        );
+        states.insert(
+            "extended".to_string(),
+            crate::webgen::ast::state_machine::StateDefinition {
+                name: "extended".to_string(),
+                is_initial: false,
+                is_final: false,
+                on_enter: vec![],
+                on_exit: vec![],
+            },
+        );
+        let hook = HookSchema {
+            name: "offer".to_string(),
+            model: "Offer".to_string(),
+            state_machine: Some(crate::webgen::ast::state_machine::StateMachine {
+                state_field: "status".to_string(),
+                states,
+                transitions: vec![crate::webgen::ast::state_machine::TransitionDefinition {
+                    name: "extend".to_string(),
+                    from_state: "draft".to_string(),
+                    to_state: "extended".to_string(),
+                    roles: vec!["ADMIN".to_string()],
+                    condition: None,
+                    message: Some("offer extended".to_string()),
+                    on_transition: vec![],
+                }],
+            }),
+            rules: vec![],
+            permissions: HashMap::new(),
+            triggers: vec![],
+            computed_fields: vec![],
+        };
+        (entity, hook)
+    }
+
     #[test]
+    fn lifecycle_section_mirrors_the_state_machine() {
+        let generator = EntitySchemaGenerator::new(test_config(), TypeMapper::new());
+        let (entity, hook) = hooked_entity_with_machine();
+        let content = generator.generate_schema_content(&entity, &[], Some(&hook));
+        assert!(
+            content.contains("export const offerLifecycle = {"),
+            "{content}"
+        );
+        assert!(content.contains("stateField: \"status\""));
+        assert!(content.contains("isInitial: true"));
+        assert!(
+            content.contains("{ name: \"extend\", from: [\"draft\"], to: \"extended\", roles: [\"ADMIN\"], message: \"offer extended\" }")
+        );
+        assert!(content.contains("export function canOfferTransition("));
+        assert!(content.contains("export function offerTransitionsFrom("));
+        // No permissions stated: no permissions artifact.
+        assert!(!content.contains("offerPermissions"));
+
+        // Symbols: the barrel learns the lifecycle names, and a bare entity
+        // (no hook) learns none of them.
+        let symbols = schema_file_symbols(&entity, Some(&hook));
+        assert!(symbols.contains(&"offerLifecycle".to_string()));
+        assert!(symbols.contains(&"canOfferTransition".to_string()));
+        let bare_symbols = schema_file_symbols(&entity, None);
+        assert!(!bare_symbols.contains(&"offerLifecycle".to_string()));
+    }
+
+    #[test]
+    fn lifecycle_section_absent_without_a_machine() {
+        let generator = EntitySchemaGenerator::new(test_config(), TypeMapper::new());
+        let (entity, mut hook) = hooked_entity_with_machine();
+        hook.state_machine = None;
+        let content = generator.generate_schema_content(&entity, &[], Some(&hook));
+        assert!(!content.contains("offerLifecycle"));
+        assert!(!content.contains("canOfferTransition"));
+    }
+
     fn test_auto_generated_field_detection() {
         let generator = EntitySchemaGenerator::new(test_config(), TypeMapper::new());
 
@@ -1048,7 +1332,7 @@ mod tests {
             soft_delete: false,
         };
         let content = generator.generate_schema_content(&referring, &[], None);
-        for symbol in schema_file_symbols(&referring, false) {
+        for symbol in schema_file_symbols(&referring, None) {
             assert!(
                 content.contains(&format!("export const {symbol} ="))
                     || content.contains(&format!("export type {symbol} ="))
@@ -1060,7 +1344,7 @@ mod tests {
         // No hook on the entity → no business-rules validator → it must not be
         // listed (a phantom symbol would fail generation on names that never
         // collide).
-        assert!(!schema_file_symbols(&referring, false)
+        assert!(!schema_file_symbols(&referring, None)
             .contains(&"validateWidgetBusinessRules".to_string()));
 
         // With a hook the template does emit it, and the list must say so.
@@ -1076,8 +1360,19 @@ mod tests {
         };
         let hooked = generator.generate_schema_content(&referring, &[], Some(&hook));
         assert!(hooked.contains("export function validateWidgetBusinessRules("));
-        assert!(schema_file_symbols(&referring, true)
-            .contains(&"validateWidgetBusinessRules".to_string()));
+        assert!(schema_file_symbols(
+            &referring,
+            Some(&HookSchema {
+                name: "referring".into(),
+                model: "referring".into(),
+                state_machine: None,
+                rules: vec![],
+                permissions: Default::default(),
+                triggers: vec![],
+                computed_fields: vec![]
+            })
+        )
+        .contains(&"validateWidgetBusinessRules".to_string()));
 
         // A field with no stated reference contributes no relation map, and the
         // list must say so — the barrel check reads the list, not the template.
@@ -1089,6 +1384,6 @@ mod tests {
             indexes: vec![],
             soft_delete: false,
         };
-        assert!(!schema_file_symbols(&bare, false).contains(&"gadgetRelationTargets".to_string()));
+        assert!(!schema_file_symbols(&bare, None).contains(&"gadgetRelationTargets".to_string()));
     }
 }

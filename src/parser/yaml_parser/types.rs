@@ -2,7 +2,9 @@
 //!
 //! All `YamlXxx` structs that map directly to YAML schema file structure.
 
-use crate::ast::{CommitPolicy, CompanyFence, Enforcement, JobPosture, Lifecycle, LifecycleShape, OrgFence};
+use crate::ast::{
+    CommitPolicy, CompanyFence, Enforcement, JobPosture, Lifecycle, LifecycleShape, OrgFence,
+};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 

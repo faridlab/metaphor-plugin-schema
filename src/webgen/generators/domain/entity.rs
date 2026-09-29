@@ -596,7 +596,10 @@ mod tests {
         // no more (a phantom symbol would fail generation on names that never
         // collide) and no less (a missing symbol would let a real collision
         // through). `User` has no relations, so no WithRelations view.
-        assert_eq!(entity_file_symbols(&entity).join(","), "createUser,isUser,cloneUser,equalsUser");
+        assert_eq!(
+            entity_file_symbols(&entity).join(","),
+            "createUser,isUser,cloneUser,equalsUser"
+        );
     }
 
     #[test]

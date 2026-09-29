@@ -372,9 +372,10 @@ fn diff_tables(old: &TableSnapshot, new: &TableSnapshot) -> TableChange {
                     .get(c)
                     .is_some_and(|col| col.data_type.eq_ignore_ascii_case("uuid"))
         })
-        && change.columns_added.iter().any(|c| {
-            c.name == "org_unit_id" && c.data_type.eq_ignore_ascii_case("uuid")
-        });
+        && change
+            .columns_added
+            .iter()
+            .any(|c| c.name == "org_unit_id" && c.data_type.eq_ignore_ascii_case("uuid"));
 
     // Posture flip on an existing table (ADR-0014): same columns, different fence
     // declaration → the RLS policy template must be re-emitted. Skipped when `company_id`
@@ -429,14 +430,18 @@ fn diff_tables(old: &TableSnapshot, new: &TableSnapshot) -> TableChange {
             .filter(|idx| idx.columns.iter().any(|c| c == "company_id"))
             .cloned()
             .collect();
-        let replaced_names: Vec<String> =
-            replaced_indexes.iter().map(|idx| idx.name.clone()).collect();
+        let replaced_names: Vec<String> = replaced_indexes
+            .iter()
+            .map(|idx| idx.name.clone())
+            .collect();
         change.columns_removed.retain(|c| c != "company_id");
         change.columns_added.retain(|c| c.name != "org_unit_id");
         change
             .indexes_added
             .retain(|idx| !idx.columns.iter().any(|c| c == "org_unit_id"));
-        change.indexes_removed.retain(|name| !replaced_names.contains(name));
+        change
+            .indexes_removed
+            .retain(|name| !replaced_names.contains(name));
         // The rename heuristic will already have paired the two uuid columns —
         // retract that suggestion here, same reason as above.
         change
@@ -823,11 +828,7 @@ pub fn generate_up_migration(
             );
             output.push_str(&policy_up);
             writeln!(output).unwrap();
-            writeln!(
-                output,
-                "ALTER TABLE {table_name} DROP COLUMN company_id;"
-            )
-            .unwrap();
+            writeln!(output, "ALTER TABLE {table_name} DROP COLUMN company_id;").unwrap();
             writeln!(output).unwrap();
         }
 
@@ -1181,11 +1182,7 @@ pub fn generate_down_migration(diff: &SchemaDiff) -> String {
                 "ALTER TABLE {table_name} ALTER COLUMN company_id SET NOT NULL;"
             )
             .unwrap();
-            writeln!(
-                output,
-                "ALTER TABLE {table_name} DROP COLUMN org_unit_id;"
-            )
-            .unwrap();
+            writeln!(output, "ALTER TABLE {table_name} DROP COLUMN org_unit_id;").unwrap();
             for idx in &rekey.replaced_indexes {
                 let unique = if idx.unique { "UNIQUE " } else { "" };
                 writeln!(
@@ -2113,7 +2110,11 @@ mod tests {
         let mut old_idx = IndexMap::new();
         old_idx.insert(
             "idx_warehouses_company_id_code".to_string(),
-            rekey_index(&["company_id", "code"], true, "idx_warehouses_company_id_code"),
+            rekey_index(
+                &["company_id", "code"],
+                true,
+                "idx_warehouses_company_id_code",
+            ),
         );
         let old = SchemaSnapshot {
             tables: IndexMap::from([(
@@ -2140,7 +2141,11 @@ mod tests {
         let mut new_idx = IndexMap::new();
         new_idx.insert(
             "idx_warehouses_org_unit_id_code".to_string(),
-            rekey_index(&["org_unit_id", "code"], true, "idx_warehouses_org_unit_id_code"),
+            rekey_index(
+                &["org_unit_id", "code"],
+                true,
+                "idx_warehouses_org_unit_id_code",
+            ),
         );
         let new = SchemaSnapshot {
             tables: IndexMap::from([(
@@ -2167,7 +2172,10 @@ mod tests {
         let (old, new) = rekey_pair();
         let diff = diff_schemas(&old, &new);
         let change = &diff.table_changes["warehouses"];
-        let rekey = change.org_rekey.as_ref().expect("the column pair is a re-key");
+        let rekey = change
+            .org_rekey
+            .as_ref()
+            .expect("the column pair is a re-key");
         assert_eq!(rekey.old_fence, CompanyFence::Strict);
         assert!(
             change.columns_removed.is_empty(),
@@ -2189,8 +2197,16 @@ mod tests {
             change.indexes_added.is_empty() && change.indexes_removed.is_empty(),
             "both index generations ride the ordered re-key emission"
         );
-        assert_eq!(rekey.rekeyed_indexes.len(), 1, "the (org_unit_id, code) unique");
-        assert_eq!(rekey.replaced_indexes.len(), 1, "the (company_id, code) unique");
+        assert_eq!(
+            rekey.rekeyed_indexes.len(),
+            1,
+            "the (org_unit_id, code) unique"
+        );
+        assert_eq!(
+            rekey.replaced_indexes.len(),
+            1,
+            "the (company_id, code) unique"
+        );
     }
 
     /// The emitted order matches the hand-proven pilot migration: add nullable →
@@ -2218,8 +2234,14 @@ mod tests {
         assert!(not_null < guard, "NOT NULL before the kind guard");
         assert!(guard < index, "kind guard before the re-keyed indexes");
         assert!(index < drop_old_policy, "indexes before the policy swap");
-        assert!(drop_old_policy < new_policy, "old policy drops before the org policy lands");
-        assert!(new_policy < drop_col, "the org policy is live before the old column drops");
+        assert!(
+            drop_old_policy < new_policy,
+            "old policy drops before the org policy lands"
+        );
+        assert!(
+            new_policy < drop_col,
+            "the org policy is live before the old column drops"
+        );
         assert!(
             !up.contains("DISABLE ROW LEVEL SECURITY") && !up.contains("NO FORCE"),
             "RLS stays enabled and forced throughout:\n{up}"
@@ -2239,12 +2261,10 @@ mod tests {
     #[test]
     fn rekey_from_shared_blank_anchors_shared_rows_on_the_root() {
         let (mut old, new) = rekey_pair();
-        old.tables
-            .values_mut()
-            .for_each(|t| {
-                t.company_fence = Some(CompanyFence::SharedBlank);
-                t.columns.get_mut("company_id").unwrap().nullable = true;
-            });
+        old.tables.values_mut().for_each(|t| {
+            t.company_fence = Some(CompanyFence::SharedBlank);
+            t.columns.get_mut("company_id").unwrap().nullable = true;
+        });
         let diff = diff_schemas(&old, &new);
         let change = &diff.table_changes["warehouses"];
         let rekey = change.org_rekey.as_ref().expect("still a re-key");
@@ -2258,7 +2278,8 @@ mod tests {
         );
         // ...and a strict source never emits the anchor.
         let (old_strict, new_strict) = rekey_pair();
-        let strict_up = generate_up_migration(&diff_schemas(&old_strict, &new_strict), &new_strict, false);
+        let strict_up =
+            generate_up_migration(&diff_schemas(&old_strict, &new_strict), &new_strict, false);
         assert!(
             !strict_up.contains("kind = 'root'"),
             "strict sources copy only real company rows:\n{strict_up}"
@@ -2313,22 +2334,18 @@ mod tests {
     fn rekeyed_partial_indexes_keep_their_where_predicate() {
         let (mut old, mut new) = rekey_pair();
         let pred = "(metadata->>'deleted_at') IS NULL".to_string();
-        new.tables
-            .values_mut()
-            .for_each(|t| {
-                t.indexes
-                    .get_mut("idx_warehouses_org_unit_id_code")
-                    .unwrap()
-                    .where_predicate = Some(pred.clone());
-            });
-        old.tables
-            .values_mut()
-            .for_each(|t| {
-                t.indexes
-                    .get_mut("idx_warehouses_company_id_code")
-                    .unwrap()
-                    .where_predicate = Some(pred.clone());
-            });
+        new.tables.values_mut().for_each(|t| {
+            t.indexes
+                .get_mut("idx_warehouses_org_unit_id_code")
+                .unwrap()
+                .where_predicate = Some(pred.clone());
+        });
+        old.tables.values_mut().for_each(|t| {
+            t.indexes
+                .get_mut("idx_warehouses_company_id_code")
+                .unwrap()
+                .where_predicate = Some(pred.clone());
+        });
 
         let diff = diff_schemas(&old, &new);
         let up = generate_up_migration(&diff, &new, false);

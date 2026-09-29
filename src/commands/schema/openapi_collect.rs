@@ -64,7 +64,10 @@ pub(super) fn execute_openapi_collect(module: Option<String>) -> Result<()> {
         modules.retain(|m| !vendor.exclude.contains(m));
         let dropped = before - modules.len();
         if dropped > 0 {
-            println!("  ⏭️  excluded {dropped} module(s): {}", vendor.exclude.join(", "));
+            println!(
+                "  ⏭️  excluded {dropped} module(s): {}",
+                vendor.exclude.join(", ")
+            );
         }
     }
     if modules.is_empty() {

@@ -1196,18 +1196,14 @@ mod org_fence_tests {
     fn global_or_optional_org_column_is_fatal() {
         let mut global = org_model();
         global.fields[1].attributes.push(Attribute::new("global"));
-        let errs = errors_of(&schema_with_org_fence(
-            vec![global],
-            Some(OrgFence::Strict),
-        ));
+        let errs = errors_of(&schema_with_org_fence(vec![global], Some(OrgFence::Strict)));
         assert!(
             errs.iter().any(|e| e.contains("@global")),
             "a global org-scoped row is a contradiction, got: {errs:?}"
         );
 
         let mut optional = org_model();
-        optional.fields[1].type_ref =
-            TypeRef::optional(TypeRef::Primitive(PrimitiveType::Uuid));
+        optional.fields[1].type_ref = TypeRef::optional(TypeRef::Primitive(PrimitiveType::Uuid));
         let errs = errors_of(&schema_with_org_fence(
             vec![optional],
             Some(OrgFence::Strict),
@@ -1232,7 +1228,9 @@ mod org_fence_tests {
         );
         // On the key itself it is the sanctioned shared-row shape.
         let mut sane = org_model();
-        sane.fields[1].attributes.push(Attribute::new("org_root_shared"));
+        sane.fields[1]
+            .attributes
+            .push(Attribute::new("org_root_shared"));
         assert!(errors_of(&schema_with_org_fence(vec![sane], Some(OrgFence::Strict))).is_empty());
     }
 
