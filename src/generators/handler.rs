@@ -63,6 +63,7 @@ impl HandlerGenerator {
 
         // Generate route configuration using BackboneCrudHandler
         self.write_route_config(&mut output, model)?;
+        self.write_history_route(&mut output, model);
 
         // Generate custom action handlers if hook has state machine
         if let Some(h) = hook {
@@ -381,6 +382,209 @@ impl HandlerGenerator {
         Ok(())
     }
 
+    /// Emit the nested subject-history route for `@audited` models
+    /// (ADR-0025 read surface): `GET /{collection}/:id/history`, newest
+    /// first, plus `?as_of=` point-in-time reconstruction. Self-contained
+    /// (raw trail SQL + inline walk) so the emitted file needs no new
+    /// dependencies beyond what every module already carries.
+    fn write_history_route(&self, output: &mut String, model: &Model) {
+        if !model.has_attribute("audited") {
+            return;
+        }
+        let model_snake = to_snake_case(&model.name);
+        let table = model.qualified_table_name();
+        let plural = model.collection_name();
+        let sql_list = "SELECT action, actor, changed, reason, occurred_at, txid, ROW_NUMBER() OVER (ORDER BY occurred_at, txid) AS position, COUNT(*) OVER () AS total FROM auditlog.audit_trails WHERE subject_type = $1 AND subject_id = $2 ORDER BY occurred_at DESC, txid DESC";
+        let sql_as_of = "SELECT action, changed, occurred_at FROM auditlog.audit_trails WHERE subject_type = $1 AND subject_id = $2 AND occurred_at <= $3 ORDER BY occurred_at ASC, txid ASC";
+        let code = format!(
+            r#"/// Query parameters of the nested subject-history route.
+#[derive(serde::Deserialize)]
+pub struct {Model}HistoryQuery {{
+    /// Reconstruct the row image at this instant instead of listing the trail.
+    pub as_of: Option<chrono::DateTime<chrono::Utc>>,
+}}
+
+/// The subject's audit history (ADR-0025 read surface): one entry per
+/// captured change, newest first, positions numbered from the oldest by
+/// (occurred_at, txid). `?as_of=` walks the trail forward from the
+/// anchoring INSERT applying each diff's `to` values, so the row image at
+/// any instant is reconstructible from the trail alone. Deleted subjects
+/// still resolve history: the trail outlives the row (no FK, by contract).
+pub async fn {snake}_history(
+    axum::extract::State(pool): axum::extract::State<sqlx::PgPool>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    axum::extract::Query(q): axum::extract::Query<{Model}HistoryQuery>,
+) -> axum::response::Response {{
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use serde_json::json;
+    use sqlx::Row;
+    let subject_id = id.to_string();
+    let mut conn = match pool.acquire().await {{
+        Ok(c) => c,
+        Err(e) => {{
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({{
+                    "error": "history_pool_unavailable",
+                    "message": e.to_string(),
+                }})),
+            )
+                .into_response()
+        }}
+    }};
+    // Trail reads fence like business reads (ADR-0029 decorator): relay the
+    // ambient org scope onto this self-opened connection.
+    if let Some(scope) = backbone_orm::org_scope::current_org_scope() {{
+        if let Err(e) = backbone_orm::org_scope::bind_org_scope_on(&mut conn, &scope).await {{
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({{
+                    "error": "history_scope_bind",
+                    "message": e.to_string(),
+                }})),
+            )
+                .into_response()
+        }}
+    }}
+    const SUBJECT_TYPE: &str = "{table}";
+    match q.as_of {{
+        None => {{
+            let rows = match sqlx::query("{sql_list}")
+                .bind(SUBJECT_TYPE)
+                .bind(&subject_id)
+                .fetch_all(&mut *conn)
+                .await
+            {{
+                Ok(r) => r,
+                Err(e) => {{
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::Json(json!({{
+                            "error": "history_read",
+                            "message": e.to_string(),
+                        }})),
+                    )
+                        .into_response()
+                }}
+            }};
+            let total: i64 = rows.first().map(|r| r.get("total")).unwrap_or(0);
+            let entries: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {{
+                    json!({{
+                        "position": r.get::<i64, _>("position"),
+                        "action": r.get::<String, _>("action"),
+                        "actor": r.get::<String, _>("actor"),
+                        "changed": r.get::<serde_json::Value, _>("changed"),
+                        "reason": r.get::<Option<String>, _>("reason"),
+                        "occurred_at": r.get::<chrono::DateTime<chrono::Utc>, _>("occurred_at"),
+                        "txid": r.get::<String, _>("txid"),
+                    }})
+                }})
+                .collect();
+            (
+                StatusCode::OK,
+                axum::Json(json!({{
+                    "subject_type": SUBJECT_TYPE,
+                    "subject_id": subject_id,
+                    "total": total,
+                    "entries": entries,
+                }})),
+            )
+                .into_response()
+        }}
+        Some(as_of) => {{
+            let rows = match sqlx::query("{sql_as_of}")
+                .bind(SUBJECT_TYPE)
+                .bind(&subject_id)
+                .bind(as_of)
+                .fetch_all(&mut *conn)
+                .await
+            {{
+                Ok(r) => r,
+                Err(e) => {{
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        axum::Json(json!({{
+                            "error": "history_read",
+                            "message": e.to_string(),
+                        }})),
+                    )
+                        .into_response()
+                }}
+            }};
+            if rows.is_empty() {{
+                return (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(json!({{
+                        "error": "history_before_subject",
+                        "message": "as_of precedes the subject's first captured event",
+                    }})),
+                )
+                    .into_response();
+            }}
+            let mut image = serde_json::Map::new();
+            let mut deleted_at: Option<chrono::DateTime<chrono::Utc>> = None;
+            for r in &rows {{
+                let action: String = r.get("action");
+                let changed: serde_json::Value = r.get("changed");
+                if action == "delete" {{
+                    image.clear();
+                    deleted_at = Some(r.get("occurred_at"));
+                    continue;
+                }}
+                deleted_at = None;
+                if let Some(fields) = changed.as_object() {{
+                    for (field, diff) in fields {{
+                        if let Some(to) = diff.get("to") {{
+                            image.insert(field.clone(), to.clone());
+                        }}
+                    }}
+                }}
+            }}
+            if let Some(at) = deleted_at {{
+                return (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(json!({{
+                        "error": "subject_deleted_before_as_of",
+                        "deleted_at": at,
+                    }})),
+                )
+                    .into_response();
+            }}
+            (
+                StatusCode::OK,
+                axum::Json(json!({{
+                    "as_of": as_of,
+                    "image": serde_json::Value::Object(image),
+                }})),
+            )
+                .into_response()
+        }}
+    }}
+}}
+
+/// The nested history route, merged next to the model's CRUD router by the
+/// module's route composer (the pool there is the tenant-resolved one).
+pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
+    axum::Router::new()
+        .route("/{plural}/:id/history", axum::routing::get({snake}_history))
+        .with_state(pool)
+}}
+"#,
+            Model = model.name,
+            snake = model_snake,
+            table = table,
+            plural = plural,
+            sql_list = sql_list,
+            sql_as_of = sql_as_of,
+        );
+        for line in code.lines() {
+            writeln!(output, "{}", line).unwrap();
+        }
+        writeln!(output).unwrap();
+    }
     fn write_route_config(&self, output: &mut String, model: &Model) -> Result<(), GenerateError> {
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
@@ -1012,6 +1216,13 @@ impl Generator for HandlerGenerator {
         let mut output = GeneratedOutput::new();
 
         // Collect model names for parent mod.rs
+        let audited: std::collections::HashSet<String> = schema
+            .schema
+            .models
+            .iter()
+            .filter(|m| m.has_attribute("audited"))
+            .map(|m| m.name.clone())
+            .collect();
         let model_names: Vec<String> = schema
             .schema
             .models
@@ -1097,6 +1308,10 @@ impl Generator for HandlerGenerator {
                 writeln!(mod_content, "    create_{}_routes,", model_snake).unwrap();
                 writeln!(mod_content, "    create_{}_read_routes,", model_snake).unwrap();
                 writeln!(mod_content, "    create_{}_write_routes,", model_snake).unwrap();
+                // The @audited read surface rides the same export block.
+                if audited.contains(model.as_str()) {
+                    writeln!(mod_content, "    create_{}_history_route,", model_snake).unwrap();
+                }
                 writeln!(mod_content, "}};").unwrap();
             }
         } else {
@@ -1115,11 +1330,19 @@ impl Generator for HandlerGenerator {
             writeln!(mod_content, "// Re-exports").unwrap();
             for model in &schema.schema.models {
                 let model_snake = to_snake_case(&model.name);
-                writeln!(
-                    mod_content,
-                    "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes}};",
-                    model_snake, model_snake, model_snake, model_snake
-                ).unwrap();
+                if model.has_attribute("audited") {
+                    writeln!(
+                        mod_content,
+                        "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes, create_{}_history_route}};",
+                        model_snake, model_snake, model_snake, model_snake, model_snake
+                    ).unwrap();
+                } else {
+                    writeln!(
+                        mod_content,
+                        "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes}};",
+                        model_snake, model_snake, model_snake, model_snake
+                    ).unwrap();
+                }
             }
             // Custom re-exports (preserved across regeneration)
             writeln!(mod_content, "// <<< CUSTOM").unwrap();
@@ -1202,6 +1425,81 @@ mod tests {
         });
 
         ResolvedSchema { schema }
+    }
+
+    #[test]
+    fn test_audited_model_emits_the_nested_history_route() {
+        let mut schema = create_test_schema();
+        schema.schema.models.push(Model {
+            name: "Ledger".to_string(),
+            attributes: vec![crate::ast::Attribute::new("audited")],
+            fields: vec![Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let generator = HandlerGenerator::new();
+        let output = generator.generate(&schema).unwrap();
+
+        let handler = output
+            .files
+            .get(&PathBuf::from("src/presentation/http/ledger_handler.rs"))
+            .expect("ledger handler file");
+        assert!(
+            handler.contains("pub async fn ledger_history("),
+            "the history handler is emitted for @audited models"
+        );
+        assert!(
+            handler.contains("create_ledger_history_route"),
+            "the history route factory is emitted"
+        );
+        assert!(
+            handler.contains("/ledgers/:id/history"),
+            "the nested route path is the collection's"
+        );
+        assert!(
+            handler.contains("FROM auditlog.audit_trails"),
+            "the handler reads the shared trail"
+        );
+        assert!(
+            handler.contains("history_before_subject"),
+            "the as_of-before-first-event refusal is part of the surface"
+        );
+
+        // The unaudited model stays without a history surface.
+        let user = output
+            .files
+            .get(&PathBuf::from("src/presentation/http/user_handler.rs"))
+            .unwrap();
+        assert!(
+            !user.contains("user_history"),
+            "models without the audited attribute get no history route"
+        );
+    }
+
+    #[test]
+    fn test_mod_rs_exports_the_history_route_only_for_audited_models() {
+        let mut schema = create_test_schema();
+        schema.schema.models.push(Model {
+            name: "Ledger".to_string(),
+            attributes: vec![crate::ast::Attribute::new("audited")],
+            fields: vec![Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let generator = HandlerGenerator::new();
+        let output = generator.generate(&schema).unwrap();
+        let module_file = output
+            .files
+            .get(&PathBuf::from("src/presentation/http/mod.rs"))
+            .unwrap();
+        assert!(module_file.contains("create_ledger_history_route"));
+        assert!(!module_file.contains("create_user_history_route"));
     }
 
     #[test]
