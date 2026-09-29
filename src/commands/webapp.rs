@@ -103,7 +103,11 @@ fn run_for_app(
 
     let primary_schema = resolve_schema_dir(cwd, Path::new("libs/modules"), &primary, Some(ws))
         .with_context(|| format!("could not locate schema for module '{}'", primary))?;
-    let primary_module = read_index_module_name(&primary_schema).unwrap_or_else(|| primary.clone());
+    // The fallback (schema carries no declared module name) normalizes the
+    // project name: app projects are hyphenated (serpa-service) and the
+    // webgen module name doubles as a directory name under src/generated.
+    let primary_module = read_index_module_name(&primary_schema)
+        .unwrap_or_else(|| primary.replace('-', "_"));
 
     // Plan: primary + transitive deps (schema external_imports + metaphor.yaml depends_on).
     let mut planned: Vec<(String, PathBuf)> =
