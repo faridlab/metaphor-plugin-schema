@@ -75,10 +75,10 @@ pub(super) fn execute_generate(
         resolved,
     } = loaded;
 
-    let mut generated = run_generators(&resolved, &targets, split)?;
-
     let output_dir =
         output.unwrap_or_else(|| schema_path.parent().unwrap_or(&schema_path).to_path_buf());
+
+    let mut generated = run_generators(&resolved, &targets, split, &output_dir)?;
 
     let user_owned = load_user_owned_globs(&output_dir)?;
 
@@ -123,6 +123,7 @@ fn run_generators(
     resolved: &crate::resolver::ResolvedSchema,
     targets: &[crate::generators::GenerationTarget],
     split: bool,
+    output_dir: &std::path::Path,
 ) -> Result<crate::generators::GeneratedOutput> {
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
@@ -136,6 +137,7 @@ fn run_generators(
     let options = GenerationOptions {
         split,
         group_by_domain: true,
+        output_dir: Some(output_dir.to_path_buf()),
     };
     let generated = generate_all_with_options(resolved, targets, &options)?;
 

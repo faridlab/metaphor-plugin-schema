@@ -913,13 +913,9 @@ impl StateMachineGenerator {
         writeln!(output, "        let sm = {}StateMachine::new();", name).unwrap();
         if nullable {
             // A nullable machine starts at the null boundary, not at the
-            // declared initial state (the arm verb enters).
+            // declared initial state (the arm verb enters) — nothing is
+            // initial at NULL.
             writeln!(output, "        assert_eq!(sm.current_state(), None);").unwrap();
-            writeln!(
-                output,
-                "        assert!(sm.current_state().map_or(false, |s| s.is_initial()));"
-            )
-            .unwrap();
         } else if let Some(initial) = sm.initial_state() {
             writeln!(
                 output,
@@ -1474,7 +1470,7 @@ mod tests {
         let mut content = String::new();
         generator.generate_tests(&mut content, &hook, sm).unwrap();
         assert!(content.contains("assert_eq!(sm.current_state(), None);"));
-        assert!(content.contains("map_or(false, |s| s.is_initial())"));
+        assert!(!content.contains("|s| s.is_initial()"));
         assert!(content.contains("map_or(false, |s| s.is_final())"));
     }
 }

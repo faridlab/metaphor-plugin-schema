@@ -143,6 +143,13 @@ pub struct GenerationOptions {
     /// Group generated files by model/domain (creates subdirectories per model)
     /// Example: src/application/commands/user/user_commands.rs instead of src/application/commands/user_commands.rs
     pub group_by_domain: bool,
+
+    /// The module root the emitted paths are relative to. Emitters that must
+    /// read module context (e.g. the seeder binary resolving the host crate
+    /// name from the module's Cargo.toml) read it from HERE, never from the
+    /// process cwd — generation must emit the same bytes regardless of where
+    /// the command runs from.
+    pub output_dir: Option<std::path::PathBuf>,
 }
 
 /// Build file path for generated code, optionally grouping by domain
@@ -602,7 +609,7 @@ pub fn generate_all_with_options(
                     GenerationTarget::BulkOperations => {
                         BulkOperationsGenerator::new().generate(s)?
                     }
-                    GenerationTarget::Seeder => SeederGenerator::new().generate(s)?,
+                    GenerationTarget::Seeder => SeederGenerator::new().with_output_dir(options.output_dir.clone()).generate(s)?,
                     GenerationTarget::IntegrationTest => {
                         IntegrationTestGenerator::new().generate(s)?
                     }

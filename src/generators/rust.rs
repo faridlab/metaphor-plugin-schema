@@ -832,6 +832,17 @@ impl RustGenerator {
                 .find(|f| f.name == *sm_field)
                 .map(|f| self.type_to_rust(&f.type_ref))
                 .unwrap_or_else(|| "String".to_string());
+            // For a nullable field the write-back parses the INNER type and
+            // re-wraps in Option — Option<...> implements no FromStr.
+            let sm_field_inner_type = model
+                .fields
+                .iter()
+                .find(|f| f.name == *sm_field)
+                .map(|f| match &f.type_ref {
+                    crate::ast::TypeRef::Optional(inner) => self.type_to_rust(inner),
+                    _ => self.type_to_rust(&f.type_ref),
+                })
+                .unwrap_or_else(|| "String".to_string());
             writeln!(output).unwrap();
             writeln!(
                 output,
@@ -887,7 +898,7 @@ impl RustGenerator {
                     "        self.{field} = new_state.map(|s| s.to_string().parse::<{field_type}>()\
                     \n            .map_err(|e| StateMachineError::InvalidState(e.to_string()))).transpose()?;",
                     field = sm_field,
-                    field_type = sm_field_rust_type
+                    field_type = sm_field_inner_type
                 )
                 .unwrap();
                 writeln!(output, "        Ok(())").unwrap();
@@ -3006,6 +3017,14 @@ mod tests {
         assert!(
             session_file.contains(".transpose()?;"),
             "Expected transpose on the Option parse results"
+        );
+        assert!(
+            session_file.contains(".parse::<SessionState>()"),
+            "the write-back parses the inner enum type"
+        );
+        assert!(
+            !session_file.contains("parse::<Option<SessionState>>()"),
+            "Option<...> implements no FromStr — the write-back must not target it"
         );
     }
 

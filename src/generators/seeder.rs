@@ -27,11 +27,23 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 /// Generates seeder infrastructure from schema
-pub struct SeederGenerator;
+pub struct SeederGenerator {
+    /// The module root the emitted paths are relative to. The seeder binary
+    /// resolves the host crate name from the module's Cargo.toml — reading it
+    /// from HERE (not the process cwd) keeps emission independent of where
+    /// the generate command runs from.
+    output_dir: Option<PathBuf>,
+}
 
 impl SeederGenerator {
     pub fn new() -> Self {
-        Self
+        Self { output_dir: None }
+    }
+
+    /// See [`SeederGenerator::output_dir`].
+    pub fn with_output_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.output_dir = dir;
+        self
     }
 
     /// Generate the seeders module (mod.rs)
@@ -358,12 +370,19 @@ impl SeederGenerator {
     /// Resolve the Rust identifier for the host crate that contains the
     /// `seeders/` module, so the seeder binary can `use <crate>::seeders::*`.
     ///
-    /// Strategy: read `./Cargo.toml` at generation time and extract
+    /// Strategy: read the MODULE's `Cargo.toml` (the generation output dir —
+    /// never the process cwd: generation from a workspace root must emit the
+    /// same bytes as generation from inside the module) and extract
     /// `[package].name` (with `-` → `_`). Falls back to `backbone_<module>`
     /// for the library-style convention used inside `backbone-framework`.
-    fn resolve_host_crate_name(module_name: &str) -> String {
+    fn resolve_host_crate_name(&self, module_name: &str) -> String {
         let fallback = || format!("backbone_{}", module_name.replace('-', "_"));
-        let Ok(contents) = std::fs::read_to_string("Cargo.toml") else {
+        let cargo = self
+            .output_dir
+            .as_deref()
+            .map(|dir| dir.join("Cargo.toml"))
+            .unwrap_or_else(|| PathBuf::from("Cargo.toml"));
+        let Ok(contents) = std::fs::read_to_string(cargo) else {
             return fallback();
         };
         let mut in_package = false;
@@ -403,7 +422,7 @@ impl SeederGenerator {
     /// Generate seeder binary
     fn generate_seeder_binary(&self, models: &[&Model], module_name: &str) -> String {
         let mut output = String::new();
-        let crate_name_snake = Self::resolve_host_crate_name(module_name);
+        let crate_name_snake = self.resolve_host_crate_name(module_name);
 
         writeln!(
             output,
