@@ -167,11 +167,8 @@ pub(super) fn write_generated_files(
                 "!".yellow().bold(),
                 orphans.len()
             );
-            for rel in orphans.iter().take(20) {
+            for rel in &orphans {
                 println!("  {} {}", "•".yellow(), rel);
-            }
-            if orphans.len() > 20 {
-                println!("  ... and {} more", orphans.len() - 20);
             }
             println!(
                 "  {} these never regenerate and are never wiped; retire them, or declare them user_owned in metaphor.codegen.yaml",
