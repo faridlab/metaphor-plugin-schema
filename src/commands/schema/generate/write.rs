@@ -26,6 +26,7 @@ use globset::GlobSet;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::path::Path;
+use walkdir::WalkDir;
 
 use crate::generators::GeneratedOutput;
 
@@ -40,6 +41,7 @@ pub(super) struct WriteStats {
     pub skipped: usize,
     pub custom_warnings: usize,
     pub user_owned_skipped: usize,
+    pub orphans: usize,
 }
 
 pub(super) fn write_generated_files(
@@ -48,6 +50,7 @@ pub(super) fn write_generated_files(
     user_owned: &GlobSet,
     force: bool,
     dry_run: bool,
+    full_run: bool,
 ) -> Result<WriteStats> {
     println!();
     println!(
@@ -69,6 +72,7 @@ pub(super) fn write_generated_files(
         skipped: 0,
         custom_warnings: 0,
         user_owned_skipped: 0,
+        orphans: 0,
     };
 
     for (path, content) in &generated.files {
@@ -150,7 +154,69 @@ pub(super) fn write_generated_files(
 
     pb.finish_and_clear();
 
+    // Orphan report — only on a full run (all targets, no model/hook/workflow
+    // filters, no split). A filtered run emits a partial file set, and every
+    // file outside the filter would look orphaned.
+    if !dry_run && full_run {
+        let orphans = find_orphan_source_files(generated, output_dir, user_owned);
+        if !orphans.is_empty() {
+            stats.orphans = orphans.len();
+            println!();
+            println!(
+                "{} {} orphaned source file(s) — on disk, neither generated nor declared user_owned:",
+                "!".yellow().bold(),
+                orphans.len()
+            );
+            for rel in orphans.iter().take(20) {
+                println!("  {} {}", "•".yellow(), rel);
+            }
+            if orphans.len() > 20 {
+                println!("  ... and {} more", orphans.len() - 20);
+            }
+            println!(
+                "  {} these never regenerate and are never wiped; retire them, or declare them user_owned in metaphor.codegen.yaml",
+                "Tip:".cyan()
+            );
+        }
+    }
+
     Ok(stats)
+}
+
+/// Walk `src/` and `tests/` for `.rs` files that no generator emits and the
+/// manifest does not declare user-owned: the silently-immortal class (dropped
+/// emitters, retired models, scaffold leftovers). Relative forward-slash
+/// paths, sorted for stable output.
+fn find_orphan_source_files(
+    generated: &GeneratedOutput,
+    output_dir: &Path,
+    user_owned: &GlobSet,
+) -> Vec<String> {
+    let mut orphans = Vec::new();
+    for root in ["src", "tests"] {
+        let root_path = output_dir.join(root);
+        if !root_path.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&root_path).into_iter().filter_map(|e| e.ok()) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(output_dir) else {
+                continue;
+            };
+            if generated.files.contains_key(rel) || user_owned.is_match(rel) {
+                continue;
+            }
+            orphans.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    orphans.sort();
+    orphans
 }
 
 /// Route a generated file's content through the appropriate [`super::super::merge`]
@@ -253,7 +319,8 @@ mod tests {
         files.insert(code.clone(), "new".to_string());
         let generated = GeneratedOutput { files };
 
-        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false).unwrap();
+        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true)
+            .unwrap();
 
         // Migration kept its applied bytes (immutable).
         let on_disk = std::fs::read_to_string(dir.join(&mig)).unwrap();
@@ -283,13 +350,55 @@ mod tests {
         files.insert(mig.clone(), bytes.clone());
         let generated = GeneratedOutput { files };
 
-        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false).unwrap();
+        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true)
+            .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(dir.join(&mig)).unwrap(),
             bytes,
             "a migration not yet on disk should be written"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The orphan report: a `.rs` file on disk that no generator emits and the
+    /// manifest does not declare user-owned is reported; generated and
+    /// user-owned files are not.
+    #[test]
+    fn full_run_reports_orphaned_source_files() {
+        let dir = scratch_dir("orphan-report");
+        std::fs::create_dir_all(dir.join("src/application/subscriptions")).unwrap();
+
+        let generated_rs = PathBuf::from("src/lib.rs");
+        std::fs::write(dir.join(&generated_rs), "generated").unwrap();
+        let orphan = PathBuf::from("src/application/subscriptions/mod.rs");
+        std::fs::write(dir.join(&orphan), "stale").unwrap();
+        let owned = PathBuf::from("src/application/service/hand_written.rs");
+        std::fs::create_dir_all(dir.join(&owned).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(&owned), "hand").unwrap();
+
+        let mut files = HashMap::new();
+        files.insert(generated_rs, "// emitted".to_string());
+        let generated = GeneratedOutput { files };
+
+        let mut user_owned = GlobSetBuilder::new();
+        user_owned.add(globset::Glob::new("src/application/service/**").unwrap());
+        let user_owned = user_owned.build().unwrap();
+
+        let stats =
+            write_generated_files(&generated, &dir, &user_owned, true, false, true).unwrap();
+
+        assert_eq!(
+            stats.orphans, 1,
+            "exactly the stale subscriptions file should be reported"
+        );
+
+        // A non-full run (filtered) never reports: the partial emission would
+        // flag everything outside the filter.
+        let stats_filtered =
+            write_generated_files(&generated, &dir, &user_owned, true, false, false).unwrap();
+        assert_eq!(stats_filtered.orphans, 0, "filtered runs skip the report");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

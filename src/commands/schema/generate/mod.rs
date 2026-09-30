@@ -89,7 +89,23 @@ pub(super) fn execute_generate(
     // deletes an existing migration, even under --force. Council 2026-07-28.)
     stabilize_migration_timestamps(&mut generated, &output_dir);
 
-    let stats = write_generated_files(&generated, &output_dir, &user_owned, force, dry_run)?;
+    // The orphan report only makes sense on a full run: any filter (targets,
+    // models, hooks, workflows) or a split layout emits a partial file set and
+    // every untouched file would look orphaned.
+    let full_run = target.eq_ignore_ascii_case("all")
+        && models_filter.is_none()
+        && hooks_filter.is_none()
+        && workflows_filter.is_none()
+        && !split;
+
+    let stats = write_generated_files(
+        &generated,
+        &output_dir,
+        &user_owned,
+        force,
+        dry_run,
+        full_run,
+    )?;
 
     print_summary(&stats, generated.files.len(), dry_run);
 
@@ -156,12 +172,22 @@ fn print_summary(stats: &WriteStats, total_files: usize, dry_run: bool) {
         String::new()
     };
 
+    let orphans_part = if stats.orphans > 0 {
+        format!(
+            ", {} orphaned source file(s)",
+            stats.orphans.to_string().yellow().bold()
+        )
+    } else {
+        String::new()
+    };
+
     println!(
-        "{} {} created, {} skipped{}{}",
+        "{} {} created, {} skipped{}{}{}",
         "Complete:".green().bold(),
         stats.created.to_string().green(),
         stats.skipped.to_string().yellow(),
         user_owned_part,
         warnings_part,
+        orphans_part,
     );
 }
