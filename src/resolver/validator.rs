@@ -208,14 +208,14 @@ impl<'a> SchemaValidator<'a> {
         let mut errors = Vec::new();
 
         // Every declared state machine in the module, by hook name.
-        let machines: Vec<(String, String)> = self
+        let machines: Vec<(String, String, &crate::ast::StateMachine)> = self
             .schema
             .hooks
             .iter()
             .filter_map(|h| {
                 h.state_machine
                     .as_ref()
-                    .map(|m| (h.name.clone(), m.field.clone()))
+                    .map(|m| (h.name.clone(), m.field.clone(), m))
             })
             .collect();
 
@@ -271,12 +271,12 @@ impl<'a> SchemaValidator<'a> {
                 // guard exactly this field.
                 if lifecycle.shape == LifecycleShape::HandSet {
                     if let Some(machine) = &lifecycle.state_machine {
-                        match machines.iter().find(|(hook, _)| hook == machine) {
+                        match machines.iter().find(|(hook, _, _)| hook == machine) {
                             None => errors.push(ResolveError::validation(format!(
                                 "{declared}: state_machine '{machine}' does not exist — \
                                  no hook in this module declares it"
                             ))),
-                            Some((_, guarded_field)) if guarded_field != &field.name => {
+                            Some((_, guarded_field, _)) if guarded_field != &field.name => {
                                 errors.push(ResolveError::validation(format!(
                                     "{declared}: state_machine '{machine}' guards field \
                                      '{guarded_field}', not '{}' — a hand_set field must name \
@@ -284,7 +284,24 @@ impl<'a> SchemaValidator<'a> {
                                     field.name
                                 )));
                             }
-                            Some(_) => {}
+                            Some((_, _, sm)) => {
+                                // Null-boundary coherence: a machine that arms
+                                // from or ends to the null boundary can only
+                                // guard a nullable field — the boundary is the
+                                // column's NULL.
+                                let field_nullable = matches!(
+                                    &field.type_ref,
+                                    crate::ast::TypeRef::Optional(_)
+                                );
+                                if sm.is_nullable() && !field_nullable {
+                                    errors.push(ResolveError::validation(format!(
+                                        "{declared}: state_machine '{machine}' uses the null \
+                                         state boundary (from/to 'null'), but the field is not \
+                                         nullable — declare the field type as optional or drop \
+                                         the null-boundary edges"
+                                    )));
+                                }
+                            }
                         }
                     }
                 }
@@ -750,9 +767,14 @@ impl<'a> SchemaValidator<'a> {
             });
         }
 
-        // Check for at least one final state
+        // Check for at least one final state — a transition exiting to the null
+        // boundary counts: clearing the field ends the lifecycle.
         let final_count = sm.states.iter().filter(|s| s.final_state).count();
-        if final_count == 0 {
+        let exits_to_null = sm
+            .transitions
+            .iter()
+            .any(|t| t.to == crate::ast::NULL_STATE);
+        if final_count == 0 && !exits_to_null {
             errors.push(ResolveError::StateMachineError {
                 message: format!(
                     "State machine in workflow '{}' has no final state (use @final)",
@@ -764,10 +786,25 @@ impl<'a> SchemaValidator<'a> {
         // Check transition states exist
         let state_names: HashSet<_> = sm.states.iter().map(|s| s.name.as_str()).collect();
 
+        // A declared state must not claim the reserved null-boundary name.
+        if state_names.contains(crate::ast::NULL_STATE) {
+            errors.push(ResolveError::StateMachineError {
+                message: format!(
+                    "State machine in workflow '{}' declares a state named '{}' — \
+                     that name is reserved for the null boundary of a nullable field",
+                    workflow_name,
+                    crate::ast::NULL_STATE
+                ),
+            });
+        }
+
         for transition in &sm.transitions {
             // Check source states
             for from in &transition.from {
-                if from != "*" && !state_names.contains(from.as_str()) {
+                if from != "*"
+                    && from != crate::ast::NULL_STATE
+                    && !state_names.contains(from.as_str())
+                {
                     errors.push(ResolveError::StateMachineError {
                         message: format!(
                             "Transition '{}' in workflow '{}' references unknown source state '{}'",
@@ -778,7 +815,8 @@ impl<'a> SchemaValidator<'a> {
             }
 
             // Check target state
-            if !state_names.contains(transition.to.as_str()) {
+            if transition.to != crate::ast::NULL_STATE && !state_names.contains(transition.to.as_str())
+            {
                 errors.push(ResolveError::StateMachineError {
                     message: format!(
                         "Transition '{}' in workflow '{}' references unknown target state '{}'",

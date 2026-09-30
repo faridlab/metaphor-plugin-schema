@@ -863,36 +863,67 @@ impl RustGenerator {
                 sm_field
             )
             .unwrap();
-            writeln!(output, "    pub fn transition_to(&mut self, new_state: {name}State) -> Result<(), StateMachineError> {{",
-                name = sm_name).unwrap();
-            // Convert entity's field type to state machine's state type via Display/FromStr
-            // parse::<{Name}State>() returns Result<_, StateMachineError> so ? works directly
-            writeln!(
-                output,
-                "        let current = self.{field}.to_string().parse::<{name}State>()?;",
-                field = sm_field,
-                name = sm_name
-            )
-            .unwrap();
-            writeln!(
-                output,
-                "        let mut sm = {name}StateMachine::from_state(current);",
-                name = sm_name
-            )
-            .unwrap();
-            writeln!(output, "        sm.transition_to_state(new_state)?;").unwrap();
-            // Convert state machine's state type back to entity's field type via Display/FromStr
-            // Explicit turbofish type avoids type inference failures for non-String error types
-            writeln!(
-                output,
-                "        self.{field} = new_state.to_string().parse::<{field_type}>()\
-                \n            .map_err(|e| StateMachineError::InvalidState(e.to_string()))?;",
-                field = sm_field,
-                field_type = sm_field_rust_type
-            )
-            .unwrap();
-            writeln!(output, "        Ok(())").unwrap();
-            writeln!(output, "    }}").unwrap();
+            if sm.is_nullable() {
+                // Nullable state field: the column's NULL is the machine's null
+                // boundary — arm enters from it, end writes it back.
+                writeln!(output, "    pub fn transition_to(&mut self, new_state: Option<{name}State>) -> Result<(), StateMachineError> {{",
+                    name = sm_name).unwrap();
+                writeln!(
+                    output,
+                    "        let current = self.{field}.as_ref().map(|v| v.to_string().parse::<{name}State>()).transpose()?;",
+                    field = sm_field,
+                    name = sm_name
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "        let mut sm = {name}StateMachine::from_opt_state(current);",
+                    name = sm_name
+                )
+                .unwrap();
+                writeln!(output, "        sm.transition_to_state(new_state)?;").unwrap();
+                writeln!(
+                    output,
+                    "        self.{field} = new_state.map(|s| s.to_string().parse::<{field_type}>()\
+                    \n            .map_err(|e| StateMachineError::InvalidState(e.to_string()))).transpose()?;",
+                    field = sm_field,
+                    field_type = sm_field_rust_type
+                )
+                .unwrap();
+                writeln!(output, "        Ok(())").unwrap();
+                writeln!(output, "    }}").unwrap();
+            } else {
+                writeln!(output, "    pub fn transition_to(&mut self, new_state: {name}State) -> Result<(), StateMachineError> {{",
+                    name = sm_name).unwrap();
+                // Convert entity's field type to state machine's state type via Display/FromStr
+                // parse::<{Name}State>() returns Result<_, StateMachineError> so ? works directly
+                writeln!(
+                    output,
+                    "        let current = self.{field}.to_string().parse::<{name}State>()?;",
+                    field = sm_field,
+                    name = sm_name
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "        let mut sm = {name}StateMachine::from_state(current);",
+                    name = sm_name
+                )
+                .unwrap();
+                writeln!(output, "        sm.transition_to_state(new_state)?;").unwrap();
+                // Convert state machine's state type back to entity's field type via Display/FromStr
+                // Explicit turbofish type avoids type inference failures for non-String error types
+                writeln!(
+                    output,
+                    "        self.{field} = new_state.to_string().parse::<{field_type}>()\
+                    \n            .map_err(|e| StateMachineError::InvalidState(e.to_string()))?;",
+                    field = sm_field,
+                    field_type = sm_field_rust_type
+                )
+                .unwrap();
+                writeln!(output, "        Ok(())").unwrap();
+                writeln!(output, "    }}").unwrap();
+            }
         }
 
         // ===================================================================
@@ -2764,6 +2795,61 @@ mod tests {
         ResolvedSchema { schema }
     }
 
+    /// A model whose state field is nullable, guarded by a machine that arms
+    /// from the null boundary and ends back to it (the survey session shape).
+    fn make_schema_with_nullable_state_machine() -> ResolvedSchema {
+        let mut schema = ModuleSchema::new("test");
+        let mut model = Model::new("Session");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "session_state".to_string(),
+                type_ref: TypeRef::Optional(Box::new(TypeRef::Custom("SessionState".to_string()))),
+                attributes: vec![],
+                ..Default::default()
+            },
+        ];
+        schema.models.push(model);
+
+        let mut hook = Hook::new("SessionFlow", "Session");
+        hook.state_machine = Some(StateMachine {
+            field: "session_state".to_string(),
+            states: vec![
+                State {
+                    name: "ready".to_string(),
+                    initial: true,
+                    ..Default::default()
+                },
+                State {
+                    name: "in_progress".to_string(),
+                    ..Default::default()
+                },
+            ],
+            transitions: vec![
+                Transition::new(
+                    "arm",
+                    vec![crate::ast::NULL_STATE.to_string()],
+                    "ready",
+                ),
+                Transition::new("start", vec!["ready".to_string()], "in_progress"),
+                Transition::new(
+                    "end",
+                    vec!["ready".to_string(), "in_progress".to_string()],
+                    crate::ast::NULL_STATE,
+                ),
+            ],
+            span: Default::default(),
+        });
+        schema.hooks.push(hook);
+
+        ResolvedSchema { schema }
+    }
+
     // ── Row-level tenant fence: the polarity guard ────────────────────────────
     //
     // These pin the ONE property that matters: an entity carrying the tenant column is
@@ -2890,6 +2976,36 @@ mod tests {
         assert!(
             payment_file.contains("use crate::domain::state_machine::{PaymentStateMachine"),
             "Expected PaymentStateMachine import"
+        );
+    }
+
+    #[test]
+    fn test_nullable_state_machine_generates_option_transition_to() {
+        let schema = make_schema_with_nullable_state_machine();
+        let output = RustGenerator::new().generate(&schema).unwrap();
+
+        let session_file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/session.rs"))
+            .expect("session.rs should be generated");
+
+        assert!(
+            session_file
+                .contains("pub fn transition_to(&mut self, new_state: Option<SessionFlowState>)"),
+            "Expected Option-taking transition_to() for a nullable state field"
+        );
+        assert!(
+            session_file.contains("SessionFlowStateMachine::from_opt_state(current)"),
+            "Expected from_opt_state construction"
+        );
+        assert!(
+            session_file
+                .contains(".as_ref().map(|v| v.to_string().parse::<SessionFlowState>())"),
+            "Expected Option-aware current-state parse"
+        );
+        assert!(
+            session_file.contains(".transpose()?;"),
+            "Expected transpose on the Option parse results"
         );
     }
 

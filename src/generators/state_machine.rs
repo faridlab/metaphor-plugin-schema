@@ -264,21 +264,55 @@ impl StateMachineGenerator {
         // Transition methods
         writeln!(output, "impl {}Transition {{", name).unwrap();
         writeln!(output, "    /// Get the target state of this transition").unwrap();
-        writeln!(output, "    pub fn target_state(&self) -> {}State {{", name).unwrap();
-        writeln!(output, "        match self {{").unwrap();
-        for transition in &sm.transitions {
+        if sm.is_nullable() {
+            // Nullable machine: a transition ending to the null boundary
+            // targets no state — it clears the field.
             writeln!(
                 output,
-                "            Self::{} => {}State::{},",
-                to_pascal_case(&transition.name),
-                name,
-                to_pascal_case(&transition.to)
+                "    pub fn target_state(&self) -> Option<{}State> {{",
+                name
             )
             .unwrap();
+            writeln!(output, "        match self {{").unwrap();
+            for transition in &sm.transitions {
+                if transition.to == crate::ast::NULL_STATE {
+                    writeln!(
+                        output,
+                        "            Self::{} => None,",
+                        to_pascal_case(&transition.name)
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        output,
+                        "            Self::{} => Some({}State::{}),",
+                        to_pascal_case(&transition.name),
+                        name,
+                        to_pascal_case(&transition.to)
+                    )
+                    .unwrap();
+                }
+            }
+            writeln!(output, "        }}").unwrap();
+            writeln!(output, "    }}").unwrap();
+            writeln!(output).unwrap();
+        } else {
+            writeln!(output, "    pub fn target_state(&self) -> {}State {{", name).unwrap();
+            writeln!(output, "        match self {{").unwrap();
+            for transition in &sm.transitions {
+                writeln!(
+                    output,
+                    "            Self::{} => {}State::{},",
+                    to_pascal_case(&transition.name),
+                    name,
+                    to_pascal_case(&transition.to)
+                )
+                .unwrap();
+            }
+            writeln!(output, "        }}").unwrap();
+            writeln!(output, "    }}").unwrap();
+            writeln!(output).unwrap();
         }
-        writeln!(output, "        }}").unwrap();
-        writeln!(output, "    }}").unwrap();
-        writeln!(output).unwrap();
 
         writeln!(output, "    /// Get all transitions").unwrap();
         writeln!(output, "    pub fn all() -> Vec<Self> {{").unwrap();
@@ -347,28 +381,50 @@ impl StateMachineGenerator {
         writeln!(output).unwrap();
 
         // State machine struct
+        let nullable = sm.is_nullable();
         writeln!(output, "/// State machine for {} workflow", name).unwrap();
         writeln!(output, "#[derive(Debug, Clone)]").unwrap();
         writeln!(output, "pub struct {}StateMachine {{", name).unwrap();
-        writeln!(output, "    current_state: {}State,", name).unwrap();
+        if nullable {
+            writeln!(output, "    current_state: Option<{}State>,", name).unwrap();
+        } else {
+            writeln!(output, "    current_state: {}State,", name).unwrap();
+        }
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
         // Implementation
         writeln!(output, "impl {}StateMachine {{", name).unwrap();
-        writeln!(
-            output,
-            "    /// Create a new state machine with initial state"
-        )
-        .unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "    /// Create a new state machine at the null boundary — a nullable"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "    /// state field starts unset; the arm verb enters from here."
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "    /// Create a new state machine with initial state"
+            )
+            .unwrap();
+        }
         writeln!(output, "    pub fn new() -> Self {{").unwrap();
         writeln!(output, "        Self {{").unwrap();
-        writeln!(
-            output,
-            "            current_state: {}State::default(),",
-            name
-        )
-        .unwrap();
+        if nullable {
+            writeln!(output, "            current_state: None,").unwrap();
+        } else {
+            writeln!(
+                output,
+                "            current_state: {}State::default(),",
+                name
+            )
+            .unwrap();
+        }
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -380,17 +436,44 @@ impl StateMachineGenerator {
             name
         )
         .unwrap();
-        writeln!(output, "        Self {{ current_state: state }}").unwrap();
+        if nullable {
+            writeln!(output, "        Self {{ current_state: Some(state) }}").unwrap();
+        } else {
+            writeln!(output, "        Self {{ current_state: state }}").unwrap();
+        }
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
+        if nullable {
+            writeln!(output, "    /// Create from the field's current value — `None`").unwrap();
+            writeln!(output, "    /// is the null boundary the verbs arm from and end to.").unwrap();
+            writeln!(
+                output,
+                "    pub fn from_opt_state(state: Option<{}State>) -> Self {{",
+                name
+            )
+            .unwrap();
+            writeln!(output, "        Self {{ current_state: state }}").unwrap();
+            writeln!(output, "    }}").unwrap();
+            writeln!(output).unwrap();
+        }
+
         writeln!(output, "    /// Get the current state").unwrap();
-        writeln!(
-            output,
-            "    pub fn current_state(&self) -> {}State {{",
-            name
-        )
-        .unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "    pub fn current_state(&self) -> Option<{}State> {{",
+                name
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "    pub fn current_state(&self) -> {}State {{",
+                name
+            )
+            .unwrap();
+        }
         writeln!(output, "        self.current_state").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -425,7 +508,13 @@ impl StateMachineGenerator {
         if !terminal_states.is_empty() {
             let terminal_match = terminal_states
                 .iter()
-                .map(|s| format!("{}State::{}", name, to_pascal_case(&s.name)))
+                .map(|s| {
+                    if nullable {
+                        format!("Some({}State::{})", name, to_pascal_case(&s.name))
+                    } else {
+                        format!("{}State::{}", name, to_pascal_case(&s.name))
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(" | ");
             writeln!(
@@ -449,6 +538,24 @@ impl StateMachineGenerator {
                         output,
                         "            (_, {}Transition::{}) => true,",
                         name, trans_variant
+                    )
+                    .unwrap();
+                } else if from_state == crate::ast::NULL_STATE {
+                    // Null boundary: the field is unset.
+                    writeln!(
+                        output,
+                        "            (None, {}Transition::{}) => true,",
+                        name, trans_variant
+                    )
+                    .unwrap();
+                } else if nullable {
+                    writeln!(
+                        output,
+                        "            (Some({}State::{}), {}Transition::{}) => true,",
+                        name,
+                        to_pascal_case(from_state),
+                        name,
+                        trans_variant
                     )
                     .unwrap();
                 } else {
@@ -504,11 +611,19 @@ impl StateMachineGenerator {
             "    /// Apply a transition, returning the new state"
         )
         .unwrap();
-        writeln!(
-            output,
-            "    pub fn transition(&mut self, transition: {}Transition) -> Result<{}State, StateMachineError> {{",
-            name, name
-        ).unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "    pub fn transition(&mut self, transition: {}Transition) -> Result<Option<{}State>, StateMachineError> {{",
+                name, name
+            ).unwrap();
+        } else {
+            writeln!(
+                output,
+                "    pub fn transition(&mut self, transition: {}Transition) -> Result<{}State, StateMachineError> {{",
+                name, name
+            ).unwrap();
+        }
         writeln!(output, "        if !self.can_transition(transition) {{").unwrap();
         writeln!(
             output,
@@ -520,11 +635,19 @@ impl StateMachineGenerator {
             "                transition: transition.to_string(),"
         )
         .unwrap();
-        writeln!(
-            output,
-            "                from: self.current_state.to_string(),"
-        )
-        .unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "                from: self.current_state.map(|s| s.to_string()).unwrap_or_else(|| \"null\".to_string()),"
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "                from: self.current_state.to_string(),"
+            )
+            .unwrap();
+        }
         writeln!(output, "            }});").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
@@ -539,11 +662,19 @@ impl StateMachineGenerator {
 
         // Apply transition with role
         writeln!(output, "    /// Apply a transition with role check").unwrap();
-        writeln!(
-            output,
-            "    pub fn transition_with_role(&mut self, transition: {}Transition, role: &str) -> Result<{}State, StateMachineError> {{",
-            name, name
-        ).unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "    pub fn transition_with_role(&mut self, transition: {}Transition, role: &str) -> Result<Option<{}State>, StateMachineError> {{",
+                name, name
+            ).unwrap();
+        } else {
+            writeln!(
+                output,
+                "    pub fn transition_with_role(&mut self, transition: {}Transition, role: &str) -> Result<{}State, StateMachineError> {{",
+                name, name
+            ).unwrap();
+        }
         writeln!(output, "        // Check basic transition validity first").unwrap();
         writeln!(output, "        if !self.can_transition(transition) {{").unwrap();
         writeln!(
@@ -556,11 +687,19 @@ impl StateMachineGenerator {
             "                transition: transition.to_string(),"
         )
         .unwrap();
-        writeln!(
-            output,
-            "                from: self.current_state.to_string(),"
-        )
-        .unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "                from: self.current_state.map(|s| s.to_string()).unwrap_or_else(|| \"null\".to_string()),"
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "                from: self.current_state.to_string(),"
+            )
+            .unwrap();
+        }
         writeln!(output, "            }});").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output).unwrap();
@@ -652,11 +791,19 @@ impl StateMachineGenerator {
             "    /// Returns Err if no valid transition leads from current state to target."
         )
         .unwrap();
-        writeln!(
-            output,
-            "    pub fn transition_to_state(&mut self, target: {name}State) -> Result<{name}State, StateMachineError> {{",
-            name = name
-        ).unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "    pub fn transition_to_state(&mut self, target: Option<{name}State>) -> Result<Option<{name}State>, StateMachineError> {{",
+                name = name
+            ).unwrap();
+        } else {
+            writeln!(
+                output,
+                "    pub fn transition_to_state(&mut self, target: {name}State) -> Result<{name}State, StateMachineError> {{",
+                name = name
+            ).unwrap();
+        }
         writeln!(
             output,
             "        let valid = {name}Transition::all().into_iter()",
@@ -672,12 +819,25 @@ impl StateMachineGenerator {
             "            None => Err(StateMachineError::TransitionNotAllowed {{"
         )
         .unwrap();
-        writeln!(output, "                transition: target.to_string(),").unwrap();
-        writeln!(
-            output,
-            "                from: self.current_state.to_string(),"
-        )
-        .unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "                transition: target.map(|t| t.to_string()).unwrap_or_else(|| \"null\".to_string()),"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "                from: self.current_state.map(|s| s.to_string()).unwrap_or_else(|| \"null\".to_string()),"
+            )
+            .unwrap();
+        } else {
+            writeln!(output, "                transition: target.to_string(),").unwrap();
+            writeln!(
+                output,
+                "                from: self.current_state.to_string(),"
+            )
+            .unwrap();
+        }
         writeln!(output, "            }}),").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
@@ -740,6 +900,7 @@ impl StateMachineGenerator {
         sm: &StateMachine,
     ) -> Result<(), GenerateError> {
         let name = &hook.name;
+        let nullable = sm.is_nullable();
 
         writeln!(output, "#[cfg(test)]").unwrap();
         writeln!(output, "mod tests {{").unwrap();
@@ -750,7 +911,16 @@ impl StateMachineGenerator {
         writeln!(output, "    #[test]").unwrap();
         writeln!(output, "    fn test_initial_state() {{").unwrap();
         writeln!(output, "        let sm = {}StateMachine::new();", name).unwrap();
-        if let Some(initial) = sm.initial_state() {
+        if nullable {
+            // A nullable machine starts at the null boundary, not at the
+            // declared initial state (the arm verb enters).
+            writeln!(output, "        assert_eq!(sm.current_state(), None);").unwrap();
+            writeln!(
+                output,
+                "        assert!(sm.current_state().map_or(false, |s| s.is_initial()));"
+            )
+            .unwrap();
+        } else if let Some(initial) = sm.initial_state() {
             writeln!(
                 output,
                 "        assert_eq!(sm.current_state(), {}State::{});",
@@ -758,8 +928,10 @@ impl StateMachineGenerator {
                 to_pascal_case(&initial.name)
             )
             .unwrap();
+            writeln!(output, "        assert!(sm.current_state().is_initial());").unwrap();
+        } else {
+            writeln!(output, "        assert!(sm.current_state().is_initial());").unwrap();
         }
-        writeln!(output, "        assert!(sm.current_state().is_initial());").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
@@ -772,7 +944,8 @@ impl StateMachineGenerator {
             writeln!(output, "    #[test]").unwrap();
             writeln!(output, "    fn test_valid_transition() {{").unwrap();
 
-            if from_state == "*" {
+            if from_state == "*" || from_state == crate::ast::NULL_STATE {
+                // Wildcard or the null boundary: a fresh machine sits there.
                 writeln!(output, "        let mut sm = {}StateMachine::new();", name).unwrap();
             } else {
                 writeln!(
@@ -801,13 +974,25 @@ impl StateMachineGenerator {
             )
             .unwrap();
             writeln!(output, "        assert!(result.is_ok());").unwrap();
-            writeln!(
-                output,
-                "        assert_eq!(sm.current_state(), {}State::{});",
-                name,
-                to_pascal_case(&first_transition.to)
-            )
-            .unwrap();
+            if nullable && first_transition.to == crate::ast::NULL_STATE {
+                writeln!(output, "        assert_eq!(sm.current_state(), None);").unwrap();
+            } else if nullable {
+                writeln!(
+                    output,
+                    "        assert_eq!(sm.current_state(), Some({}State::{}));",
+                    name,
+                    to_pascal_case(&first_transition.to)
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "        assert_eq!(sm.current_state(), {}State::{});",
+                    name,
+                    to_pascal_case(&first_transition.to)
+                )
+                .unwrap();
+            }
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
         }
@@ -899,11 +1084,19 @@ impl StateMachineGenerator {
             "        // Should have at least some transitions available from initial state"
         )
         .unwrap();
-        writeln!(
-            output,
-            "        assert!(!available.is_empty() || sm.current_state().is_final());"
-        )
-        .unwrap();
+        if nullable {
+            writeln!(
+                output,
+                "        assert!(!available.is_empty() || sm.current_state().map_or(false, |s| s.is_final()));"
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "        assert!(!available.is_empty() || sm.current_state().is_final());"
+            )
+            .unwrap();
+        }
         writeln!(output, "    }}").unwrap();
 
         writeln!(output, "}}").unwrap();
@@ -1188,5 +1381,100 @@ mod tests {
         assert!(content.contains("can_transition"));
         assert!(content.contains("transition_with_role"));
         assert!(content.contains("StateMachineError"));
+        // Non-nullable machines keep the plain state type everywhere.
+        assert!(!content.contains("from_opt_state"));
+        assert!(!content.contains("Option<UserState>"));
+    }
+
+    /// A machine over a nullable field: the survey session shape — armed from
+    /// NULL, started once, ended back to NULL.
+    fn create_nullable_test_hook() -> Hook {
+        let mut hook = Hook::new("SurveySession", "Survey");
+        hook.state_machine = Some(StateMachine {
+            field: "session_state".to_string(),
+            states: vec![
+                State {
+                    name: "ready".to_string(),
+                    initial: true,
+                    ..Default::default()
+                },
+                State {
+                    name: "in_progress".to_string(),
+                    ..Default::default()
+                },
+            ],
+            transitions: vec![
+                Transition {
+                    name: "arm".to_string(),
+                    from: vec![crate::ast::NULL_STATE.to_string()],
+                    to: "ready".to_string(),
+                    ..Default::default()
+                },
+                Transition {
+                    name: "start".to_string(),
+                    from: vec!["ready".to_string()],
+                    to: "in_progress".to_string(),
+                    ..Default::default()
+                },
+                Transition {
+                    name: "end".to_string(),
+                    from: vec!["ready".to_string(), "in_progress".to_string()],
+                    to: crate::ast::NULL_STATE.to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        hook
+    }
+
+    #[test]
+    fn nullable_machine_detects_the_boundary() {
+        let hook = create_nullable_test_hook();
+        let sm = hook.state_machine.as_ref().unwrap();
+        assert!(sm.is_nullable());
+
+        let plain = create_test_hook();
+        assert!(!plain.state_machine.as_ref().unwrap().is_nullable());
+    }
+
+    #[test]
+    fn nullable_machine_targets_are_optional() {
+        let generator = StateMachineGenerator::new();
+        let hook = create_nullable_test_hook();
+        let sm = hook.state_machine.as_ref().unwrap();
+
+        let content = generator.generate_transition_enum(&hook, sm).unwrap();
+        assert!(content.contains("pub fn target_state(&self) -> Option<SurveySessionState>"));
+        assert!(content.contains("Self::Arm => Some(SurveySessionState::Ready),"));
+        assert!(content.contains("Self::End => None,"));
+    }
+
+    #[test]
+    fn nullable_machine_struct_rides_option() {
+        let generator = StateMachineGenerator::new();
+        let hook = create_nullable_test_hook();
+        let sm = hook.state_machine.as_ref().unwrap();
+
+        let content = generator.generate_state_machine_struct(&hook, sm).unwrap();
+        assert!(content.contains("current_state: Option<SurveySessionState>"));
+        assert!(content.contains("current_state: None"));
+        assert!(content.contains("pub fn from_opt_state(state: Option<SurveySessionState>)"));
+        assert!(content.contains("(None, SurveySessionTransition::Arm) => true"));
+        assert!(content.contains("(Some(SurveySessionState::Ready), SurveySessionTransition::Start) => true"));
+        assert!(content.contains("pub fn transition_to_state(&mut self, target: Option<SurveySessionState>)"));
+    }
+
+    #[test]
+    fn nullable_machine_generated_tests_compile_shapes() {
+        let generator = StateMachineGenerator::new();
+        let hook = create_nullable_test_hook();
+        let sm = hook.state_machine.as_ref().unwrap();
+
+        let mut content = String::new();
+        generator.generate_tests(&mut content, &hook, sm).unwrap();
+        assert!(content.contains("assert_eq!(sm.current_state(), None);"));
+        assert!(content.contains("map_or(false, |s| s.is_initial())"));
+        assert!(content.contains("map_or(false, |s| s.is_final())"));
     }
 }

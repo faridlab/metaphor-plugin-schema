@@ -1019,19 +1019,39 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 "    // Create state machine from entity's actual status and validate transition"
             )
             .unwrap();
-            writeln!(
-                output,
-                "    let current_state: {}State = entity.{}.to_string().parse()",
-                sm_name, status_field
-            )
-            .unwrap();
-            writeln!(output, "        .unwrap_or({}State::default());", sm_name).unwrap();
-            writeln!(
-                output,
-                "    let sm = {}StateMachine::from_state(current_state);",
-                sm_name
-            )
-            .unwrap();
+            if sm.is_nullable() {
+                // Nullable state field: an unset column is the null boundary the
+                // machine arms from and ends to.
+                writeln!(
+                    output,
+                    "    let current_state: Option<{}State> = match &entity.{} {{",
+                    sm_name, status_field
+                )
+                .unwrap();
+                writeln!(output, "        Some(v) => v.to_string().parse().ok(),").unwrap();
+                writeln!(output, "        None => None,").unwrap();
+                writeln!(output, "    }};").unwrap();
+                writeln!(
+                    output,
+                    "    let sm = {}StateMachine::from_opt_state(current_state);",
+                    sm_name
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "    let current_state: {}State = entity.{}.to_string().parse()",
+                    sm_name, status_field
+                )
+                .unwrap();
+                writeln!(output, "        .unwrap_or({}State::default());", sm_name).unwrap();
+                writeln!(
+                    output,
+                    "    let sm = {}StateMachine::from_state(current_state);",
+                    sm_name
+                )
+                .unwrap();
+            }
             writeln!(
                 output,
                 "    if !sm.can_transition({}Transition::{}) {{",
@@ -1049,7 +1069,17 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 "    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();"
             )
             .unwrap();
-            writeln!(output, "    fields.insert(\"{}\".to_string(), serde_json::Value::String(\"{}\".to_string()));", status_field, to_pascal_case(&transition.to)).unwrap();
+            if transition.to == crate::ast::NULL_STATE {
+                // Ending to the null boundary clears the column.
+                writeln!(
+                    output,
+                    "    fields.insert(\"{}\".to_string(), serde_json::Value::Null);",
+                    status_field
+                )
+                .unwrap();
+            } else {
+                writeln!(output, "    fields.insert(\"{}\".to_string(), serde_json::Value::String(\"{}\".to_string()));", status_field, to_pascal_case(&transition.to)).unwrap();
+            }
             writeln!(output).unwrap();
 
             writeln!(

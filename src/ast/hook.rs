@@ -7,6 +7,13 @@ use super::expressions::Expression;
 use super::Span;
 use serde::{Deserialize, Serialize};
 
+/// Reserved pseudo-state naming the NULL boundary of a nullable state field:
+/// `from: null` enters from "no value yet" (the arm verb), `to: null` ends the
+/// lifecycle by clearing the field (the end verb). Only meaningful on machines
+/// guarding a nullable field; declaring a real state with this name is a
+/// validation error.
+pub const NULL_STATE: &str = "null";
+
 /// An entity hook definition (lifecycle behaviors for a model)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Hook {
@@ -70,6 +77,16 @@ impl StateMachine {
             .iter()
             .filter(|t| t.from.contains(&state.to_string()) || t.from.contains(&"*".to_string()))
             .collect()
+    }
+
+    /// Whether this machine touches the NULL boundary of its field — any
+    /// transition entering from [`NULL_STATE`] or exiting to it. Such machines
+    /// are emitted over an `Option<...>` state: the field's NULL is the
+    /// boundary the verbs arm from and end to.
+    pub fn is_nullable(&self) -> bool {
+        self.transitions.iter().any(|t| {
+            t.to == NULL_STATE || t.from.iter().any(|f| f == NULL_STATE)
+        })
     }
 }
 

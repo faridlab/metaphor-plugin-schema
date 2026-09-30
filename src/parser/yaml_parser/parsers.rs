@@ -266,9 +266,16 @@ fn parse_list_format_transitions(
             Some(m) => m,
             None => continue,
         };
-        let to = match tm.get(&Value::String("to".into())).and_then(|v| v.as_str()) {
-            Some(t) => t.to_string(),
+        // `to:` is required — a string, or the null boundary (YAML `null` /
+        // quoted "null") for machines over a nullable field.
+        let to = match tm.get(&Value::String("to".into())) {
             None => continue, // `to:` is required — skip malformed entries
+            Some(Value::Null) => crate::ast::NULL_STATE.to_string(),
+            Some(v) => match v.as_str() {
+                Some(t) if t == crate::ast::NULL_STATE => crate::ast::NULL_STATE.to_string(),
+                Some(t) => t.to_string(),
+                None => continue, // `to:` must be a string or null
+            },
         };
         // Use `name:` as key when present; fall back to `event:` (common in bersihir hooks)
         let key = tm
@@ -284,11 +291,22 @@ fn parse_list_format_transitions(
         let from = if let Some(seq) = from_val.as_sequence() {
             YamlStateList::Multiple(
                 seq.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .map(|v| match v {
+                        // A null element names the null boundary; other
+                        // non-string elements fall back to the wildcard,
+                        // matching the historical filter_map behavior.
+                        Value::Null => crate::ast::NULL_STATE.to_string(),
+                        v => v.as_str().unwrap_or("*").to_string(),
+                    })
                     .collect(),
             )
         } else {
-            YamlStateList::Single(from_val.as_str().unwrap_or("*").to_string())
+            match &from_val {
+                Value::Null => {
+                    YamlStateList::Single(crate::ast::NULL_STATE.to_string())
+                }
+                _ => YamlStateList::Single(from_val.as_str().unwrap_or("*").to_string()),
+            }
         };
         let roles = match tm.get(&Value::String("roles".into())) {
             Some(Value::Sequence(seq)) => seq
@@ -496,5 +514,53 @@ pub fn parse_model_yaml_flexible(content: &str) -> Result<YamlModelParseResult> 
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod null_boundary_tests {
+    use super::*;
+
+    /// The null boundary parses in every position it is legal in: a single
+    /// `from: null`, a `null` element inside a `from:` list, and `to: null`
+    /// (bare or quoted). These name the NULL of a nullable state field.
+    #[test]
+    fn parses_null_boundary_in_transitions() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            "transitions:\n  - name: arm\n    from: null\n    to: ready\n  - name: start\n    from: ready\n    to: in_progress\n  - name: end\n    from:\n      - ready\n      - null\n    to: \"null\"\n",
+        )
+        .unwrap();
+        let map = yaml.as_mapping().unwrap();
+        let transitions = parse_list_format_transitions(map);
+
+        let arm = transitions.get("arm").expect("arm transition parsed");
+        assert!(matches!(
+            &arm.from,
+            YamlStateList::Single(s) if s == crate::ast::NULL_STATE
+        ));
+        assert_eq!(arm.to, "ready");
+
+        let start = transitions.get("start").expect("start transition parsed");
+        assert_eq!(start.from.clone().into_vec(), vec!["ready".to_string()]);
+
+        let end = transitions.get("end").expect("end transition parsed");
+        assert_eq!(end.to, crate::ast::NULL_STATE);
+        assert!(end
+            .from
+            .clone()
+            .into_vec()
+            .contains(&crate::ast::NULL_STATE.to_string()));
+    }
+
+    /// Absent `from:` keeps its historical wildcard meaning; `from: null` is
+    /// the boundary, not the wildcard.
+    #[test]
+    fn absent_from_stays_wildcard() {
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str("transitions:\n  - name: reset\n    to: ready\n").unwrap();
+        let map = yaml.as_mapping().unwrap();
+        let transitions = parse_list_format_transitions(map);
+        let reset = transitions.get("reset").expect("reset transition parsed");
+        assert!(matches!(&reset.from, YamlStateList::Single(s) if s == "*"));
     }
 }

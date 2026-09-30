@@ -16,8 +16,9 @@ pub use authorization::{
     ResourcePolicy, ResourcePolicyRule, RoleDefinition,
 };
 pub use hook::{
-    Action, ActionType, CommitPolicy, ComputedField, Enforcement, Hook, JobPosture, Permission,
-    PermissionAction, Rule, ScheduledJob, State, StateMachine, Transition, Trigger, TriggerEvent,
+    Action, ActionType, CommitPolicy, ComputedField, Enforcement, Hook, JobPosture, NULL_STATE,
+    Permission, PermissionAction, Rule, ScheduledJob, State, StateMachine, Transition, Trigger,
+    TriggerEvent,
 };
 pub use model::{
     // Application Service types
