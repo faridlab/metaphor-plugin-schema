@@ -367,6 +367,24 @@ impl ModuleGenerator {
         writeln!(output, "        Router::new()").unwrap();
         for model in schema.schema.models.iter().filter(|m| handler_emitted(m)) {
             let snake_name = to_snake_case(&model.name);
+            if model.has_hand_set_lifecycle() && !model.has_read_only() {
+                writeln!(
+                    output,
+                    "            // {}: hand_set lifecycle — the state field moves only through the",
+                    model.name
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "            // module's validated verbs; generic writes cannot reach it, so only the"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "            // read surface mounts here."
+                )
+                .unwrap();
+            }
             writeln!(
                 output,
                 "            .merge({}(self.{}_service.clone()))",
@@ -712,6 +730,8 @@ impl ModuleGenerator {
             let snake_name = to_snake_case(&model.name);
             if model.has_read_only() {
                 writeln!(output, "        // {} routes (READ-ONLY — append-only/event-sourced entity; writes arrive via the event handlers)", model.name).unwrap();
+            } else if model.has_hand_set_lifecycle() {
+                writeln!(output, "        // {} routes (READ-ONLY mount — hand_set lifecycle; the state field moves only through the module's validated verbs)", model.name).unwrap();
             } else {
                 writeln!(
                     output,
@@ -749,7 +769,9 @@ impl ModuleGenerator {
                 snake_name, model.name
             )
             .unwrap();
-            writeln!(output, "        create_{}_routes(service)", snake_name).unwrap();
+            // Read-only and hand_set entities delegate to their read surface —
+            // the individual wrapper must not become a side door to full CRUD.
+            writeln!(output, "        {}(service)", model.default_route_fn()).unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
         }

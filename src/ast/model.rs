@@ -142,13 +142,30 @@ impl Model {
         self.read_only || self.has_attribute("read_only")
     }
 
+    /// Whether any field declares a `hand_set` lifecycle (ADR-0016): the field's
+    /// value moves only through the module's validated verbs — a declared state
+    /// machine or a recorded declaration-of-record — so a generic CRUD write
+    /// (full-row PATCH/PUT) would bypass the legal-transition set and the side
+    /// effects the verbs carry. Like `has_read_only`, this narrows the default
+    /// HTTP surface to reads; the write path is the verbs'.
+    pub fn has_hand_set_lifecycle(&self) -> bool {
+        self.fields.iter().any(|f| {
+            f.lifecycle
+                .as_ref()
+                .map(|l| l.shape == LifecycleShape::HandSet)
+                .unwrap_or(false)
+        })
+    }
+
     /// The default route-function name for this model in a CRUD composer:
-    /// `create_{snake}_read_routes` when read-only (GET endpoints only), otherwise
-    /// the full `create_{snake}_routes`. Both fns are always emitted by the handler
-    /// generator, so either resolves at the call site.
+    /// `create_{snake}_read_routes` when read-only (GET endpoints only) or when
+    /// any field declares a hand_set lifecycle (verb-guarded state generic writes
+    /// must not reach), otherwise the full `create_{snake}_routes`. Both fns are
+    /// always emitted by the handler generator, so either resolves at the call
+    /// site.
     pub fn default_route_fn(&self) -> String {
         let snake = to_snake_case(&self.name);
-        if self.has_read_only() {
+        if self.has_read_only() || self.has_hand_set_lifecycle() {
             format!("create_{}_read_routes", snake)
         } else {
             format!("create_{}_routes", snake)
@@ -1645,5 +1662,48 @@ mod tests {
         m.attributes.push(Attribute::new("read_only"));
         assert!(m.has_read_only());
         assert_eq!(m.default_route_fn(), "create_audit_log_read_routes");
+    }
+
+    #[test]
+    fn hand_set_lifecycle_picks_read_routes_fn() {
+        // A field declaring lifecycle.shape: hand_set marks the entity as
+        // verb-guarded: generic CRUD cannot write it, so the default mount is
+        // the read surface — with or without a state_machine ref.
+        let mut m = Model::new("GamificationChallenge");
+        assert!(!m.has_hand_set_lifecycle());
+        assert_eq!(m.default_route_fn(), "create_gamification_challenge_routes");
+
+        let mut state = Field::new("state", TypeRef::Custom("ChallengeState".to_string()));
+        state.lifecycle = Some(Lifecycle {
+            shape: LifecycleShape::HandSet,
+            state_machine: Some("challenge_state".to_string()),
+            ..Default::default()
+        });
+        m.fields.push(state);
+        assert!(m.has_hand_set_lifecycle());
+        assert_eq!(
+            m.default_route_fn(),
+            "create_gamification_challenge_read_routes"
+        );
+
+        // read_only and hand_set compose to the same read mount.
+        m.read_only = true;
+        assert_eq!(
+            m.default_route_fn(),
+            "create_gamification_challenge_read_routes"
+        );
+    }
+
+    #[test]
+    fn other_lifecycle_shapes_keep_full_routes_fn() {
+        // Only hand_set narrows the surface; projection/hybrid/... fields are
+        // derived or split concerns that do not by themselves forbid generic
+        // writes.
+        let mut m = Model::new("ManufacturingOrder");
+        let mut mo_state = Field::new("state", TypeRef::Custom("MoState".to_string()));
+        mo_state.lifecycle = Some(Lifecycle::default()); // Projection (default shape)
+        m.fields.push(mo_state);
+        assert!(!m.has_hand_set_lifecycle());
+        assert_eq!(m.default_route_fn(), "create_manufacturing_order_routes");
     }
 }
