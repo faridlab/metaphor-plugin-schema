@@ -7,6 +7,19 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.17.2] — 2026-10-02
+
+### Fixed
+
+- **No duplicate of a table a hand-written family migration already creates.** The stabilizer
+  dropped a generated migration only when a hand-written one shared its base name, so a
+  hand-written migration creating several tables under a name of its own
+  (`create_request_family`, `create_event_family_tables`) went unseen: the generator emitted
+  `create_<table>_table` duplicates whose unconditional statements (an `ADD CONSTRAINT` the family
+  already declared) failed `migration run-all`, on fresh databases too. A new generated migration
+  whose `CREATE TABLE` targets a table a hand-written migration creates is now dropped. Seen in
+  backbone-maintenance (committed), backbone-calendar and backbone-lead (regenerated locally).
+
 ## [0.17.0] — 2026-09-16
 
 ### Added
