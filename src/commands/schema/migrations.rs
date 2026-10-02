@@ -137,6 +137,38 @@ pub(super) struct MigrationIndex {
     pub(super) max_ts: Option<String>,
     pub(super) authored: std::collections::HashMap<String, String>,
     pub(super) all_base_names: std::collections::HashSet<String>,
+    /// Every table a HAND-WRITTEN migration creates (`CREATE TABLE`), normalized by
+    /// [`created_tables`]. A hand-written migration often creates a family of tables
+    /// under a name of its own (`create_request_family`), so base-name matching alone
+    /// cannot see that it already covers `create_maintenance_request_table`.
+    pub(super) hand_written_tables: std::collections::HashSet<String>,
+}
+
+/// The tables a migration's SQL creates, lower-cased with quotes removed
+/// (`CREATE TABLE [IF NOT EXISTS] schema.table`). Line comments are skipped.
+pub(super) fn created_tables(sql: &str) -> Vec<String> {
+    let mut tables = Vec::new();
+    for line in sql.lines() {
+        let line = line.trim_start();
+        if line.starts_with("--") {
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        let Some(rest) = lower.strip_prefix("create table") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix("if not exists").unwrap_or(rest).trim_start();
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '"'))
+            .filter(|c| *c != '"')
+            .collect();
+        if !name.is_empty() {
+            tables.push(name);
+        }
+    }
+    tables
 }
 
 /// Single-pass scan of `migrations_dir`. Always returns an index (empty on
@@ -169,7 +201,13 @@ pub(super) fn build_migration_index(migrations_dir: &Path) -> MigrationIndex {
         // Track every timestamped migration's base name (hand-written + authored)
         // so the stabilizer can detect when a table is already covered on disk.
         index.all_base_names.insert(base.to_string());
-        if name.ends_with(".up.sql") && is_generator_authored_migration(&entry.path()) {
+        let authored = name.ends_with(".up.sql") && is_generator_authored_migration(&entry.path());
+        if name.ends_with(".up.sql") && !authored {
+            if let Ok(sql) = fs::read_to_string(entry.path()) {
+                index.hand_written_tables.extend(created_tables(&sql));
+            }
+        }
+        if authored {
             match index.authored.get(base) {
                 None => {
                     index.authored.insert(base.to_string(), ts.to_string());
