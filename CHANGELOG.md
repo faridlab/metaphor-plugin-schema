@@ -7,6 +7,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.17.3] — 2026-10-02
+
+### Fixed
+
+- **`generate:webapp` is deterministic.** A schema's states, transitions, permissions, validation
+  rules, computed fields and workflow params were held in `HashMap`s, whose iteration order is
+  randomised per instance, so the generated lifecycle reshuffled on every run: eight runs over
+  backbone-mail gave eight different files, and `pnpm schema:gen` left diff noise each time. They
+  now keep the order the schema writes them in. Two full runs over all 59 modules are identical,
+  and the output equals the previous generator's line for line once ordering is ignored.
+
 ## [0.17.2] — 2026-10-02
 
 ### Fixed
