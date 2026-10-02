@@ -11,7 +11,7 @@ use crate::webgen::ast::state_machine::{
     ValidationRule,
 };
 use crate::webgen::{Error, Result};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::fs;
 use std::path::Path;
 
@@ -166,7 +166,7 @@ impl HookParser {
     }
 
     fn convert_canonical_state_machine(sm: YamlStateMachine) -> StateMachine {
-        let mut states = HashMap::new();
+        let mut states = IndexMap::new();
         for (sname, sval) in sm.values {
             let (is_initial, is_final, on_enter, on_exit) = match sval {
                 YamlState::Simple(_) => (false, false, Vec::new(), Vec::new()),
@@ -251,7 +251,7 @@ impl HookParser {
     /// Parse state machine from states section
     fn parse_state_machine(raw: RawStates) -> StateMachine {
         let state_field = raw.field;
-        let mut states = HashMap::new();
+        let mut states = IndexMap::new();
         let mut transitions = Vec::new();
 
         // Parse states
@@ -292,7 +292,7 @@ impl HookParser {
 
     /// Parse validation rules
     fn parse_validation_rules(
-        rules: &Option<HashMap<String, RawValidationRule>>,
+        rules: &Option<IndexMap<String, RawValidationRule>>,
     ) -> Vec<ValidationRule> {
         rules
             .as_ref()
@@ -313,8 +313,8 @@ impl HookParser {
 
     /// Parse permissions
     fn parse_permissions(
-        permissions: &Option<HashMap<String, RawPermissionSet>>,
-    ) -> HashMap<String, PermissionSet> {
+        permissions: &Option<IndexMap<String, RawPermissionSet>>,
+    ) -> IndexMap<String, PermissionSet> {
         permissions
             .as_ref()
             .map(|map| {
@@ -408,7 +408,7 @@ impl HookParser {
     /// Parse a single action string into a TriggerAction
     fn parse_action_string(action_str: &str) -> TriggerAction {
         // Parse action strings like "send_email(...)", "emit: EventName", "log(message)"
-        let mut params = HashMap::new();
+        let mut params = IndexMap::new();
 
         let (action_type, params_str) = if let Some(colon_pos) = action_str.find(':') {
             // Format: "action_type: params"
@@ -451,7 +451,7 @@ impl HookParser {
     }
 
     /// Parse computed fields
-    fn parse_computed_fields(computed: &Option<HashMap<String, String>>) -> Vec<ComputedField> {
+    fn parse_computed_fields(computed: &Option<IndexMap<String, String>>) -> Vec<ComputedField> {
         computed
             .as_ref()
             .map(|map| {
@@ -482,5 +482,34 @@ mod tests {
 
         let action = HookParser::parse_action_string("emit: PasswordResetRequestedEvent");
         assert_eq!(action.action_type, "emit");
+    }
+
+    /// States and transitions keep the order the schema writes them in. They used to land in
+    /// a HashMap, whose per-instance random order reshuffled the generated lifecycle on every
+    /// run; two parses in one process then disagreed with each other and with the YAML.
+    #[test]
+    fn states_and_transitions_keep_schema_order_across_parses() {
+        let names: Vec<String> = (0..12).map(|i| format!("step_{i:02}")).collect();
+        let mut yaml = String::from("model: Order\n\nstates:\n  field: status\n  values:\n");
+        for (i, n) in names.iter().enumerate() {
+            yaml.push_str(&format!("    {n}:\n{}", if i == 0 { "      initial: true\n" } else { "" }));
+        }
+        yaml.push_str("  transitions:\n");
+        for w in names.windows(2) {
+            yaml.push_str(&format!("    to_{}:\n      from: {}\n      to: {}\n", w[1], w[0], w[1]));
+        }
+        let path = Path::new("order.hook.yaml");
+        let order = |schema: &HookSchema| {
+            let sm = schema.state_machine.as_ref().expect("state machine");
+            let states: Vec<String> = sm.states.keys().cloned().collect();
+            let transitions: Vec<String> = sm.transitions.iter().map(|t| t.name.clone()).collect();
+            (states, transitions)
+        };
+        let first = order(&HookParser::parse_content(&yaml, path).unwrap());
+        let second = order(&HookParser::parse_content(&yaml, path).unwrap());
+        assert_eq!(first, second, "two parses of one schema must agree");
+        assert_eq!(first.0, names, "states follow the schema");
+        let expected: Vec<String> = names[1..].iter().map(|n| format!("to_{n}")).collect();
+        assert_eq!(first.1, expected, "transitions follow the schema");
     }
 }

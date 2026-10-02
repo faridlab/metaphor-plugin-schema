@@ -1,7 +1,7 @@
 //! State Machine AST for hook.yaml schema definitions
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Hook schema containing state machine, rules, permissions, triggers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,7 +10,7 @@ pub struct HookSchema {
     pub model: String,
     pub state_machine: Option<StateMachine>,
     pub rules: Vec<ValidationRule>,
-    pub permissions: HashMap<String, PermissionSet>,
+    pub permissions: IndexMap<String, PermissionSet>,
     pub triggers: Vec<Trigger>,
     pub computed_fields: Vec<ComputedField>,
 }
@@ -26,7 +26,7 @@ pub struct PermissionSet {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateMachine {
     pub state_field: String,
-    pub states: HashMap<String, StateDefinition>,
+    pub states: IndexMap<String, StateDefinition>,
     pub transitions: Vec<TransitionDefinition>,
 }
 
@@ -128,7 +128,7 @@ impl TriggerType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerAction {
     pub action_type: String,
-    pub params: HashMap<String, String>,
+    pub params: IndexMap<String, String>,
 }
 
 /// Computed field definition
@@ -146,18 +146,18 @@ pub(crate) struct RawHookSchema {
     pub name: Option<String>,
     pub model: Option<String>,
     pub states: Option<RawStates>,
-    pub rules: Option<HashMap<String, RawValidationRule>>,
-    pub permissions: Option<HashMap<String, RawPermissionSet>>,
+    pub rules: Option<IndexMap<String, RawValidationRule>>,
+    pub permissions: Option<IndexMap<String, RawPermissionSet>>,
     pub triggers: Option<RawTriggers>,
-    pub computed: Option<HashMap<String, String>>,
+    pub computed: Option<IndexMap<String, String>>,
 }
 
 /// Raw states section
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawStates {
     pub field: String,
-    pub values: HashMap<String, RawStateValue>,
-    pub transitions: Option<HashMap<String, RawTransition>>,
+    pub values: IndexMap<String, RawStateValue>,
+    pub transitions: Option<IndexMap<String, RawTransition>>,
 }
 
 /// Raw state value
@@ -272,7 +272,7 @@ impl From<RawPermission> for PermissionRule {
 pub(crate) struct RawTriggers {
     // Triggers can be any key with RawTriggerActions value
     #[serde(flatten)]
-    pub triggers: HashMap<String, RawTriggerActions>,
+    pub triggers: IndexMap<String, RawTriggerActions>,
 }
 
 /// Raw trigger actions container

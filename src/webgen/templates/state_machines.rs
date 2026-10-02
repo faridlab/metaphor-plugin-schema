@@ -2,7 +2,7 @@
 
 use crate::webgen::ast::state_machine::HookSchema;
 use crate::webgen::parser::to_pascal_case;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// State machine component templates
 pub struct StateMachineTemplates;
@@ -96,7 +96,7 @@ function getStateConfig(state: string): StateConfig {
 
     /// Generate state configurations
     fn generate_state_configs(
-        states: &HashMap<String, crate::webgen::ast::state_machine::StateDefinition>,
+        states: &IndexMap<String, crate::webgen::ast::state_machine::StateDefinition>,
     ) -> String {
         let mut configs = String::new();
 

@@ -965,7 +965,7 @@ pub fn schema_file_symbols(entity: &EntityDefinition, hooks: Option<&HookSchema>
 mod tests {
     use super::*;
     use crate::webgen::ast::entity::FieldAttribute;
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     fn test_config() -> Config {
         Config::new("test_module")
@@ -989,7 +989,7 @@ mod tests {
             indexes: vec![],
             soft_delete: false,
         };
-        let mut states = HashMap::new();
+        let mut states = IndexMap::new();
         states.insert(
             "draft".to_string(),
             crate::webgen::ast::state_machine::StateDefinition {
@@ -1027,7 +1027,7 @@ mod tests {
                 }],
             }),
             rules: vec![],
-            permissions: HashMap::new(),
+            permissions: IndexMap::new(),
             triggers: vec![],
             computed_fields: vec![],
         };
@@ -1354,7 +1354,7 @@ mod tests {
             model: "Widget".to_string(),
             state_machine: None,
             rules: vec![],
-            permissions: std::collections::HashMap::new(),
+            permissions: indexmap::IndexMap::new(),
             triggers: vec![],
             computed_fields: vec![],
         };

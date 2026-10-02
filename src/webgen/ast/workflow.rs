@@ -1,7 +1,7 @@
 //! Workflow AST for workflow.yaml schema definitions
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Workflow schema definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +20,7 @@ pub struct WorkflowSchema {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowTrigger {
     pub event: String,
-    pub extract: HashMap<String, String>,
+    pub extract: IndexMap<String, String>,
 }
 
 /// Workflow configuration
@@ -46,7 +46,7 @@ pub struct WorkflowStep {
     pub description: Option<String>,
     pub action: Option<String>,
     pub entity: Option<String>,
-    pub params: HashMap<String, String>,
+    pub params: IndexMap<String, String>,
     pub conditions: Option<Vec<StepCondition>>,
     pub wait_for: Option<WaitFor>,
     pub on_success: Option<StepTransition>,
@@ -88,7 +88,7 @@ pub struct WaitFor {
 pub struct StepTransition {
     pub next: String,
     #[serde(default)]
-    pub set: HashMap<String, String>,
+    pub set: IndexMap<String, String>,
 }
 
 /// Compensation step
@@ -97,7 +97,7 @@ pub struct CompensationStep {
     pub name: String,
     pub condition: Option<String>,
     pub action: String,
-    pub params: HashMap<String, String>,
+    pub params: IndexMap<String, String>,
 }
 
 // YAML parsing structures
@@ -114,7 +114,7 @@ pub(crate) struct RawWorkflowSchema {
     #[serde(default)]
     pub config: Option<RawWorkflowConfig>,
     #[serde(default)]
-    pub context: Option<HashMap<String, Option<serde_yaml::Value>>>,
+    pub context: Option<IndexMap<String, Option<serde_yaml::Value>>>,
     pub steps: Vec<RawWorkflowStep>,
     #[serde(default)]
     pub compensation: Vec<RawCompensationStep>,
@@ -124,7 +124,7 @@ pub(crate) struct RawWorkflowSchema {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawWorkflowTrigger {
     pub event: String,
-    pub extract: HashMap<String, String>,
+    pub extract: IndexMap<String, String>,
 }
 
 /// Raw workflow config
@@ -158,7 +158,7 @@ pub(crate) struct RawWorkflowStep {
     #[serde(default)]
     pub entity: Option<String>,
     #[serde(default)]
-    pub params: Option<HashMap<String, String>>,
+    pub params: Option<IndexMap<String, String>>,
     #[serde(default)]
     pub conditions: Option<Vec<RawStepCondition>>,
     #[serde(default)]
@@ -199,7 +199,7 @@ pub(crate) struct RawWaitFor {
 pub(crate) struct RawStepTransition {
     pub next: String,
     #[serde(default)]
-    pub set: Option<HashMap<String, String>>,
+    pub set: Option<IndexMap<String, String>>,
 }
 
 /// Raw compensation step
@@ -210,7 +210,7 @@ pub(crate) struct RawCompensationStep {
     pub condition: Option<String>,
     pub action: String,
     #[serde(default)]
-    pub params: Option<HashMap<String, String>>,
+    pub params: Option<IndexMap<String, String>>,
 }
 
 impl From<RawStepCondition> for StepCondition {
