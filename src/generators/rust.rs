@@ -2270,11 +2270,13 @@ impl RustGenerator {
         )
         .unwrap();
         writeln!(output, "#[serde(rename_all = \"snake_case\")]").unwrap();
-        // Use the actual PostgreSQL enum type name (snake_case)
+        // The actual PostgreSQL type name: schema-qualified when the enum
+        // declares its schema, so a same-named enum in another module's schema
+        // can never satisfy (or break) sqlx's type check.
         writeln!(
             output,
             "#[sqlx(type_name = \"{}\", rename_all = \"snake_case\")]",
-            to_snake_case(enum_name)
+            enum_def.pg_type_name()
         )
         .unwrap();
 
@@ -3107,6 +3109,31 @@ mod tests {
         assert!(
             product_file.contains("pub name:"),
             "Regular fields should remain pub"
+        );
+    }
+
+    #[test]
+    fn enum_with_a_schema_names_its_sqlx_type_with_it() {
+        let mut module_schema = ModuleSchema::new("project");
+        let mut scoped = crate::ast::EnumDef::new("TaskStatus");
+        scoped.schema = Some("project".to_string());
+        module_schema.enums.push(scoped);
+        module_schema.enums.push(crate::ast::EnumDef::new("ProjectType"));
+        let schema = ResolvedSchema { schema: module_schema };
+
+        let output = RustGenerator::new().generate(&schema).unwrap();
+        let task = &output.files[&PathBuf::from("src/domain/entity/task_status.rs")];
+        let kind = &output.files[&PathBuf::from("src/domain/entity/project_type.rs")];
+
+        assert!(
+            task.contains(r#"#[sqlx(type_name = "project.task_status""#),
+            "an enum declaring its schema must name its type with it:\n{}",
+            task
+        );
+        assert!(
+            kind.contains(r#"#[sqlx(type_name = "project_type""#),
+            "an enum without a schema keeps the bare name:\n{}",
+            kind
         );
     }
 }

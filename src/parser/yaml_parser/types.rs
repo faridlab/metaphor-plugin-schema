@@ -294,6 +294,9 @@ fn default_index_type() -> String {
 pub struct YamlEnum {
     /// Enum name
     pub name: String,
+    /// Postgres schema the type lives in (see `EnumDef::schema`).
+    #[serde(default)]
+    pub schema: Option<String>,
     /// Enum variants
     pub variants: Vec<YamlEnumVariant>,
 }

@@ -585,6 +585,14 @@ pub struct EnumDef {
     pub variants: Vec<EnumVariant>,
     /// Enum attributes
     pub attributes: Vec<Attribute>,
+    /// Postgres schema the enum type lives in, when it is not the search path's.
+    ///
+    /// Two modules that each declare an enum of the same name (`task_status` in
+    /// lifecycle and in project) must keep their types apart in their own
+    /// schemas, and every reader must name the type with its schema: sqlx checks
+    /// a column's type by name, so a bare `task_status` matches neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
@@ -595,6 +603,16 @@ impl EnumDef {
         Self {
             name: name.into(),
             ..Default::default()
+        }
+    }
+
+    /// The Postgres type name: `schema.name` when the enum declares a schema,
+    /// otherwise the bare snake_case name.
+    pub fn pg_type_name(&self) -> String {
+        let bare = crate::utils::to_snake_case(&self.name);
+        match self.schema.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => format!("{}.{}", s, bare),
+            None => bare,
         }
     }
 }

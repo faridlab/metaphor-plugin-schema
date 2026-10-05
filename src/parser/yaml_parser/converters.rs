@@ -571,6 +571,7 @@ impl YamlEnum {
     /// Convert to AST EnumDef
     pub fn into_enum(self) -> EnumDef {
         let mut enum_def = EnumDef::new(&self.name);
+        enum_def.schema = self.schema;
 
         for yaml_variant in self.variants {
             enum_def.variants.push(yaml_variant.into_variant());
@@ -2359,5 +2360,23 @@ impl YamlTraitMethod {
             params,
             returns: self.returns.map(|r| parse_type_ref(&r)),
         }
+    }
+}
+
+#[cfg(test)]
+mod enum_schema_tests {
+    use super::*;
+
+    #[test]
+    fn an_enum_carries_its_declared_schema_into_the_ast() {
+        let yaml: YamlEnum =
+            serde_yaml::from_str("name: TaskStatus\nschema: project\nvariants: [open, completed]")
+                .unwrap();
+        let def = yaml.into_enum();
+        assert_eq!(def.schema.as_deref(), Some("project"));
+        assert_eq!(def.pg_type_name(), "project.task_status");
+
+        let bare: YamlEnum = serde_yaml::from_str("name: ProjectType\nvariants: [internal]").unwrap();
+        assert_eq!(bare.into_enum().pg_type_name(), "project_type");
     }
 }

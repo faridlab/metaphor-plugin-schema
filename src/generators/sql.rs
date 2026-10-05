@@ -979,6 +979,10 @@ pub fn tenancy_decorator_chain(
 pub struct SqlGenerator {
     version: Option<String>,
     split: bool,
+    /// Enum name → Postgres schema, for the enums that declare one. Filled at
+    /// the start of `generate` so a column of such an enum names its type with
+    /// the schema too.
+    enum_schemas: std::cell::RefCell<std::collections::HashMap<String, String>>,
 }
 
 impl SqlGenerator {
@@ -986,6 +990,7 @@ impl SqlGenerator {
         Self {
             version: None,
             split: true, // Default to split by model for readability
+            enum_schemas: Default::default(),
         }
     }
 
@@ -1721,18 +1726,31 @@ impl SqlGenerator {
     fn generate_enum(&self, enum_def: &EnumDef) -> Result<String, GenerateError> {
         let mut output = String::new();
         let type_name = to_snake_case(&enum_def.name);
+        let schema = enum_def.schema.as_deref().filter(|s| !s.is_empty());
 
         // Create enum type
-        writeln!(output, "-- Create {} enum type", type_name).unwrap();
+        writeln!(output, "-- Create {} enum type", enum_def.pg_type_name()).unwrap();
+        // A type declared in a schema is created there, and looked for there:
+        // a same-named type in another schema must not count as "exists".
+        if let Some(s) = schema {
+            writeln!(output, "CREATE SCHEMA IF NOT EXISTS {};", s).unwrap();
+        }
         writeln!(output, "DO $$").unwrap();
         writeln!(output, "BEGIN").unwrap();
-        writeln!(
-            output,
-            "    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{}') THEN",
-            type_name
-        )
+        match schema {
+            Some(s) => writeln!(
+                output,
+                "    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = '{}' AND n.nspname = '{}') THEN",
+                type_name, s
+            ),
+            None => writeln!(
+                output,
+                "    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{}') THEN",
+                type_name
+            ),
+        }
         .unwrap();
-        write!(output, "        CREATE TYPE {} AS ENUM (", type_name).unwrap();
+        write!(output, "        CREATE TYPE {} AS ENUM (", enum_def.pg_type_name()).unwrap();
 
         let variants: Vec<String> = enum_def
             .variants
@@ -1941,7 +1959,11 @@ impl SqlGenerator {
     fn type_to_sql(&self, type_ref: &TypeRef) -> String {
         match type_ref {
             TypeRef::Primitive(p) => p.postgres_type().to_string(),
-            TypeRef::Custom(name) => to_snake_case(name), // Assume it's an enum
+            // Assume it's an enum; named with its schema when it declares one.
+            TypeRef::Custom(name) => match self.enum_schemas.borrow().get(name) {
+                Some(s) => format!("{}.{}", s, to_snake_case(name)),
+                None => to_snake_case(name),
+            },
             TypeRef::Array(inner) => format!("{}[]", self.type_to_sql(inner)),
             TypeRef::Optional(inner) => self.type_to_sql(inner),
             TypeRef::Map { .. } => "JSONB".to_string(),
@@ -2010,6 +2032,17 @@ impl Default for SqlGenerator {
 
 impl Generator for SqlGenerator {
     fn generate(&self, schema: &ResolvedSchema) -> Result<GeneratedOutput, GenerateError> {
+        *self.enum_schemas.borrow_mut() = schema
+            .schema
+            .enums
+            .iter()
+            .filter_map(|e| {
+                e.schema
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| (e.name.clone(), s.to_string()))
+            })
+            .collect();
         let mut output = GeneratedOutput::new();
 
         if self.split {
@@ -2074,8 +2107,7 @@ impl SqlGenerator {
             let mut down = String::new();
             writeln!(down, "-- Down: drop enum types for {} module", module_name).unwrap();
             for enum_def in schema.schema.enums.iter().rev() {
-                let type_name = to_snake_case(&enum_def.name);
-                writeln!(down, "DROP TYPE IF EXISTS {} CASCADE;", type_name).unwrap();
+                writeln!(down, "DROP TYPE IF EXISTS {} CASCADE;", enum_def.pg_type_name()).unwrap();
             }
 
             output.add_file(
@@ -4173,4 +4205,43 @@ mod tests {
             fk
         );
     }
+
+    #[test]
+    fn enum_with_a_schema_is_created_and_referenced_in_that_schema() {
+        let mut module_schema = ModuleSchema::new("project");
+        let mut scoped = crate::ast::EnumDef::new("TaskStatus");
+        scoped.schema = Some("project".to_string());
+        module_schema.enums.push(scoped);
+        let mut model = crate::ast::Model::new("Task");
+        model.schema = Some("project".to_string());
+        model.fields = vec![
+            crate::ast::Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            crate::ast::Field {
+                name: "status".to_string(),
+                type_ref: TypeRef::Custom("TaskStatus".to_string()),
+                attributes: vec![],
+                ..Default::default()
+            },
+        ];
+        module_schema.models.push(model);
+        let schema = ResolvedSchema { schema: module_schema };
+
+        let output = SqlGenerator::new().generate(&schema).unwrap();
+        let all: String = output.files.values().cloned().collect::<Vec<_>>().join("\n");
+
+        assert!(all.contains("CREATE TYPE project.task_status AS ENUM"), "{}", all);
+        assert!(
+            all.contains("AND n.nspname = 'project'"),
+            "the existence check must look in the enum's own schema:\n{}",
+            all
+        );
+        assert!(all.contains("DROP TYPE IF EXISTS project.task_status CASCADE;"), "{}", all);
+        assert!(all.contains("status project.task_status"), "the column must name the qualified type:\n{}", all);
+    }
 }
+
