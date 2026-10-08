@@ -63,11 +63,60 @@ impl<'a> SchemaValidator<'a> {
         // Validate scheduled-job postures (ADR-0020)
         errors.extend(self.validate_scheduled_jobs());
 
+        // Two models must not emit the same HTTP route function
+        errors.extend(self.validate_route_function_names());
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
+    }
+
+    /// Every model with generated HTTP handlers emits four route functions named
+    /// after it: `create_<m>_routes`, `create_<m>_read_routes`,
+    /// `create_<m>_write_routes` and `create_<m>_history_route`. A model named
+    /// `<X>Read` or `<X>Write` beside `<X>` emits a name `<X>` already emits, and
+    /// the generated re-exports then fail to compile. Reject it here, naming both
+    /// models, so the schema says how to resolve it (rename one, or disable the
+    /// `handler` generator on the model that needs no generic routes).
+    fn validate_route_function_names(&self) -> Vec<ResolveError> {
+        if self
+            .schema
+            .generators_config
+            .as_ref()
+            .and_then(|cfg| cfg.disabled.as_ref())
+            .is_some_and(|list| list.iter().any(|d| d.eq_ignore_ascii_case("handler")))
+        {
+            return Vec::new();
+        }
+        let mut owner: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+        let mut errors = Vec::new();
+        for model in &self.schema.models {
+            if crate::generators::model_skips_target(model, crate::generators::GenerationTarget::Handler) {
+                continue;
+            }
+            let snake = crate::utils::to_snake_case(&model.name);
+            for name in [
+                format!("create_{snake}_routes"),
+                format!("create_{snake}_read_routes"),
+                format!("create_{snake}_write_routes"),
+                format!("create_{snake}_history_route"),
+            ] {
+                match owner.get(&name) {
+                    Some(first) if *first != model.name.as_str() => errors.push(ResolveError::validation(format!(
+                        "Models '{first}' and '{}' both generate the route function '{name}'; \
+                         rename one, or disable the `handler` generator on the model that needs no generic routes",
+                        model.name
+                    ))),
+                    Some(_) => {}
+                    None => {
+                        owner.insert(name, model.name.as_str());
+                    }
+                }
+            }
+        }
+        errors
     }
 
     /// Validate the module-level `company_fence:` declaration (ADR-0014).
@@ -1757,6 +1806,45 @@ mod scheduled_job_tests {
         assert_eq!(
             job_posture_name(JobPosture::InactiveThenIcp),
             "inactive_then_icp"
+        );
+    }
+}
+
+#[cfg(test)]
+mod route_name_collision_tests {
+    use super::*;
+    use crate::ast::Model;
+
+    fn errors_of(models: Vec<Model>) -> Vec<String> {
+        let mut s = ModuleSchema::new("test");
+        s.models = models;
+        match SchemaValidator::new(&s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn two_models_emitting_the_same_route_function_are_rejected() {
+        // `Announcement`'s read-only routes and `AnnouncementRead`'s full routes
+        // are both `create_announcement_read_routes`.
+        let errs = errors_of(vec![Model::new("Announcement"), Model::new("AnnouncementRead")]);
+        assert!(
+            errs.iter().any(|e| e.contains("create_announcement_read_routes")
+                && e.contains("Announcement")
+                && e.contains("AnnouncementRead")),
+            "a route function emitted twice must be rejected, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_model_without_generated_routes_cannot_collide() {
+        let mut ledger = Model::new("AnnouncementRead");
+        ledger.disabled_generators = vec!["handler".into()];
+        let errs = errors_of(vec![Model::new("Announcement"), ledger]);
+        assert!(
+            !errs.iter().any(|e| e.contains("route function")),
+            "a model whose handler is disabled emits no routes, got: {errs:?}"
         );
     }
 }
