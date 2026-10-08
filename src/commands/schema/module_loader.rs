@@ -28,12 +28,37 @@ use crate::parser::{
 /// Returns the merged schema plus a list of soft errors (duplicate models,
 /// parse failures on individual files) so callers can decide whether to
 /// surface them, fail, or ignore them under `--lenient`.
+/// Take the module name an index file declares. Both index files name the
+/// module; when they disagree the name used to depend on which file was read
+/// last, so a disagreement is an error instead.
+fn name_module(
+    current: &mut String,
+    named_by: &mut Option<(String, String)>,
+    name: &str,
+    file: &str,
+    errors: &mut Vec<String>,
+) {
+    match named_by {
+        Some((first_file, first_name)) if first_name != name => errors.push(format!(
+            "{first_file} names the module `{first_name}` but {file} names it `{name}`; \
+             the index files must agree on the module name"
+        )),
+        Some(_) => {}
+        None => {
+            *named_by = Some((file.to_string(), name.to_string()));
+            *current = name.to_string();
+        }
+    }
+}
+
 pub(super) fn build_module_schema(
     module_name: &str,
     schema_files: &[PathBuf],
 ) -> Result<(ModuleSchema, Vec<String>)> {
     let mut module_schema = ModuleSchema::new(module_name);
     let mut errors = Vec::new();
+    // The index file that first named the module, and the name it gave.
+    let mut module_named_by: Option<(String, String)> = None;
 
     // First pass: collect shared_types from index files
     let mut resolved_shared_types: IndexMap<String, IndexMap<String, YamlField>> = IndexMap::new();
@@ -51,7 +76,7 @@ pub(super) fn build_module_schema(
             match parse_yaml_model_flexible(&content) {
                 Ok(ModelParseResult::Index(index_schema)) => {
                     if let Some(name) = &index_schema.module {
-                        module_schema.name = name.clone();
+                        name_module(&mut module_schema.name, &mut module_named_by, name, filename, &mut errors);
                     }
                     if let Some(config) = &index_schema.config {
                         module_schema.generators_config = config.generators.clone();
@@ -289,7 +314,7 @@ pub(super) fn build_module_schema(
                 Ok(HookParseResult::Hook(hook_file)) => module_schema.merge_hook_file(hook_file),
                 Ok(HookParseResult::Index(index_schema)) => {
                     if let Some(module_name) = &index_schema.module {
-                        module_schema.name = module_name.clone();
+                        name_module(&mut module_schema.name, &mut module_named_by, module_name, filename, &mut errors);
                     }
                     // Scheduled jobs are module-level declarations — carry them
                     // into the schema instead of dropping them at load time.
@@ -353,6 +378,32 @@ mod tests {
         assert!(job.triggers.is_empty());
         assert_eq!(job.commit_policy, None);
         assert!(!job.pickup_lock);
+    }
+
+    /// The two index files each name the module. When they disagree, which
+    /// name the generated module type took depended on the order the files
+    /// were read: a `module: __MODULE__` left from the scaffold, or a hook
+    /// index naming another module, renamed the crate's public module type.
+    #[test]
+    fn index_files_that_name_different_modules_are_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("index.model.yaml");
+        let hooks = dir.path().join("index.hook.yaml");
+        std::fs::write(&models, "module: expenses\n").unwrap();
+        std::fs::write(&hooks, "module: __MODULE__\nscheduled_jobs: {}\n").unwrap();
+
+        let (_, errors) = build_module_schema("expenses", &[hooks.clone(), models.clone()]).unwrap();
+        assert_eq!(
+            errors,
+            vec!["index.model.yaml names the module `expenses` but index.hook.yaml names it `__MODULE__`; \
+                  the index files must agree on the module name"
+                .to_string()],
+        );
+
+        std::fs::write(&hooks, "module: expenses\nscheduled_jobs: {}\n").unwrap();
+        let (schema, errors) = build_module_schema("expenses", &[hooks, models]).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(schema.name, "expenses");
     }
 
     /// ADR-0020 vocabulary on `index.hook.yaml` jobs reaches the module
