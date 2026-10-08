@@ -27,9 +27,19 @@ pub(super) fn find_schema_files(path: &PathBuf) -> Result<Vec<PathBuf>> {
         return Ok(files);
     }
 
+    // Below the root, a hidden directory (`.wt/`, `.git/`), a build directory,
+    // or a directory that is its own git checkout (a worktree or vendored
+    // repository) holds someone else's copy of a schema, never this module's.
+    let foreign = |e: &walkdir::DirEntry| {
+        e.depth() > 0
+            && e.file_type().is_dir()
+            && (e.file_name().to_str().is_some_and(|n| n.starts_with('.') || n == "target" || n == "node_modules")
+                || e.path().join(".git").exists())
+    };
     for entry in WalkDir::new(path)
         .follow_links(true)
         .into_iter()
+        .filter_entry(|e| !foreign(e))
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
@@ -141,4 +151,33 @@ pub(super) fn find_module_schema_path(module: &str) -> Result<PathBuf> {
 
     // Return first candidate as default (will surface "no files found" later)
     Ok(candidates[0].clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A module checkout can hold a git worktree of another branch (`.wt/x`),
+    /// a build directory, or tooling state. Their copies of the schema are not
+    /// the module's schema: reading them made every model load twice.
+    #[test]
+    fn discovery_skips_nested_worktrees_hidden_and_build_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "models: []\n").unwrap();
+        };
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        write("schema/models/invoice.model.yaml");
+        write(".wt/other-branch/schema/models/invoice.model.yaml");
+        write("target/package/schema/models/invoice.model.yaml");
+        write("vendor/copy/schema/models/invoice.model.yaml");
+        std::fs::write(root.join("vendor/copy/.git"), "gitdir: elsewhere\n").unwrap();
+
+        let found = find_schema_files(&root.to_path_buf()).unwrap();
+        let rel: Vec<_> = found.iter().map(|p| p.strip_prefix(root).unwrap().to_path_buf()).collect();
+        assert_eq!(rel, vec![PathBuf::from("schema/models/invoice.model.yaml")]);
+    }
 }
