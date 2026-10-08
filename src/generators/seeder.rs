@@ -737,7 +737,35 @@ impl SeederGenerator {
     }
 
     /// Determine seeder order based on entity relationships
+    /// The order seeds run in: a model after every same-module model its
+    /// foreign keys point at, so a seed row can reference its parent's rows.
+    /// Ties (and a foreign-key cycle, which no order can satisfy) keep the
+    /// reference-tables-first order of [`Self::heuristic_order`].
     fn determine_order<'a>(&self, models: &[&'a Model]) -> Vec<(&'a Model, i32)> {
+        let mut pending: Vec<&'a Model> = self.heuristic_order(models).into_iter().map(|(m, _)| m).collect();
+        let parents = |model: &Model| -> Vec<String> {
+            model
+                .fields
+                .iter()
+                .filter_map(|f| f.attributes.iter().find(|a| a.name == "foreign_key"))
+                // `@foreign_key(Entity.id)` is unquoted, so it parses as an Ident.
+                .filter_map(|a| a.args.first().and_then(|(_, v)| crate::resolver::cross_module_fk::fk_target(v)))
+                .filter_map(|target| target.split('.').next().map(str::to_string))
+                .filter(|target| target != &model.name && models.iter().any(|m| &m.name == target))
+                .collect()
+        };
+        let mut placed: Vec<&'a Model> = Vec::new();
+        while !pending.is_empty() {
+            let next = pending
+                .iter()
+                .position(|m| parents(m).iter().all(|p| placed.iter().any(|done| &done.name == p)))
+                .unwrap_or(0);
+            placed.push(pending.remove(next));
+        }
+        placed.into_iter().zip(1..).collect()
+    }
+
+    fn heuristic_order<'a>(&self, models: &[&'a Model]) -> Vec<(&'a Model, i32)> {
         // Sort models by dependencies (entities with no foreign keys first)
         let mut ordered: Vec<(&'a Model, i32)> = Vec::new();
         let mut order = 1;
@@ -875,5 +903,36 @@ impl Generator for SeederGenerator {
         );
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod seed_order_tests {
+    use super::*;
+    use crate::ast::{Attribute, AttributeValue, Field, PrimitiveType, TypeRef};
+
+    fn fk(name: &str, target: &str) -> Field {
+        let mut f = Field::new(name, TypeRef::Primitive(PrimitiveType::Uuid));
+        // Written unquoted in a schema, `@foreign_key(Entity.id)` parses as an Ident.
+        f.attributes
+            .push(Attribute::new("foreign_key").with_arg(AttributeValue::Ident(target.into())));
+        f
+    }
+
+    #[test]
+    fn a_seed_runs_after_the_models_its_foreign_keys_point_at() {
+        let mut contract = Model::new("Contract");
+        contract.fields = vec![fk("contract_template_id", "ContractTemplate.id")];
+        let mut amendment = Model::new("ContractAmendment");
+        amendment.fields = vec![fk("contract_id", "Contract.id")];
+        let template = Model::new("ContractTemplate");
+        let discipline = Model::new("DisciplineRecord");
+        let models = vec![&amendment, &contract, &discipline, &template];
+        let order: Vec<String> = SeederGenerator::new()
+            .determine_order(&models)
+            .into_iter()
+            .map(|(m, _)| m.name.clone())
+            .collect();
+        assert_eq!(order, ["DisciplineRecord", "ContractTemplate", "Contract", "ContractAmendment"]);
     }
 }
