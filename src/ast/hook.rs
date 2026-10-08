@@ -37,6 +37,13 @@ pub struct Hook {
 }
 
 impl Hook {
+    /// The prefix of this hook's generated state-machine types (`<Prefix>State`,
+    /// `<Prefix>Transition`, `<Prefix>StateMachine`): the hook name in UpperCamelCase,
+    /// so a snake_case hook name still names valid Rust types.
+    pub fn type_prefix(&self) -> String {
+        crate::utils::to_pascal_case(&self.name)
+    }
+
     pub fn new(name: impl Into<String>, model_ref: impl Into<String>) -> Self {
         Self {
             name: name.into(),

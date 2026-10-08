@@ -1982,7 +1982,7 @@ impl RustGenerator {
         if let Some(sm_hook) = self.find_state_machine_hook(model, schema) {
             writeln!(output).unwrap();
             writeln!(output, "use crate::domain::state_machine::{{{name}StateMachine, {name}State, StateMachineError}};",
-                name = sm_hook.name).unwrap();
+                name = sm_hook.type_prefix()).unwrap();
         }
 
         // Generate error types used in entity methods (before struct definition)
@@ -2071,7 +2071,8 @@ impl RustGenerator {
             entity,
             state_machine,
             self.find_state_machine_hook(model, schema)
-                .map(|h| h.name.as_str()),
+                .map(|h| h.type_prefix())
+                .as_deref(),
             &mut output,
         );
 

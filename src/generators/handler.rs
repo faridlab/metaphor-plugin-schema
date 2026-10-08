@@ -68,7 +68,7 @@ impl HandlerGenerator {
         // Generate custom action handlers if hook has state machine
         if let Some(h) = hook {
             if let Some(sm) = &h.state_machine {
-                self.write_transition_handlers(&mut output, model, &h.name, sm)?;
+                self.write_transition_handlers(&mut output, model, &h.type_prefix(), sm)?;
             }
         }
 
@@ -198,7 +198,7 @@ impl HandlerGenerator {
                 writeln!(
                     output,
                     "use crate::domain::state_machine::{{{}State, {}StateMachine, {}Transition}};",
-                    h.name, h.name, h.name
+                    h.type_prefix(), h.type_prefix(), h.type_prefix()
                 )
                 .unwrap();
             }

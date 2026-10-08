@@ -34,7 +34,7 @@ impl StateMachineGenerator {
     /// Generate state enum
     fn generate_state_enum(&self, hook: &Hook, sm: &StateMachine) -> Result<String, GenerateError> {
         let mut output = String::new();
-        let name = &hook.name;
+        let name = &hook.type_prefix();
 
         writeln!(output, "use serde::{{Deserialize, Serialize}};").unwrap();
         writeln!(output, "use std::str::FromStr;").unwrap();
@@ -183,7 +183,7 @@ impl StateMachineGenerator {
         sm: &StateMachine,
     ) -> Result<String, GenerateError> {
         let mut output = String::new();
-        let name = &hook.name;
+        let name = &hook.type_prefix();
 
         // Transition enum
         writeln!(output, "/// Transitions for {} workflow", name).unwrap();
@@ -374,7 +374,7 @@ impl StateMachineGenerator {
         sm: &StateMachine,
     ) -> Result<String, GenerateError> {
         let mut output = String::new();
-        let name = &hook.name;
+        let name = &hook.type_prefix();
 
         // Import StateMachineError from the parent module (defined once in mod.rs)
         writeln!(output, "use super::StateMachineError;").unwrap();
@@ -572,7 +572,12 @@ impl StateMachineGenerator {
             }
         }
 
-        writeln!(output, "            _ => false,").unwrap();
+        // A wildcard arm per transition already matches every pair; a fallback
+        // would be unreachable.
+        let every_transition_is_wildcard = sm.transitions.iter().all(|t| t.from.iter().any(|f| f == "*"));
+        if !every_transition_is_wildcard {
+            writeln!(output, "            _ => false,").unwrap();
+        }
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
@@ -863,7 +868,7 @@ impl StateMachineGenerator {
         };
 
         let mut output = String::new();
-        let name = &hook.name;
+        let name = &hook.type_prefix();
 
         // Header
         writeln!(output, "//! State machine for {} workflow", name).unwrap();
@@ -899,7 +904,7 @@ impl StateMachineGenerator {
         hook: &Hook,
         sm: &StateMachine,
     ) -> Result<(), GenerateError> {
-        let name = &hook.name;
+        let name = &hook.type_prefix();
         let nullable = sm.is_nullable();
 
         writeln!(output, "#[cfg(test)]").unwrap();
@@ -1248,8 +1253,8 @@ fn generate_state_machine_mod(hooks: &[&Hook], group_by_domain: bool) -> String 
 
     // Re-exports (no longer need to include StateMachineError from individual files)
     for hook in hooks.iter() {
-        let name = &hook.name;
-        let snake = to_snake_case(name);
+        let name = &hook.type_prefix();
+        let snake = to_snake_case(&hook.name);
         let exports = format!("{}State, {}Transition, {}StateMachine", name, name, name);
         if group_by_domain {
             writeln!(mod_content, "pub use {}::{{{}}};", snake, exports).unwrap();
@@ -1328,6 +1333,38 @@ mod tests {
             ..Default::default()
         });
         hook
+    }
+
+    #[test]
+    fn a_snake_case_hook_name_gives_upper_camel_case_types() {
+        let generator = StateMachineGenerator::new();
+        let mut hook = create_test_hook();
+        hook.name = "digest_state".to_string();
+        let sm = hook.state_machine.as_ref().unwrap();
+        let all = [
+            generator.generate_state_enum(&hook, sm).unwrap(),
+            generator.generate_transition_enum(&hook, sm).unwrap(),
+            generator.generate_state_machine_struct(&hook, sm).unwrap(),
+        ]
+        .concat();
+        assert!(all.contains("pub enum DigestStateState"), "{all}");
+        assert!(all.contains("pub enum DigestStateTransition"));
+        assert!(all.contains("pub struct DigestStateStateMachine"));
+        assert!(!all.contains("digest_stateState"), "no snake_case type names");
+    }
+
+    #[test]
+    fn a_machine_whose_every_transition_is_a_wildcard_has_no_unreachable_arm() {
+        let generator = StateMachineGenerator::new();
+        let mut hook = create_test_hook();
+        let sm = hook.state_machine.as_mut().unwrap();
+        for t in &mut sm.transitions {
+            t.from = vec!["*".to_string()];
+        }
+        let sm = hook.state_machine.as_ref().unwrap();
+        let content = generator.generate_state_machine_struct(&hook, sm).unwrap();
+        assert!(content.contains("(_, UserTransition::Activate) => true,"));
+        assert!(!content.contains("_ => false,"), "every transition is matched by a wildcard arm");
     }
 
     #[test]
