@@ -11,7 +11,10 @@
 //! than dropped. Generators do not read the register yet; adding it changes no
 //! generated file.
 
+pub mod catalog;
+pub mod expr;
 pub mod reader;
+pub mod rewrite;
 
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +71,9 @@ pub struct DeclaredRule {
     pub enforcement: Option<String>,
     pub justification: Option<String>,
     pub status: EnforcementStatus,
+    /// Whether its condition or assertion parses in the rule grammar and
+    /// resolves against its model; set by [`RuleRegister::check`].
+    pub expression: expr::ExpressionCheck,
 }
 
 /// What a rule asks to be checked.
@@ -78,6 +84,8 @@ pub enum RuleBody {
     Condition(String),
     /// An `assert:` statement: the invariant in words, not yet an expression.
     Assertion(String),
+    /// A catalog rule written under `check:`.
+    Catalog(catalog::CatalogCheck),
     /// A uniqueness or idempotency key (`unique_on:` with `on_conflict:`).
     UniqueOn {
         fields: Vec<String>,
@@ -92,6 +100,7 @@ impl RuleBody {
         match self {
             RuleBody::Condition(_) => "condition",
             RuleBody::Assertion(_) => "assertion",
+            RuleBody::Catalog(_) => "catalog",
             RuleBody::UniqueOn { .. } => "unique_on",
             RuleBody::Empty => "empty",
         }
@@ -137,6 +146,8 @@ pub struct DeclaredTransition {
     pub guard: Option<String>,
     pub roles: Vec<String>,
     pub message: Option<String>,
+    /// Whether its guard parses and resolves; set by [`RuleRegister::check`].
+    pub guard_check: expr::ExpressionCheck,
 }
 
 impl DeclaredMachine {
@@ -208,9 +219,96 @@ impl RuleRegister {
         self.warnings.extend(warnings);
     }
 
+    /// Parse every condition, assertion and guard in the rule grammar and
+    /// resolve its names against the model it is bound to.
+    pub fn check(&mut self, models: &[Model]) {
+        let model_of = |name: &Option<String>| name.as_ref().and_then(|n| models.iter().find(|m| &m.name == n));
+        for rule in &mut self.rules {
+            let model = model_of(&rule.bound_model);
+            rule.expression = match &mut rule.body {
+                RuleBody::Condition(text) | RuleBody::Assertion(text) => expr::check(text, model),
+                RuleBody::Catalog(check) => {
+                    catalog::validate(check, model);
+                    expr::ExpressionCheck::NotAnExpression
+                }
+                RuleBody::UniqueOn { .. } | RuleBody::Empty => expr::ExpressionCheck::NotAnExpression,
+            };
+        }
+        for machine in &mut self.machines {
+            let model = model_of(&machine.bound_model);
+            let guards = machine.guards.clone();
+            for t in &mut machine.transitions {
+                t.guard_check = match &t.guard {
+                    Some(g) => {
+                        let text = guards.iter().find(|(n, _)| n == g).map(|(_, e)| e.as_str()).unwrap_or(g);
+                        // A guard composed of named guards (`balanced && !requires_approval`)
+                        // is checked with the names replaced by their expressions.
+                        let mut composed = text.to_string();
+                        for (name, e) in &guards {
+                            if composed != *e {
+                                composed = replace_word(&composed, name, &format!("({e})"));
+                            }
+                        }
+                        expr::check(&composed, model)
+                    }
+                    None => expr::ExpressionCheck::NotAnExpression,
+                };
+            }
+        }
+    }
+
+    /// How many declared expressions are in each check state.
+    pub fn readiness(&self) -> Readiness {
+        let mut r = Readiness::default();
+        let checks = self
+            .rules
+            .iter()
+            .map(|x| &x.expression)
+            .chain(self.machines.iter().flat_map(|m| m.transitions.iter().map(|t| &t.guard_check)));
+        for c in checks {
+            match c {
+                expr::ExpressionCheck::NotAnExpression => {}
+                expr::ExpressionCheck::Ready => r.ready += 1,
+                expr::ExpressionCheck::Unresolved { .. } => r.unresolved += 1,
+                expr::ExpressionCheck::Unparsed { .. } => r.unparsed += 1,
+            }
+        }
+        r
+    }
+
     pub fn unenforced_rules(&self) -> usize {
         self.rules.iter().filter(|r| r.status == EnforcementStatus::Unenforced).count()
     }
+}
+
+/// Counts of declared expressions by [`expr::ExpressionCheck`] state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Readiness {
+    pub ready: usize,
+    pub unresolved: usize,
+    pub unparsed: usize,
+}
+
+/// Replace `word` where it stands as a whole identifier.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let mut out = String::new();
+    let bytes: Vec<char> = text.chars().collect();
+    let w: Vec<char> = word.chars().collect();
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut i = 0;
+    while i < bytes.len() {
+        let fits = bytes[i..].starts_with(&w)
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + w.len()).is_none_or(|c| !is_ident(*c));
+        if fits {
+            out.push_str(with);
+            i += w.len();
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The first of `target` then `alternatives` that names a model. When a later

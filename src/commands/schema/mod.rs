@@ -91,6 +91,11 @@ pub enum SchemaAction {
         /// Output format
         #[arg(short, long, default_value = "pretty")]
         format: OutputFormat,
+
+        /// Propose the rule-grammar spelling of each expression written in
+        /// SQL style or with `=>`; nothing is written
+        #[arg(long)]
+        suggest: bool,
     },
 
     /// Validate cross-module foreign keys across the whole workspace
@@ -340,7 +345,7 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         SchemaAction::Parse { path, format } => execute_parse(&path, format),
         SchemaAction::Validate { module, warnings } => execute_validate(&module, warnings),
         SchemaAction::ValidateWorkspace => execute_validate_workspace(),
-        SchemaAction::Rules { module, format } => execute_rules(&module, format),
+        SchemaAction::Rules { module, format, suggest } => execute_rules(&module, format, suggest),
         SchemaAction::Generate {
             module,
             target,

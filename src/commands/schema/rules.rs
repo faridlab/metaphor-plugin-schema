@@ -7,13 +7,15 @@
 use anyhow::Result;
 use colored::Colorize;
 
+use crate::rules::expr::ExpressionCheck;
+use crate::rules::rewrite;
 use crate::rules::{RuleBody, RuleRegister};
 
 use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
 use super::OutputFormat;
 
-pub(super) fn execute_rules(module: &str, format: OutputFormat) -> Result<()> {
+pub(super) fn execute_rules(module: &str, format: OutputFormat, suggest: bool) -> Result<()> {
     let schema_path = find_module_schema_path(module)?;
     let schema_files = find_schema_files(&schema_path)?;
     let (module_schema, _parse_errors) = build_module_schema(module, &schema_files)?;
@@ -25,29 +27,70 @@ pub(super) fn execute_rules(module: &str, format: OutputFormat) -> Result<()> {
                 "module": module_schema.name,
                 "declared": register.rules.len(),
                 "unenforced": register.unenforced_rules(),
+                "readiness": register.readiness(),
                 "rules": register.rules,
                 "machines": register.machines,
                 "warnings": register.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
+                "proposals": proposals(register),
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Pretty => print_pretty(&module_schema.name, register),
+        OutputFormat::Pretty => print_pretty(&module_schema.name, register, suggest),
     }
     Ok(())
 }
 
 /// One line for `schema validate`: how many rules, how many enforced.
 pub(super) fn summary_line(register: &RuleRegister) -> String {
+    let r = register.readiness();
     format!(
-        "{} rule(s) and {} state machine(s) declared; {} rule(s) not enforced by generated code \
-         (`schema rules` lists them)",
+        "{} rule(s) and {} state machine(s) declared; {} rule(s) not enforced by generated code; \
+         expressions: {} ready, {} unresolved, {} unparsed (`schema rules` lists them)",
         register.rules.len(),
         register.machines.len(),
-        register.unenforced_rules()
+        register.unenforced_rules(),
+        r.ready,
+        r.unresolved,
+        r.unparsed
     )
 }
 
-fn print_pretty(module: &str, register: &RuleRegister) {
+/// `{source, from, to}` for every unparsed expression a mechanical rewrite
+/// brings into the rule grammar.
+fn proposals(register: &RuleRegister) -> Vec<serde_json::Value> {
+    register
+        .rules
+        .iter()
+        .filter(|r| matches!(r.expression, ExpressionCheck::Unparsed { .. }))
+        .filter_map(|r| match &r.body {
+            RuleBody::Condition(t) | RuleBody::Assertion(t) => rewrite::propose(t).map(|to| {
+                serde_json::json!({ "source": r.source.to_string(), "rule": r.name, "from": t, "to": to })
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The check state of an expression, with what stands in its way.
+fn describe(check: &ExpressionCheck) -> String {
+    match check {
+        ExpressionCheck::NotAnExpression => String::new(),
+        ExpressionCheck::Ready => "ready".green().to_string(),
+        ExpressionCheck::Unresolved { names, functions } => {
+            let mut parts = Vec::new();
+            if !names.is_empty() {
+                parts.push(format!("unknown names {}", names.join(", ")));
+            }
+            if !functions.is_empty() {
+                parts.push(format!("unknown functions {}", functions.join(", ")));
+            }
+            format!("{}: {}", "unresolved".yellow(), parts.join("; "))
+        }
+        ExpressionCheck::Unparsed { error } => format!("{}: {error}", "unparsed".red()),
+    }
+}
+
+fn print_pretty(module: &str, register: &RuleRegister, suggest: bool) {
     println!(
         "{} {} — {}",
         "Rules:".bold(),
@@ -76,8 +119,29 @@ fn print_pretty(module: &str, register: &RuleRegister) {
             enforcement,
             "UNENFORCED".yellow()
         );
-        if let RuleBody::Condition(text) | RuleBody::Assertion(text) = &rule.body {
-            println!("      {}", text.dimmed());
+        match &rule.body {
+            RuleBody::Condition(text) | RuleBody::Assertion(text) => {
+                println!("      {}", text.dimmed());
+                println!("      {}", describe(&rule.expression));
+                if suggest && matches!(rule.expression, ExpressionCheck::Unparsed { .. }) {
+                    if let Some(p) = rewrite::propose(text) {
+                        println!("      {} {p}", "proposal:".cyan());
+                    }
+                }
+            }
+            RuleBody::Catalog(check) => {
+                let params: Vec<String> = check.params.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+                let layer = check.layer.map(|l| format!("{l:?}").to_lowercase()).unwrap_or_else(|| "?".into());
+                println!("      {} {{ {} }}  layer: {}", check.rule, params.join(", "), layer);
+                if check.problems.is_empty() {
+                    println!("      {}", "sound".green());
+                } else {
+                    for p in &check.problems {
+                        println!("      {} {p}", "problem:".red());
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if !register.machines.is_empty() {
@@ -99,6 +163,14 @@ fn print_pretty(module: &str, register: &RuleRegister) {
                 guarded,
                 "GUARDS UNENFORCED".yellow()
             );
+            for t in m.transitions.iter().filter(|t| t.guard.is_some()) {
+                println!(
+                    "      {} guard {}: {}",
+                    t.verb.as_deref().unwrap_or("transition"),
+                    t.guard.as_deref().unwrap_or(""),
+                    describe(&t.guard_check)
+                );
+            }
         }
     }
     if !register.warnings.is_empty() {

@@ -26,7 +26,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 ];
 const RULE_KEYS: &[&str] = &[
     "name", "id", "when", "condition", "assert", "message", "code", "error_code", "severity", "enforcement",
-    "justification", "entity", "unique_on", "on_conflict", "note", "notes", "description",
+    "justification", "entity", "unique_on", "on_conflict", "check", "note", "notes", "description",
 ];
 const MACHINE_KEYS: &[&str] = &[
     "entity", "field", "initial", "states", "values", "transitions", "guards", "effects", "lifecycle",
@@ -163,7 +163,9 @@ fn read_rules(
             }
         }
 
-        let body = if let Some(c) = str_at(rule, "condition").filter(|c| !c.trim().is_empty()) {
+        let body = if let Some(check) = get(rule, "check") {
+            RuleBody::Catalog(super::catalog::read(check))
+        } else if let Some(c) = str_at(rule, "condition").filter(|c| !c.trim().is_empty()) {
             RuleBody::Condition(c)
         } else if let Some(a) = str_at(rule, "assert").filter(|a| !a.trim().is_empty()) {
             RuleBody::Assertion(a)
@@ -200,6 +202,7 @@ fn read_rules(
             enforcement: str_at(rule, "enforcement"),
             justification: str_at(rule, "justification"),
             status: EnforcementStatus::Unenforced,
+            expression: super::expr::ExpressionCheck::NotAnExpression,
         });
     }
 }
@@ -329,6 +332,7 @@ fn read_machine(
             guard,
             roles: get(t, "roles").map(strings).unwrap_or_default(),
             message: str_at(t, "message"),
+            guard_check: super::expr::ExpressionCheck::NotAnExpression,
         });
     }
 
