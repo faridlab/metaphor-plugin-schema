@@ -99,14 +99,15 @@ pub(in crate::commands::schema) fn merge_seed_order(
     Ok(result)
 }
 
-/// Extract seed names from YAML content (lines starting with `-`).
-fn extract_seed_names(content: &str) -> HashSet<String> {
+/// Extract seed names from YAML content (lines starting with `-`), in the
+/// order they appear, each once. The generator lists seeds parents first, so
+/// this order is the foreign-key order new seeds are appended in.
+fn extract_seed_names(content: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
     content
         .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            trimmed.strip_prefix('-')?.trim().to_string().into()
-        })
+        .filter_map(|line| Some(line.trim().strip_prefix('-')?.trim().to_string()))
+        .filter(|name| seen.insert(name.clone()))
         .collect()
 }
 
@@ -144,7 +145,7 @@ fn process_seed_order_line(
 /// Append seeds present in `generated_seeds` but missing from `existing_seeds`,
 /// under a "Newly added seeds" comment.
 fn append_new_seeds(
-    generated_seeds: &HashSet<String>,
+    generated_seeds: &[String],
     existing_seeds: &HashSet<String>,
     result: &mut String,
 ) {
@@ -168,14 +169,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_seeds_are_appended_in_the_generated_dependency_order() {
+        // The generator lists seeds parents first; a seed whose rows reference
+        // another must run after it, so the appended tail keeps that order.
+        let generated = "- a_parent\n- b_child\n- c\n- d\n- e\n- f\n- g\n- h\n- kept\n";
+        let path = std::env::temp_dir().join(format!("seed_order_{}.yml", std::process::id()));
+        fs::write(&path, "- kept\n").unwrap();
+        let merged = merge_seed_order(generated, &path).unwrap();
+        fs::remove_file(&path).ok();
+        let tail: Vec<&str> = merged
+            .split("# Newly added seeds")
+            .nth(1)
+            .expect("new seeds are appended")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("- "))
+            .collect();
+        assert_eq!(tail, ["a_parent", "b_child", "c", "d", "e", "f", "g", "h"]);
+    }
+
+    #[test]
     fn test_extract_seed_names() {
         let content = "# Header\n- seed1\n- seed2\n# Comment\n- seed3";
         let seeds = extract_seed_names(content);
 
-        assert_eq!(seeds.len(), 3);
-        assert!(seeds.contains("seed1"));
-        assert!(seeds.contains("seed2"));
-        assert!(seeds.contains("seed3"));
+        assert_eq!(seeds, ["seed1", "seed2", "seed3"]);
     }
 
     #[test]
@@ -192,7 +209,7 @@ mod tests {
         let existing = "- seed1\n- seed2\n";
 
         let generated_seeds = extract_seed_names(generated);
-        let existing_seeds = extract_seed_names(existing);
+        let existing_seeds: HashSet<String> = extract_seed_names(existing).into_iter().collect();
         let mut result = String::from("- seed1\n- seed2\n");
 
         append_new_seeds(&generated_seeds, &existing_seeds, &mut result);
@@ -207,7 +224,7 @@ mod tests {
         let existing = "- seed1\n- seed2\n";
 
         let generated_seeds = extract_seed_names(generated);
-        let existing_seeds = extract_seed_names(existing);
+        let existing_seeds: HashSet<String> = extract_seed_names(existing).into_iter().collect();
         let mut result = String::from("- seed1\n- seed2\n");
 
         append_new_seeds(&generated_seeds, &existing_seeds, &mut result);
