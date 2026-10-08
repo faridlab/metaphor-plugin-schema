@@ -1707,6 +1707,24 @@ impl RustGenerator {
                 ))
             })
             .collect();
+        // A key into another module's table is no relation here (its target is not a
+        // model of this module), so it declares what `?include=` may hydrate on the
+        // field itself: `@include("employee", "employee.employees")`.
+        let mut relations = relations;
+        for field in &model.fields {
+            let Some(attr) = field.attributes.iter().find(|a| a.name == "include") else { continue };
+            let text = |i: usize| match attr.args.get(i).map(|(_, v)| v) {
+                Some(AttributeValue::String(s) | AttributeValue::Ident(s)) => Some(s.clone()),
+                _ => None,
+            };
+            if let (Some(rel), Some(table)) = (text(0), text(1)) {
+                relations.push((
+                    crate::webgen::parser::to_camel_case(&rel),
+                    table,
+                    crate::webgen::parser::to_camel_case(&field.name),
+                ));
+            }
+        }
 
         writeln!(output).unwrap();
         writeln!(output, "impl backbone_orm::EntityRepoMeta for {name} {{").unwrap();
@@ -3110,6 +3128,40 @@ mod tests {
 
         // Models that declare nothing keep their generated file byte-identical.
         assert!(!persistent_entity_impl(file, "Payment").contains("write_protected_fields"));
+    }
+
+    /// A foreign key into another module's table cannot be a relation (the
+    /// target is not a model here), so `?include=` could only hydrate it when
+    /// the entity's `relations()` was written by hand, freezing the file.
+    /// `@include("name", "schema.table")` on the key declares it instead.
+    #[test]
+    fn test_include_attribute_declares_a_cross_module_relation() {
+        use crate::ast::AttributeValue;
+        let mut model = Model::new("Timesheet");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            Field {
+                name: "employee_id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("include")
+                    .with_arg(AttributeValue::String("employee".to_string()))
+                    .with_arg(AttributeValue::String("employee.employees".to_string()))],
+                ..Default::default()
+            },
+        ];
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let file = output.files.get(&PathBuf::from("src/domain/entity/timesheet.rs")).unwrap();
+        assert!(
+            file.contains(r#"&[("employee", "employee.employees", "employeeId")]"#),
+            "relations() should carry the declared include:\n{file}"
+        );
     }
 
     #[test]
