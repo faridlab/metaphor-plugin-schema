@@ -157,6 +157,29 @@ impl Model {
         })
     }
 
+    /// The fields a generic write (PUT, PATCH and their bulk forms) may not
+    /// change, in schema order: `@immutable` and `@hashed` fields, fields whose
+    /// lifecycle is `hand_set` (moved only by verbs) or `projection` (derived
+    /// by the module), and a directly stored `created_at` or `deleted_at`.
+    /// The generic service still accepts a write that carries one of these
+    /// unchanged; it refuses only a new value.
+    pub fn write_protected_fields(&self) -> Vec<&str> {
+        self.fields
+            .iter()
+            .filter(|f| {
+                f.has_attribute("immutable")
+                    || f.has_attribute("hashed")
+                    || matches!(
+                        f.lifecycle.as_ref().map(|l| l.shape),
+                        Some(LifecycleShape::HandSet | LifecycleShape::Projection)
+                    )
+                    || f.name == "created_at"
+                    || f.name == "deleted_at"
+            })
+            .map(|f| f.name.as_str())
+            .collect()
+    }
+
     /// The default route-function name for this model in a CRUD composer:
     /// `create_{snake}_read_routes` when read-only (GET endpoints only) or when
     /// any field declares a hand_set lifecycle (verb-guarded state generic writes

@@ -1414,6 +1414,17 @@ impl RustGenerator {
         )
         .unwrap();
 
+        // Fields the schema declares as not freely writable; the generic
+        // service refuses a PUT or PATCH that changes them. Left out when the
+        // list is empty, so a model that declares none is generated unchanged.
+        let protected = model.write_protected_fields();
+        if !protected.is_empty() {
+            let list = protected.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+            writeln!(output, "    fn write_protected_fields() -> &'static [&'static str] {{").unwrap();
+            writeln!(output, "        &[{list}]").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
         // entity_id — always Uuid-based
         writeln!(output, "    fn entity_id(&self) -> String {{").unwrap();
         writeln!(output, "        self.{}.to_string()", pk_field).unwrap();
@@ -3028,6 +3039,77 @@ mod tests {
             !session_file.contains("parse::<Option<SessionState>>()"),
             "Option<...> implements no FromStr — the write-back must not target it"
         );
+    }
+
+    /// A model declaring every kind of field a generic write must not change,
+    /// beside ones it may.
+    fn make_schema_with_write_protected_fields() -> ResolvedSchema {
+        use crate::ast::{Lifecycle, LifecycleShape};
+        let lifecycle = |shape| Some(Lifecycle { shape, ..Default::default() });
+        let field = |name: &str, attributes: Vec<Attribute>| Field {
+            name: name.to_string(),
+            type_ref: TypeRef::Primitive(PrimitiveType::String),
+            attributes,
+            ..Default::default()
+        };
+        let mut model = Model::new("Account");
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            field("name", vec![]),
+            field("password_hash", vec![Attribute::new("hashed")]),
+            field("code", vec![Attribute::new("immutable")]),
+            Field { lifecycle: lifecycle(LifecycleShape::HandSet), ..field("status", vec![]) },
+            Field { lifecycle: lifecycle(LifecycleShape::Projection), ..field("balance", vec![]) },
+            Field { lifecycle: lifecycle(LifecycleShape::Label), ..field("stage_label", vec![]) },
+        ];
+        let mut schema = ModuleSchema::new("test");
+        schema.models.push(model);
+        ResolvedSchema { schema }
+    }
+
+    fn persistent_entity_impl(file: &str, model: &str) -> String {
+        let start = file
+            .find(&format!("impl backbone_core::PersistentEntity for {model} {{"))
+            .expect("PersistentEntity impl should be generated");
+        let end = file[start..].find("\n}\n").map(|e| start + e).unwrap_or(file.len());
+        file[start..end].to_string()
+    }
+
+    #[test]
+    fn test_write_protected_fields_come_from_the_schema() {
+        let output = RustGenerator::new().generate(&make_schema_with_write_protected_fields()).unwrap();
+        let file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/account.rs"))
+            .expect("account.rs should be generated");
+        let section = persistent_entity_impl(file, "Account");
+
+        assert!(
+            section.contains("fn write_protected_fields() -> &'static [&'static str] {"),
+            "the impl should override write_protected_fields:\n{section}"
+        );
+        assert!(
+            section.contains(r#"&["password_hash", "code", "status", "balance"]"#),
+            "hashed, immutable, hand_set and projection fields are protected, in schema order; \
+             a plain field and a label are not:\n{section}"
+        );
+    }
+
+    #[test]
+    fn test_no_write_protected_override_when_the_schema_declares_none() {
+        let output = RustGenerator::new().generate(&make_schema_with_state_machine()).unwrap();
+        let file = output
+            .files
+            .get(&PathBuf::from("src/domain/entity/payment.rs"))
+            .expect("payment.rs should be generated");
+
+        // Models that declare nothing keep their generated file byte-identical.
+        assert!(!persistent_entity_impl(file, "Payment").contains("write_protected_fields"));
     }
 
     #[test]
