@@ -483,6 +483,13 @@ impl ModuleGenerator {
         writeln!(output, "/// Builder for {}Module", pascal_name).unwrap();
         writeln!(output, "pub struct {}ModuleBuilder {{", pascal_name).unwrap();
         writeln!(output, "    db_pool: Option<PgPool>,").unwrap();
+        // Builder state a module adds (an optional port, a seam) lives here, and
+        // its default in `new()` below. Both zones are named: a bare marker is
+        // paired by its position among other bare markers at the same indent,
+        // so a module's hand-added defaults were paired with the `build()`
+        // literal's zone and one of the two was dropped.
+        writeln!(output, "    // <<< CUSTOM BUILDER FIELDS").unwrap();
+        writeln!(output, "    // END CUSTOM").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
@@ -492,6 +499,8 @@ impl ModuleGenerator {
         writeln!(output, "    pub fn new() -> Self {{").unwrap();
         writeln!(output, "        Self {{").unwrap();
         writeln!(output, "            db_pool: None,").unwrap();
+        writeln!(output, "            // <<< CUSTOM BUILDER DEFAULTS").unwrap();
+        writeln!(output, "            // END CUSTOM").unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();

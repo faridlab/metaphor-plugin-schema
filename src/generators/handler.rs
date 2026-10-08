@@ -302,6 +302,13 @@ impl HandlerGenerator {
             "            ServiceError::Internal(ref msg) => Self::Internal(msg.clone()),"
         )
         .unwrap();
+        // A write refused for named rules is a validation failure here; the
+        // structured violations travel on the generic HTTP path.
+        writeln!(
+            output,
+            "            ServiceError::Violations(_) => Self::Validation(err.to_string()),"
+        )
+        .unwrap();
         writeln!(output, "        }}").unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output, "}}").unwrap();
@@ -1560,6 +1567,20 @@ mod tests {
         // Should use Axum, not Actix
         assert!(handler.contains("use axum::Router;"));
         assert!(!handler.contains("actix_web"));
+    }
+
+    /// A write refused for named rules reaches the handler error as a
+    /// validation error, and the match stays exhaustive: a service error
+    /// variant added later must break the build here, not map silently.
+    #[test]
+    fn test_handler_error_maps_named_violations() {
+        let schema = create_test_schema();
+        let output = HandlerGenerator::new().generate(&schema).unwrap();
+        let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
+        assert!(handler.contains("ServiceError::Violations(_) => Self::Validation(err.to_string()),"));
+        let from = &handler[handler.find("impl From<ServiceError>").unwrap()..];
+        let from = &from[..from.find("\n}\n").unwrap()];
+        assert!(!from.contains("_ =>"), "no wildcard arm:\n{from}");
     }
 
     #[test]
