@@ -284,6 +284,7 @@ pub(super) fn build_module_schema(
                 Err(e) => errors.push(format!("{}: {:#}", filename, e)),
             }
         } else if filename.ends_with(".hook.yaml") {
+            module_schema.rule_register.read_file(filename, &content);
             match parse_yaml_hook_flexible(&content) {
                 Ok(HookParseResult::Hook(hook_file)) => module_schema.merge_hook_file(hook_file),
                 Ok(HookParseResult::Index(index_schema)) => {
@@ -313,6 +314,10 @@ pub(super) fn build_module_schema(
             }
         }
     }
+
+    // Bind once every model is known: hook files may load before model files.
+    let models = module_schema.models.clone();
+    module_schema.rule_register.bind(&models);
 
     Ok((module_schema, errors))
 }

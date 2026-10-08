@@ -12,6 +12,7 @@ mod migrations;
 mod module_loader;
 mod openapi_collect;
 mod parse;
+mod rules;
 mod tenancy;
 mod undeclared;
 mod validate;
@@ -25,6 +26,7 @@ use doctor::execute_doctor;
 use generate::execute_generate;
 use migration_cmd::{execute_migration, execute_status};
 use parse::execute_parse;
+use rules::execute_rules;
 use tenancy::execute_tenancy;
 use undeclared::execute_undeclared;
 use validate::execute_validate;
@@ -73,6 +75,22 @@ pub enum SchemaAction {
         /// Show warnings in addition to errors
         #[arg(short, long)]
         warnings: bool,
+    },
+
+    /// List every rule and state machine the module's hook files declare
+    ///
+    /// Shows each rule's source line, the model it governs, what it checks
+    /// (a condition, an assertion in words, a uniqueness key), and whether
+    /// generated code enforces it; then the state machines and anything the
+    /// hook files say that the generator does not read. Read-only.
+    Rules {
+        /// Module name or path to schema directory
+        #[arg(default_value = ".")]
+        module: String,
+
+        /// Output format
+        #[arg(short, long, default_value = "pretty")]
+        format: OutputFormat,
     },
 
     /// Validate cross-module foreign keys across the whole workspace
@@ -322,6 +340,7 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         SchemaAction::Parse { path, format } => execute_parse(&path, format),
         SchemaAction::Validate { module, warnings } => execute_validate(&module, warnings),
         SchemaAction::ValidateWorkspace => execute_validate_workspace(),
+        SchemaAction::Rules { module, format } => execute_rules(&module, format),
         SchemaAction::Generate {
             module,
             target,

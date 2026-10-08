@@ -257,6 +257,12 @@ pub struct ModuleSchema {
     /// parsed and dropped at load time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scheduled_jobs: Vec<ScheduledJob>,
+    /// Every rule and state machine the module's hook files declare, read
+    /// from their raw YAML and bound to models ([`crate::rules`]). Reported by
+    /// `schema validate` and `schema rules`; not read by any generator yet,
+    /// and never serialized, so it changes no output.
+    #[serde(skip)]
+    pub rule_register: crate::rules::RuleRegister,
     /// Module-level company fence declaration (ADR-0014). `None` = undeclared
     /// (legacy module → per-model inference); `Some(CompanyFence::None)` =
     /// explicit "no company dimension" (emits nothing, validated against

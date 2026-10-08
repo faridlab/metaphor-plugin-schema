@@ -42,6 +42,16 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
             for warning in declaration_warnings(&module_schema) {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
+            // The rule register: what the hook files declare and the generator
+            // does not enforce or read. Warnings for now; a later release makes
+            // the unread keys and unbound rules errors.
+            let register = &module_schema.rule_register;
+            if !register.rules.is_empty() || !register.machines.is_empty() {
+                println!("  {} {}", "Rules:".yellow().bold(), super::rules::summary_line(register));
+            }
+            for warning in &register.warnings {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
         }
         Err(errors) => {
             for err in &errors {

@@ -73,6 +73,7 @@ pub mod merge;
 pub mod migration;
 pub mod parser;
 pub mod resolver;
+pub mod rules;
 pub mod utils;
 pub mod webgen;
 
