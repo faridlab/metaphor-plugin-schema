@@ -95,6 +95,10 @@ impl ModuleGenerator {
             // contract layer is uncompiled (crate::exports unresolved).
             writeln!(output, "pub mod exports;").unwrap();
         }
+        // Hand-written modules at the crate root (a request-pool seam, a module
+        // extension) are declared inside this zone so a regeneration keeps them.
+        writeln!(output, "// <<< CUSTOM MODULES").unwrap();
+        writeln!(output, "// END CUSTOM").unwrap();
         writeln!(output).unwrap();
 
         // Re-exports - Domain entities. Opt-out via config.generators.reexport_entities: false — a
@@ -1520,6 +1524,17 @@ mod tests {
         assert!(
             lib_content.contains("// <<< CUSTOM METHODS"),
             "impl Module must have a CUSTOM zone so methods like guarded_routes() survive regen"
+        );
+        // A hand-written module file at the crate root (a request-pool seam, a module
+        // extension) is declared in this zone; outside it, every regeneration dropped the
+        // declaration and the crate stopped compiling.
+        let modules_zone = lib_content
+            .find("// <<< CUSTOM MODULES")
+            .expect("lib.rs must have a CUSTOM MODULES zone for hand-written crate-root modules");
+        assert!(
+            modules_zone > lib_content.find("pub mod presentation;").unwrap()
+                && modules_zone < lib_content.find("// Re-exports").unwrap_or(usize::MAX),
+            "the CUSTOM MODULES zone sits right after the generated module declarations"
         );
         // Council 2026-07-28: CrudServices grouping + crud_services() accessor were REMOVED —
         // they handed out full-mutation GenericCrudService handles that let sibling crates bypass
