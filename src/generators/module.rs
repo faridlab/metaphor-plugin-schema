@@ -295,6 +295,10 @@ impl ModuleGenerator {
             } else {
                 service_name
             };
+            if !handler_emitted(model) {
+                // No generated route reads it; hand-written code in this crate may.
+                writeln!(output, "    #[allow(dead_code)]").unwrap();
+            }
             writeln!(
                 output,
                 "    pub(crate) {}_service: Arc<{}>,",
@@ -1388,6 +1392,23 @@ mod tests {
         assert!(lib_content.contains("pub struct OrdersModule"));
         assert!(lib_content.contains("pub struct OrdersModuleBuilder"));
         assert!(lib_content.contains("user_service: Arc<UserService>"));
+    }
+
+    #[test]
+    fn a_service_no_generated_route_reads_is_marked_as_possibly_unread() {
+        let mut schema = create_test_schema();
+        let mut ledger = create_test_model();
+        ledger.name = "ReadLedger".to_string();
+        ledger.disabled_generators = vec!["handler".to_string()];
+        schema.schema.models.push(ledger);
+        let output = ModuleGenerator::new().generate(&schema).unwrap();
+        let lib = output.files.get(&PathBuf::from("src/lib.rs")).unwrap();
+        let before = |field: &str| {
+            let at = lib.find(field).unwrap_or_else(|| panic!("{field} missing:\n{lib}"));
+            lib[..at].lines().last().unwrap_or("").to_string() + lib[..at].lines().rev().nth(1).unwrap_or("")
+        };
+        assert!(before("pub(crate) read_ledger_service").contains("#[allow(dead_code)]"), "{lib}");
+        assert!(!before("pub(crate) user_service").contains("#[allow(dead_code)]"), "a routed service is read by all_crud_routes");
     }
 
     fn create_test_schema_with_reexport(reexport: bool) -> ResolvedSchema {

@@ -857,11 +857,12 @@ impl TriggerGenerator {
 
         writeln!(output, "{}// Emit {} event", spaces, event_name).unwrap();
 
-        // For custom events where publisher is not actually used, use _publisher to avoid warning
-        let publisher_var = if event_type == "Custom" {
-            "_publisher"
-        } else {
+        // Only the CRUD event arms below publish; every other event is a custom
+        // placeholder that leaves the publisher unused.
+        let publisher_var = if matches!(event_type, "Created" | "Updated" | "Deleted" | "Restored") {
             "publisher"
+        } else {
+            "_publisher"
         };
         writeln!(
             output,
@@ -992,7 +993,9 @@ impl TriggerGenerator {
             n = model.name
         )
         .unwrap();
-        writeln!(output, "    TriggerRegistry::build(|r| {{").unwrap();
+        // The builder is named only when it registers a handler, so a model with no
+        // triggers does not leave an unused closure argument behind.
+        let mut registrations = String::new();
 
         // Register lifecycle trigger handlers
         let lifecycle_triggers: Vec<_> = hook
@@ -1023,7 +1026,7 @@ impl TriggerGenerator {
             };
             let handler_name = format!("{}{}Handler{}", model.name, event_name, i + 1);
             writeln!(
-                output,
+                registrations,
                 "        r.register(Arc::new({}::new()));",
                 handler_name
             )
@@ -1040,7 +1043,7 @@ impl TriggerGenerator {
                         to_pascal_case(&state.name)
                     );
                     writeln!(
-                        output,
+                        registrations,
                         "        r.register(Arc::new({}::new()));",
                         handler_name
                     )
@@ -1050,7 +1053,7 @@ impl TriggerGenerator {
                     let handler_name =
                         format!("{}OnExit{}Handler", model.name, to_pascal_case(&state.name));
                     writeln!(
-                        output,
+                        registrations,
                         "        r.register(Arc::new({}::new()));",
                         handler_name
                     )
@@ -1059,6 +1062,9 @@ impl TriggerGenerator {
             }
         }
 
+        let builder = if registrations.is_empty() { "_r" } else { "r" };
+        writeln!(output, "    TriggerRegistry::build(|{}| {{", builder).unwrap();
+        output.push_str(&registrations);
         writeln!(output, "    }})").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -1225,6 +1231,43 @@ mod tests {
         });
 
         ResolvedSchema { schema }
+    }
+
+    #[test]
+    fn a_registry_with_no_handlers_does_not_name_its_unused_builder() {
+        let mut schema = create_test_schema_with_hook();
+        let hook = &mut schema.schema.hooks[0];
+        hook.triggers.clear();
+        for state in &mut hook.state_machine.as_mut().unwrap().states {
+            state.on_enter.clear();
+            state.on_exit.clear();
+        }
+        let generator = TriggerGenerator::new();
+        let mut out = String::new();
+        generator
+            .write_trigger_registry_fn(&mut out, &schema.schema.models[0], &schema.schema.hooks[0])
+            .unwrap();
+        assert!(out.lines().any(|l| l == "    TriggerRegistry::build(|_r| {"), "{out}");
+
+        let schema = create_test_schema_with_hook();
+        let mut out = String::new();
+        generator
+            .write_trigger_registry_fn(&mut out, &schema.schema.models[0], &schema.schema.hooks[0])
+            .unwrap();
+        assert!(out.lines().any(|l| l == "    TriggerRegistry::build(|r| {"), "a registry with handlers uses its builder: {out}");
+    }
+
+    #[test]
+    fn an_emit_the_generator_cannot_publish_does_not_bind_the_publisher() {
+        let generator = TriggerGenerator::new();
+        let model = Model::new("Device");
+        let mut out = String::new();
+        generator.write_emit_action(&mut out, "deviceverifiedevent", "        ", &model).unwrap();
+        assert!(out.contains("if let Some(_publisher) = &self.event_publisher"), "{out}");
+        let mut out = String::new();
+        generator.write_emit_action(&mut out, "devicecreated", "        ", &model).unwrap();
+        assert!(out.contains("if let Some(publisher) = &self.event_publisher"), "{out}");
+        assert!(out.contains("publisher.publish_created"));
     }
 
     #[test]
