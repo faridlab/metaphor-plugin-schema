@@ -4,7 +4,7 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::resolver::{declaration_warnings, resolve_schema};
+use crate::resolver::{declaration_warnings, naming_warnings, resolve_schema, trigger_warnings};
 
 use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
@@ -40,6 +40,12 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
             // carry no tenancy at all; an absent declaration is the intended end state,
             // and a surviving declaration is retired by the sweep train, not by this gate.
             for warning in declaration_warnings(&module_schema) {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
+            for warning in naming_warnings(&module_schema) {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
+            for warning in trigger_warnings(&module_schema) {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             // The rule register: what the hook files declare and the generator

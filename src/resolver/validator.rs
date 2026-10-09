@@ -1848,3 +1848,89 @@ mod route_name_collision_tests {
         );
     }
 }
+
+/// Hooks whose declared trigger actions nothing runs. The generator emits a trigger
+/// registry per hook, but no generated write path builds or calls it, so every
+/// `triggers:` action and every state `on_enter` / `on_exit` action is declared and
+/// never executed. Reported by `schema validate` so the gap is visible until
+/// trigger execution is designed into the write pipeline.
+pub fn trigger_warnings(schema: &ModuleSchema) -> Vec<String> {
+    let mut out = Vec::new();
+    for hook in &schema.hooks {
+        let lifecycle: usize = hook.triggers.iter().map(|t| t.actions.len()).sum();
+        let state: usize = hook
+            .state_machine
+            .as_ref()
+            .map(|sm| sm.states.iter().map(|st| st.on_enter.len() + st.on_exit.len()).sum())
+            .unwrap_or(0);
+        let total = lifecycle + state;
+        if total > 0 {
+            out.push(format!(
+                "Hook '{}' declares {total} trigger action(s) ({lifecycle} lifecycle, {state} on state enter/exit); none is executed: no generated write path runs the trigger registry",
+                hook.name
+            ));
+        }
+    }
+    out
+}
+
+/// Names the generator has to change because two models would otherwise emit the
+/// same type: a model called `<Model>Filter` beside `<Model>` makes the `<Model>`
+/// repository filter come out as `<Model>RepositoryFilter`. Advisory: printed by
+/// `schema validate`, never a gate.
+pub fn naming_warnings(schema: &ModuleSchema) -> Vec<String> {
+    let mut out = Vec::new();
+    for model in &schema.models {
+        let filter = format!("{}Filter", model.name);
+        if schema.models.iter().any(|m| m.name == filter) {
+            out.push(format!(
+                "Model '{filter}' is named like the repository filter of model '{}'; that filter is generated as '{}RepositoryFilter'",
+                model.name, model.name
+            ));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod naming_warning_tests {
+    use super::*;
+    use crate::ast::Model;
+
+    #[test]
+    fn a_model_named_like_another_models_filter_is_reported() {
+        let mut s = ModuleSchema::new("test");
+        s.models = vec![Model::new("Mailing"), Model::new("MailingFilter")];
+        let w = naming_warnings(&s);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("MailingRepositoryFilter"));
+        s.models = vec![Model::new("Mailing"), Model::new("MailingTrace")];
+        assert!(naming_warnings(&s).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trigger_warning_tests {
+    use super::*;
+    use crate::ast::hook::{Action, Hook, State, StateMachine, Trigger, TriggerEvent};
+
+    #[test]
+    fn declared_trigger_actions_are_reported_as_not_executed() {
+        let mut s = ModuleSchema::new("test");
+        let mut hook = Hook::new("Order", "Order");
+        hook.triggers = vec![Trigger {
+            event: TriggerEvent::AfterCreate,
+            actions: vec![Action::default(), Action::default()],
+            ..Default::default()
+        }];
+        hook.state_machine = Some(StateMachine {
+            states: vec![State { name: "paid".into(), on_enter: vec![Action::default()], ..Default::default() }],
+            ..Default::default()
+        });
+        s.hooks = vec![hook, Hook::new("Quiet", "Quiet")];
+        let w = trigger_warnings(&s);
+        assert_eq!(w.len(), 1, "only hooks that declare actions: {w:?}");
+        assert!(w[0].contains("'Order'") && w[0].contains("3 trigger action(s)"), "{w:?}");
+        assert!(w[0].contains("none is executed"));
+    }
+}
