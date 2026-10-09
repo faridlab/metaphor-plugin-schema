@@ -1,0 +1,7 @@
+# A custom event the generator can only leave as a placeholder.
+name: GateLedger
+model: GateLedger
+triggers:
+  after_create:
+    actions:
+      - "emit: GateLedgerVerifiedEvent(note: note)"

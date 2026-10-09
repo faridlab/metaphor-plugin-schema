@@ -1,0 +1,22 @@
+# A model with no generated routes: its service is reached only by hand-written code.
+models:
+  - name: GateLedger
+    collection: gate_ledgers
+    description: "Warning-gate fixture: a ledger with no generic routes"
+    generators:
+      disabled:
+        - handler
+        - integration-test
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+        description: "Unique identifier"
+      note:
+        type: string
+        attributes: ["@required", "@length(max=200)"]
+        description: "What happened"
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]
+        description: "Audit metadata"

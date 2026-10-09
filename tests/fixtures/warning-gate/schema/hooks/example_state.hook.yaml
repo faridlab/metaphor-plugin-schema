@@ -1,0 +1,17 @@
+# A snake_case hook name whose every transition is allowed from any state.
+name: example_state
+model: Example
+states:
+  field: status
+  values:
+    active:
+      initial: true
+    inactive:
+      final: true
+  transitions:
+    activate:
+      from: "*"
+      to: active
+    deactivate:
+      from: "*"
+      to: inactive
