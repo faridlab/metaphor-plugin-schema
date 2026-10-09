@@ -45,9 +45,24 @@ fn fill_module_name(dir: &Path, name: &str) {
     }
 }
 
+/// Targets a module can turn off without losing its domain, persistence or HTTP surface.
+const OPTIONAL_TARGETS: &[&str] = &[
+    "bulk-operations", "cqrs", "projection", "usecase", "workflow", "trigger", "specification", "seeder", "versioning",
+];
+
 #[test]
 #[ignore = "builds a generated module against crates.io; run with --ignored"]
 fn a_module_generated_from_the_skeleton_compiles_without_warnings() {
+    generate_and_check(&[]);
+}
+
+#[test]
+#[ignore = "builds a generated module against crates.io; run with --ignored"]
+fn a_module_with_every_optional_target_disabled_compiles_without_warnings() {
+    generate_and_check(OPTIONAL_TARGETS);
+}
+
+fn generate_and_check(disabled: &[&str]) {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let skeleton = std::env::var_os("METAPHOR_MODULE_SKELETON")
         .map(PathBuf::from)
@@ -63,6 +78,25 @@ fn a_module_generated_from_the_skeleton_compiles_without_warnings() {
     copy_tree(&skeleton, &module);
     fill_module_name(&module.join("schema"), "gate");
     copy_tree(&crate_dir.join("tests/fixtures/warning-gate/schema"), &module.join("schema"));
+    if !disabled.is_empty() {
+        let index = module.join("schema/models/index.model.yaml");
+        let text = fs::read_to_string(&index).unwrap();
+        let marker = "    disabled:\n";
+        assert!(text.contains(marker), "the skeleton index lists disabled generators");
+        let extra: String = disabled.iter().map(|t| format!("      - {t}\n")).collect();
+        fs::write(&index, text.replacen(marker, &format!("{marker}{extra}"), 1)).unwrap();
+    }
+
+    // Commit the copy first, so the generator's retired-output removal deletes what a
+    // disabled target no longer emits: a declaration left pointing at it then fails here.
+    for args in [
+        &["init", "-q"][..],
+        &["add", "-A"],
+        &["-c", "user.email=gate@example.com", "-c", "user.name=gate", "commit", "-qm", "skeleton"],
+    ] {
+        let git = Command::new("git").args(args).current_dir(&module).output().unwrap();
+        assert!(git.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&git.stderr));
+    }
 
     let generate = Command::new(env!("CARGO_BIN_EXE_metaphor-schema"))
         .args(["schema", "generate", ".", "--force"])
