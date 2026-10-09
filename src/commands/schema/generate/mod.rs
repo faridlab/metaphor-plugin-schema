@@ -183,13 +183,20 @@ fn print_summary(stats: &WriteStats, total_files: usize, dry_run: bool) {
         String::new()
     };
 
+    let retired_part = if stats.retired > 0 {
+        format!(", {} retired generated file(s) removed", stats.retired)
+    } else {
+        String::new()
+    };
+
     println!(
-        "{} {} created, {} skipped{}{}{}",
+        "{} {} created, {} skipped{}{}{}{}",
         "Complete:".green().bold(),
         stats.created.to_string().green(),
         stats.skipped.to_string().yellow(),
         user_owned_part,
         warnings_part,
         orphans_part,
+        retired_part,
     );
 }
