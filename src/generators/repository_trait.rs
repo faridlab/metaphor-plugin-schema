@@ -44,7 +44,7 @@ impl RepositoryTraitGenerator {
     }
 
     /// Generate repository trait for a model
-    fn generate_repository_trait(&self, model: &Model) -> Result<String, GenerateError> {
+    fn generate_repository_trait(&self, model: &Model, filter: &str) -> Result<String, GenerateError> {
         let mut output = String::new();
         let name = &model.name;
         let snake_name = to_snake_case(name);
@@ -162,7 +162,7 @@ impl RepositoryTraitGenerator {
         // Filter struct
         writeln!(output, "/// Filter parameters for list queries").unwrap();
         writeln!(output, "#[derive(Debug, Clone, Default)]").unwrap();
-        writeln!(output, "pub struct {}Filter {{", name).unwrap();
+        writeln!(output, "pub struct {} {{", filter).unwrap();
 
         for field in &model.fields {
             if field.is_primary_key() || self.is_audit_field(&field.name) {
@@ -182,7 +182,7 @@ impl RepositoryTraitGenerator {
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
-        writeln!(output, "impl {}Filter {{", name).unwrap();
+        writeln!(output, "impl {} {{", filter).unwrap();
         writeln!(output, "    /// Check if any filter is set").unwrap();
         writeln!(output, "    pub fn has_filters(&self) -> bool {{").unwrap();
 
@@ -316,7 +316,7 @@ impl RepositoryTraitGenerator {
             snake_name
         )
         .unwrap();
-        writeln!(output, "    async fn list_with_filters(&self, params: {}PaginationParams, filters: {}Filter) -> Result<{}PaginatedResult>;", name, name, name).unwrap();
+        writeln!(output, "    async fn list_with_filters(&self, params: {}PaginationParams, filters: {}) -> Result<{}PaginatedResult>;", name, filter, name).unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "    /// Count all {} entities", snake_name).unwrap();
@@ -331,8 +331,8 @@ impl RepositoryTraitGenerator {
         .unwrap();
         writeln!(
             output,
-            "    async fn count_with_filters(&self, filters: {}Filter) -> Result<u64>;",
-            name
+            "    async fn count_with_filters(&self, filters: {}) -> Result<u64>;",
+            filter
         )
         .unwrap();
         writeln!(output).unwrap();
@@ -558,6 +558,18 @@ impl RepositoryTraitGenerator {
     }
 }
 
+/// The name of a model's repository filter type: `<Model>Filter`, unless another
+/// model in the module is already named that, in which case `<Model>RepositoryFilter`
+/// so the domain's re-exports never carry two types of one name.
+pub(crate) fn filter_type_name(model: &str, schema: &ResolvedSchema) -> String {
+    let plain = format!("{model}Filter");
+    if schema.schema.models.iter().any(|m| m.name == plain) {
+        format!("{model}RepositoryFilter")
+    } else {
+        plain
+    }
+}
+
 impl Default for RepositoryTraitGenerator {
     fn default() -> Self {
         Self::new()
@@ -605,7 +617,7 @@ impl Generator for RepositoryTraitGenerator {
             let snake_name = to_snake_case(&model.name);
 
             // Generate repository trait
-            let trait_content = self.generate_repository_trait(model)?;
+            let trait_content = self.generate_repository_trait(model, &filter_type_name(&model.name, schema))?;
 
             if self.group_by_domain {
                 // Grouped structure: src/domain/repositories/{model}/{model}_repository.rs
@@ -650,7 +662,7 @@ impl Generator for RepositoryTraitGenerator {
                 writeln!(mod_content, "    {}Repository,", model).unwrap();
                 writeln!(mod_content, "    {}PaginationParams,", model).unwrap();
                 writeln!(mod_content, "    {}PaginatedResult,", model).unwrap();
-                writeln!(mod_content, "    {}Filter,", model).unwrap();
+                writeln!(mod_content, "    {},", filter_type_name(model, schema)).unwrap();
                 writeln!(mod_content, "}};").unwrap();
             }
         } else {
@@ -667,7 +679,7 @@ impl Generator for RepositoryTraitGenerator {
                 writeln!(mod_content, "    {}Repository,", model.name).unwrap();
                 writeln!(mod_content, "    {}PaginationParams,", model.name).unwrap();
                 writeln!(mod_content, "    {}PaginatedResult,", model.name).unwrap();
-                writeln!(mod_content, "    {}Filter,", model.name).unwrap();
+                writeln!(mod_content, "    {},", filter_type_name(&model.name, schema)).unwrap();
                 writeln!(mod_content, "}};").unwrap();
             }
         }
@@ -718,6 +730,24 @@ mod tests {
         let mut schema = ModuleSchema::new("test");
         schema.models.push(create_test_model());
         ResolvedSchema { schema }
+    }
+
+    #[test]
+    fn a_filter_type_another_model_already_owns_is_renamed() {
+        // A model named `MailingFilter` owns that name; the `Mailing` repository's
+        // filter must not re-export a second `MailingFilter` beside it.
+        let mut schema = ModuleSchema::new("test");
+        let mut mailing = create_test_model();
+        mailing.name = "Mailing".into();
+        let mut saved = create_test_model();
+        saved.name = "MailingFilter".into();
+        schema.models = vec![mailing, saved];
+        let output = RepositoryTraitGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let all: String = output.files.values().cloned().collect::<Vec<_>>().join("\n");
+        assert!(all.contains("pub struct MailingRepositoryFilter {"), "{all}");
+        assert!(all.contains("filters: MailingRepositoryFilter"), "the trait methods use the renamed filter");
+        assert!(!all.contains("pub struct MailingFilter {"), "the entity keeps the name");
+        assert!(all.contains("pub struct MailingFilterFilter {"), "a model without a clash keeps <Model>Filter");
     }
 
     #[test]
