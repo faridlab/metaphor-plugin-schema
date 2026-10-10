@@ -830,6 +830,12 @@ pub struct GeneratorsConfig {
     /// actually wire these layers (e.g. backbone-catalog).
     #[serde(default)]
     pub layers: Option<bool>,
+    /// Opt-in flag for workflow executors (`application/workflows`). When absent or
+    /// false, the `Flow` target is skipped: no generated write path runs a workflow,
+    /// so the executors were code nothing called. A module whose released API still
+    /// carries them sets `true` until a breaking release removes them.
+    #[serde(default)]
+    pub workflows: Option<bool>,
     /// Opt-OUT flag for the generated company-RLS-fence migration (`<ts>_enable_company_rls`).
     /// Default (absent / `true`): emit the fence migration for every company-scoped model. Set to
     /// `false` when a module hand-authors its own RLS fence (e.g. one with a fail-loud stray check)

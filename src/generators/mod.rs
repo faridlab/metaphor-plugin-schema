@@ -861,6 +861,13 @@ fn filter_targets_by_config(
         filtered.retain(|t| !matches!(t, GenerationTarget::Cqrs | GenerationTarget::Projection));
     }
 
+    // Workflow opt-in: skip the Flow target unless `workflows = true`. Nothing runs
+    // the generated executors, so by default they are not generated.
+    let workflows_enabled = config.as_ref().and_then(|c| c.workflows) == Some(true);
+    if !workflows_enabled {
+        filtered.retain(|t| !matches!(t, GenerationTarget::Flow));
+    }
+
     // Layers opt-in: skip Auth/BulkOperations/UseCase/RoutesComposer/HandlersModule
     // unless `layers = true`. Most modules wire only service/validator/workflows +
     // inline route composition (all_crud_routes), so emitting these by default
@@ -902,6 +909,7 @@ mod tests {
             cqrs,
             rls_migration: None,
             layers: None,
+            workflows: None,
             reexport_entities: None,
         })
     }
@@ -941,6 +949,17 @@ mod tests {
     }
 
     #[test]
+    fn workflow_executors_are_generated_only_for_a_module_that_opts_in() {
+        let all = all_targets();
+        let plain = filter_targets_by_config(&all, &make_config(None, None, None));
+        assert!(!plain.contains(&GenerationTarget::Flow), "workflows are opt-in");
+        let mut opted = make_config(None, None, None);
+        opted.as_mut().unwrap().workflows = Some(true);
+        assert!(filter_targets_by_config(&all, &opted).contains(&GenerationTarget::Flow));
+        assert!(!filter_targets_by_config(&all, &None).contains(&GenerationTarget::Flow), "no config: not generated");
+    }
+
+    #[test]
     fn test_disabled_blacklist_still_applies_cqrs_opt_in() {
         // disabled: [handler] + no cqrs: true → handler gone, Cqrs/Projection also skipped
         let result = filter_targets_by_config(
@@ -971,6 +990,7 @@ mod tests {
             cqrs: None,
             rls_migration: None,
             layers,
+            workflows: None,
             reexport_entities: None,
         })
     }
