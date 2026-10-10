@@ -1849,6 +1849,18 @@ mod route_name_collision_tests {
     }
 }
 
+/// Workflows the schema declares and nothing starts. Their executors are generated
+/// only for a module that opts in (`generators: workflows: true`), and even then no
+/// generated write path or host calls them, so a declared workflow is a description,
+/// not behaviour. Reported by `schema validate` so the gap stays visible.
+pub fn workflow_warnings(schema: &ModuleSchema) -> Vec<String> {
+    schema
+        .workflows
+        .iter()
+        .map(|w| format!("Workflow '{}' is declared and never started: no generated write path or host runs workflows", w.name))
+        .collect()
+}
+
 /// Hooks whose declared trigger actions nothing runs. The generator emits a trigger
 /// registry per hook, but no generated write path builds or calls it, so every
 /// `triggers:` action and every state `on_enter` / `on_exit` action is declared and
@@ -1932,5 +1944,21 @@ mod trigger_warning_tests {
         assert_eq!(w.len(), 1, "only hooks that declare actions: {w:?}");
         assert!(w[0].contains("'Order'") && w[0].contains("3 trigger action(s)"), "{w:?}");
         assert!(w[0].contains("none is executed"));
+    }
+}
+
+#[cfg(test)]
+mod workflow_warning_tests {
+    use super::*;
+
+    #[test]
+    fn every_declared_workflow_is_reported_as_never_started() {
+        let mut s = ModuleSchema::new("test");
+        s.workflows = vec![crate::ast::Workflow { name: "ProcureToPay".into(), ..Default::default() }];
+        let w = workflow_warnings(&s);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("'ProcureToPay'") && w[0].contains("never started"), "{w:?}");
+        s.workflows.clear();
+        assert!(workflow_warnings(&s).is_empty());
     }
 }

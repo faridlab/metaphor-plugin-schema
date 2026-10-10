@@ -4,7 +4,9 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::resolver::{declaration_warnings, naming_warnings, resolve_schema, trigger_warnings};
+use crate::resolver::{
+    declaration_warnings, naming_warnings, resolve_schema, trigger_warnings, workflow_warnings,
+};
 
 use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
@@ -46,6 +48,9 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             for warning in trigger_warnings(&module_schema) {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
+            for warning in workflow_warnings(&module_schema) {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             // The rule register: what the hook files declare and the generator
