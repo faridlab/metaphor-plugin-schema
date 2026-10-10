@@ -1101,14 +1101,30 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 model.name
             )
             .unwrap();
-            writeln!(
-                output,
-                "            (StatusCode::OK, Json(ApiResponse::ok(response)))"
-            )
-            .unwrap();
+            // A model with secrets answers through the same stripping the generic routes use:
+            // its response DTO still carries them.
+            let has_secrets = model
+                .fields
+                .iter()
+                .any(|f| f.has_attribute("sensitive") || f.has_attribute("hashed"));
+            let body_type = if has_secrets { "serde_json::Value".to_string() } else { format!("{}ResponseDto", model.name) };
+            if has_secrets {
+                writeln!(
+                    output,
+                    "            (StatusCode::OK, Json(ApiResponse::ok(backbone_core::http::without_secrets::<{}, _>(response))))",
+                    model.name
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "            (StatusCode::OK, Json(ApiResponse::ok(response)))"
+                )
+                .unwrap();
+            }
             writeln!(output, "        }}").unwrap();
-            writeln!(output, "        Ok(None) => (StatusCode::NOT_FOUND, Json(ApiResponse::<{}ResponseDto>::not_found(\"{}\", &id))),", model.name, model.name).unwrap();
-            writeln!(output, "        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<{}ResponseDto>::error(e.to_string()))),", model.name).unwrap();
+            writeln!(output, "        Ok(None) => (StatusCode::NOT_FOUND, Json(ApiResponse::<{}>::not_found(\"{}\", &id))),", body_type, model.name).unwrap();
+            writeln!(output, "        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<{}>::error(e.to_string()))),", body_type).unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output, "}}").unwrap();
             writeln!(output).unwrap();
@@ -1418,6 +1434,35 @@ fn pluralize(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::ast::{Field, Model, ModuleSchema, PrimitiveType, TypeRef};
+
+    #[test]
+    fn a_transition_answers_without_the_models_secrets() {
+        use crate::ast::{hook::{StateMachine, Transition}, Attribute};
+        let field = |name: &str, attrs: Vec<Attribute>| Field {
+            name: name.to_string(),
+            type_ref: TypeRef::Primitive(PrimitiveType::String),
+            attributes: attrs,
+            ..Default::default()
+        };
+        let sm = StateMachine {
+            field: "status".to_string(),
+            transitions: vec![Transition { name: "revoke".into(), from: vec!["active".into()], to: "revoked".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let render = |model: &Model| {
+            let mut out = String::new();
+            HandlerGenerator::new().write_transition_handlers(&mut out, model, "SessionState", &sm).unwrap();
+            out
+        };
+        let secret = Model { name: "Session".into(), fields: vec![field("status", vec![]), field("token_hash", vec![Attribute::new("sensitive")])], ..Default::default() };
+        let out = render(&secret);
+        assert!(out.contains("backbone_core::http::without_secrets::<Session, _>(response)"), "{out}");
+        assert!(out.contains("ApiResponse::<serde_json::Value>::not_found"), "every arm answers the same type");
+
+        let plain = Model { name: "Ticket".into(), fields: vec![field("status", vec![])], ..Default::default() };
+        let out = render(&plain);
+        assert!(!out.contains("without_secrets") && out.contains("ApiResponse::<TicketResponseDto>::not_found"), "unchanged output without secrets");
+    }
 
     fn create_test_schema() -> ResolvedSchema {
         let mut schema = ModuleSchema::new("test");
