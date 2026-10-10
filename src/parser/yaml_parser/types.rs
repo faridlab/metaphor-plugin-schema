@@ -836,6 +836,12 @@ pub struct GeneratorsConfig {
     /// carries them sets `true` until a breaking release removes them.
     #[serde(default)]
     pub workflows: Option<bool>,
+    /// Exemption from the hook trigger rule, for a module whose trigger declarations
+    /// were written before only `set` and `emit` compiled. Its triggers that cannot
+    /// compile are reported as warnings instead of failing validation, until its next
+    /// breaking release rewrites them.
+    #[serde(default)]
+    pub legacy_triggers: Option<bool>,
     /// Opt-OUT flag for the generated company-RLS-fence migration (`<ts>_enable_company_rls`).
     /// Default (absent / `true`): emit the fence migration for every company-scoped model. Set to
     /// `false` when a module hand-authors its own RLS fence (e.g. one with a fail-loud stray check)

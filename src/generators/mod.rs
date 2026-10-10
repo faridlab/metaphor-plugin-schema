@@ -910,6 +910,7 @@ mod tests {
             rls_migration: None,
             layers: None,
             workflows: None,
+            legacy_triggers: None,
             reexport_entities: None,
         })
     }
@@ -991,6 +992,7 @@ mod tests {
             rls_migration: None,
             layers,
             workflows: None,
+            legacy_triggers: None,
             reexport_entities: None,
         })
     }

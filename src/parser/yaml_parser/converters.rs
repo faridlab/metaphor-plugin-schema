@@ -799,10 +799,12 @@ impl YamlPermissionAction {
 impl YamlTrigger {
     /// Convert to AST Trigger
     pub fn into_trigger(self, event_name: &str) -> Trigger {
-        let event = TriggerEvent::from_str(event_name).unwrap_or(TriggerEvent::AfterCreate);
+        let known = TriggerEvent::from_str(event_name);
+        let declared_key = known.is_none().then(|| event_name.to_string());
 
         Trigger {
-            event,
+            event: known.unwrap_or(TriggerEvent::AfterCreate),
+            declared_key,
             actions: self.actions.into_iter().map(|a| a.into_action()).collect(),
             condition: self.condition.map(Expression::Raw),
             ..Default::default()

@@ -592,6 +592,7 @@ impl<'source> WorkflowParser<'source> {
             event,
             actions: Vec::new(),
             condition: None,
+            declared_key: None,
             span: Span::new(start_line, start_col, 0, 0),
         };
 

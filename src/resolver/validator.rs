@@ -46,6 +46,11 @@ impl<'a> SchemaValidator<'a> {
             errors.extend(self.validate_hook(hook));
         }
 
+        // Hook triggers may only declare what the write path can compile
+        if !legacy_triggers(self.schema) {
+            errors.extend(trigger_problems(self.schema).into_iter().map(ResolveError::validation));
+        }
+
         // Validate workflows (business processes)
         for workflow in &self.schema.workflows {
             errors.extend(self.validate_workflow(workflow));
@@ -1861,11 +1866,104 @@ pub fn workflow_warnings(schema: &ModuleSchema) -> Vec<String> {
         .collect()
 }
 
+/// Whether the module is exempt from the hook trigger rule (`generators: legacy_triggers: true`).
+fn legacy_triggers(schema: &ModuleSchema) -> bool {
+    schema.generators_config.as_ref().and_then(|c| c.legacy_triggers) == Some(true)
+}
+
+/// The action a trigger declares, named as the hook file wrote it: `send_email`,
+/// `log`, or the word before `:` or `(` of a free-form action (`set: x = 1` is `set`).
+fn action_name(action: &crate::ast::hook::Action) -> String {
+    use crate::ast::hook::ActionKind;
+    match &action.action_type {
+        ActionKind::SendEmail => "send_email".into(),
+        ActionKind::Notify => "notify".into(),
+        ActionKind::Webhook => "webhook".into(),
+        ActionKind::Execute => "execute".into(),
+        ActionKind::Log => "log".into(),
+        ActionKind::Emit => "emit".into(),
+        ActionKind::Custom(text) => {
+            let head = text.split([':', '(', ' ']).next().unwrap_or("").trim();
+            if head == "event" { "emit".into() } else { head.to_string() }
+        }
+    }
+}
+
+/// What a hook's triggers declare that the write path cannot compile. Only two
+/// actions compile: `set`, which assigns a field before the row is written, and
+/// `emit`, which stages an event in the write's transaction. A side effect such as
+/// an email, a notification or a write to another table is an event a subscriber
+/// handles. A trigger must name one of the six write events; any other key used to
+/// run silently as `after_create`. Failing validation keeps a declaration from
+/// promising behaviour nothing performs.
+pub fn trigger_problems(schema: &ModuleSchema) -> Vec<String> {
+    use crate::ast::hook::TriggerEvent;
+    let mut out = Vec::new();
+    let check = |hook: &str, at: &str, actions: &[crate::ast::hook::Action], before_write: bool| {
+        let mut out = Vec::new();
+        for action in actions {
+            match action_name(action).as_str() {
+                "emit" => {}
+                "set" if before_write => {}
+                "set" => out.push(format!(
+                    "Hook '{hook}' {at} declares 'set', which can only run before the row is written: move it to a before_* trigger"
+                )),
+                other => out.push(format!(
+                    "Hook '{hook}' {at} declares '{other}', which cannot compile: only 'set' and 'emit' run in the write path; emit an event and handle it in a subscriber"
+                )),
+            }
+        }
+        out
+    };
+    for hook in &schema.hooks {
+        for trigger in &hook.triggers {
+            if let Some(key) = &trigger.declared_key {
+                out.push(format!(
+                    "Hook '{}' declares trigger '{key}', which is no write event: use before_create, after_create, before_update, after_update, before_delete or after_delete",
+                    hook.name
+                ));
+                continue;
+            }
+            let before = matches!(
+                trigger.event,
+                TriggerEvent::BeforeCreate | TriggerEvent::BeforeUpdate | TriggerEvent::BeforeDelete
+            );
+            let at = format!("trigger '{}'", trigger_key(&trigger.event));
+            out.extend(check(&hook.name, &at, &trigger.actions, before));
+        }
+        if let Some(sm) = &hook.state_machine {
+            // A state change is seen in the update seam before the row is written,
+            // so `set` on entering or leaving a state compiles there.
+            for state in &sm.states {
+                out.extend(check(&hook.name, &format!("state '{}' on_enter", state.name), &state.on_enter, true));
+                out.extend(check(&hook.name, &format!("state '{}' on_exit", state.name), &state.on_exit, true));
+            }
+        }
+    }
+    out
+}
+
+fn trigger_key(event: &crate::ast::hook::TriggerEvent) -> String {
+    use crate::ast::hook::TriggerEvent::*;
+    match event {
+        BeforeCreate => "before_create".into(),
+        AfterCreate => "after_create".into(),
+        BeforeUpdate => "before_update".into(),
+        AfterUpdate => "after_update".into(),
+        BeforeDelete => "before_delete".into(),
+        AfterDelete => "after_delete".into(),
+        OnTransition(t) => format!("on_transition {t}"),
+        OnEnterState(s) => format!("on_enter {s}"),
+        OnExitState(s) => format!("on_exit {s}"),
+    }
+}
+
 /// Hooks whose declared trigger actions nothing runs. The generator emits a trigger
 /// registry per hook, but no generated write path builds or calls it, so every
 /// `triggers:` action and every state `on_enter` / `on_exit` action is declared and
-/// never executed. Reported by `schema validate` so the gap is visible until
-/// trigger execution is designed into the write pipeline.
+/// never executed. Reported by `schema validate` so the gap is visible until the
+/// write path compiles `set` and `emit`. A module exempt from the trigger rule
+/// (`legacy_triggers`) also sees here what that rule would have refused.
 pub fn trigger_warnings(schema: &ModuleSchema) -> Vec<String> {
     let mut out = Vec::new();
     for hook in &schema.hooks {
@@ -1882,6 +1980,9 @@ pub fn trigger_warnings(schema: &ModuleSchema) -> Vec<String> {
                 hook.name
             ));
         }
+    }
+    if legacy_triggers(schema) {
+        out.extend(trigger_problems(schema));
     }
     out
 }
@@ -1944,6 +2045,93 @@ mod trigger_warning_tests {
         assert_eq!(w.len(), 1, "only hooks that declare actions: {w:?}");
         assert!(w[0].contains("'Order'") && w[0].contains("3 trigger action(s)"), "{w:?}");
         assert!(w[0].contains("none is executed"));
+    }
+}
+
+#[cfg(test)]
+mod trigger_rule_tests {
+    use super::*;
+    use crate::ast::hook::{Action, ActionKind, Hook, State, StateMachine, Trigger, TriggerEvent};
+
+    fn act(text: &str) -> Action {
+        crate::parser::yaml_parser::YamlAction::Simple(text.to_string()).into_action()
+    }
+
+    fn schema_with(triggers: Vec<Trigger>, states: Vec<State>) -> ModuleSchema {
+        let mut s = ModuleSchema::new("test");
+        let mut hook = Hook::new("Order", "Order");
+        hook.triggers = triggers;
+        if !states.is_empty() {
+            hook.state_machine = Some(StateMachine { states, ..Default::default() });
+        }
+        s.hooks = vec![hook];
+        s
+    }
+
+    #[test]
+    fn set_before_the_write_and_emit_anywhere_compile() {
+        let s = schema_with(
+            vec![
+                Trigger { event: TriggerEvent::BeforeCreate, actions: vec![act("set: placed_at = now()")], ..Default::default() },
+                Trigger { event: TriggerEvent::AfterCreate, actions: vec![act("emit: OrderPlaced(order_id: id)"), Action { action_type: ActionKind::Emit, ..Default::default() }], ..Default::default() },
+            ],
+            vec![State { name: "paid".into(), on_enter: vec![act("set: paid_at = now()"), act("emit: OrderPaid(id)")], ..Default::default() }],
+        );
+        assert!(trigger_problems(&s).is_empty(), "{:?}", trigger_problems(&s));
+        assert!(validate_trigger_errors(&s).is_empty());
+    }
+
+    #[test]
+    fn an_action_the_write_path_cannot_run_fails_validation() {
+        let s = schema_with(
+            vec![Trigger { event: TriggerEvent::AfterCreate, actions: vec![act("send_email(owner, welcome)"), act("create: Profile(user_id: id)"), act("log(created)")], ..Default::default() }],
+            vec![State { name: "paid".into(), on_exit: vec![act("notify([admin], paid)")], ..Default::default() }],
+        );
+        let p = trigger_problems(&s);
+        assert_eq!(p.len(), 4, "{p:?}");
+        assert!(p[0].contains("'send_email'") && p[0].contains("cannot compile"), "{p:?}");
+        assert!(p[1].contains("'create'") && p[2].contains("'log'") && p[3].contains("state 'paid' on_exit"), "{p:?}");
+        assert_eq!(validate_trigger_errors(&s).len(), 4, "validation fails on each");
+    }
+
+    #[test]
+    fn set_after_the_write_fails_validation() {
+        let s = schema_with(vec![Trigger { event: TriggerEvent::AfterUpdate, actions: vec![act("set: touched = true")], ..Default::default() }], vec![]);
+        let p = trigger_problems(&s);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("trigger 'after_update'") && p[0].contains("before_*"), "{p:?}");
+    }
+
+    #[test]
+    fn a_trigger_key_that_names_no_write_event_fails_instead_of_running_as_after_create() {
+        let yaml: crate::parser::yaml_parser::YamlTrigger = serde_yaml::from_str("actions: [\"emit: StatusChanged(id)\"]").unwrap();
+        let t = yaml.into_trigger("after_update_status");
+        assert_eq!(t.declared_key.as_deref(), Some("after_update_status"));
+        let p = trigger_problems(&schema_with(vec![t], vec![]));
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("'after_update_status'") && p[0].contains("no write event"), "{p:?}");
+    }
+
+    #[test]
+    fn an_exempt_module_reports_the_problems_as_warnings_and_still_resolves() {
+        let mut s = schema_with(vec![Trigger { event: TriggerEvent::AfterCreate, actions: vec![act("log(created)")], ..Default::default() }], vec![]);
+        s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { legacy_triggers: Some(true), ..Default::default() });
+        assert!(validate_trigger_errors(&s).is_empty(), "exempt module still validates");
+        let w = trigger_warnings(&s);
+        assert!(w.iter().any(|m| m.contains("'log'") && m.contains("cannot compile")), "{w:?}");
+    }
+
+    /// The validation errors the trigger rule raised; the bare test hook trips
+    /// unrelated checks, which are left out.
+    fn validate_trigger_errors(s: &ModuleSchema) -> Vec<String> {
+        SchemaValidator::new(s)
+            .validate()
+            .err()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| e.to_string())
+            .filter(|m| m.contains("Hook 'Order'") && m.contains(" declares "))
+            .collect()
     }
 }
 

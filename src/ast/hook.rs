@@ -323,6 +323,12 @@ pub struct Trigger {
     pub actions: Vec<Action>,
     /// Condition for this trigger
     pub condition: Option<Expression>,
+    /// The key the hook file wrote when it names no write event this AST knows
+    /// (`after_update_status`, `scheduled_daily`). The trigger is still kept as
+    /// `after_create` so a module exempt from the trigger rule generates the same
+    /// output; validation reports the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_key: Option<String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
