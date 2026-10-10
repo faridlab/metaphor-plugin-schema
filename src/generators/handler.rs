@@ -924,6 +924,13 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
     ) -> Result<(), GenerateError> {
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
+        // A model with secrets answers every arm as JSON through `without_secrets`, since its
+        // response DTO still carries them; the arms must agree on one body type.
+        let has_secrets = model
+            .fields
+            .iter()
+            .any(|f| f.has_attribute("sensitive") || f.has_attribute("hashed"));
+        let body_type = if has_secrets { "serde_json::Value".to_string() } else { format!("{}ResponseDto", model.name) };
 
         writeln!(
             output,
@@ -981,8 +988,8 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             )
             .unwrap();
             writeln!(output, "        Ok(Some(e)) => e,").unwrap();
-            writeln!(output, "        Ok(None) => return (StatusCode::NOT_FOUND, Json(ApiResponse::<{}ResponseDto>::not_found(\"{}\", &id))),", model.name, model.name).unwrap();
-            writeln!(output, "        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<{}ResponseDto>::error(e.to_string()))),", model.name).unwrap();
+            writeln!(output, "        Ok(None) => return (StatusCode::NOT_FOUND, Json(ApiResponse::<{}>::not_found(\"{}\", &id))),", body_type, model.name).unwrap();
+            writeln!(output, "        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<{}>::error(e.to_string()))),", body_type).unwrap();
             writeln!(output, "    }};").unwrap();
             writeln!(output).unwrap();
 
@@ -1015,7 +1022,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 )
                 .unwrap();
             }
-            writeln!(output, "            return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}ResponseDto>::error(\"Insufficient permissions for {} transition\")));", model.name, transition.name).unwrap();
+            writeln!(output, "            return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}>::error(\"Insufficient permissions for {} transition\")));", body_type, transition.name).unwrap();
             writeln!(output, "        }}").unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
@@ -1066,7 +1073,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 to_pascal_case(&transition.name)
             )
             .unwrap();
-            writeln!(output, "        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<{}ResponseDto>::error(\"Transition not allowed from current state\")));", model.name).unwrap();
+            writeln!(output, "        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<{}>::error(\"Transition not allowed from current state\")));", body_type).unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
@@ -1101,13 +1108,6 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 model.name
             )
             .unwrap();
-            // A model with secrets answers through the same stripping the generic routes use:
-            // its response DTO still carries them.
-            let has_secrets = model
-                .fields
-                .iter()
-                .any(|f| f.has_attribute("sensitive") || f.has_attribute("hashed"));
-            let body_type = if has_secrets { "serde_json::Value".to_string() } else { format!("{}ResponseDto", model.name) };
             if has_secrets {
                 writeln!(
                     output,
@@ -1458,6 +1458,7 @@ mod tests {
         let out = render(&secret);
         assert!(out.contains("backbone_core::http::without_secrets::<Session, _>(response)"), "{out}");
         assert!(out.contains("ApiResponse::<serde_json::Value>::not_found"), "every arm answers the same type");
+        assert!(!out.contains("ApiResponse::<SessionResponseDto>"), "no arm is typed with the DTO: {out}");
 
         let plain = Model { name: "Ticket".into(), fields: vec![field("status", vec![])], ..Default::default() };
         let out = render(&plain);
