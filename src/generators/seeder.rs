@@ -867,23 +867,27 @@ impl Generator for SeederGenerator {
         // Determine order based on dependencies
         let ordered_models = self.determine_order(&models);
 
-        // Generate seeders/mod.rs
-        let mod_content = self.generate_mod(&models, module_name);
-        output.add_file(PathBuf::from("src/seeders/mod.rs"), mod_content);
+        // The Rust seeders and their binary are the fallback of `metaphor migration seed`,
+        // generated only for a module that opts in; the SQL seeds below always are.
+        if super::rust_seeders_opted_in(&schema.schema.generators_config) {
+            // Generate seeders/mod.rs
+            let mod_content = self.generate_mod(&models, module_name);
+            output.add_file(PathBuf::from("src/seeders/mod.rs"), mod_content);
 
-        // Generate individual entity seeders
-        for (model, order) in &ordered_models {
-            let snake_name = to_snake_case(&model.name);
-            let seeder_content = self.generate_entity_seeder(model, *order, module_name);
-            output.add_file(
-                PathBuf::from(format!("src/seeders/{}_seeder.rs", snake_name)),
-                seeder_content,
-            );
+            // Generate individual entity seeders
+            for (model, order) in &ordered_models {
+                let snake_name = to_snake_case(&model.name);
+                let seeder_content = self.generate_entity_seeder(model, *order, module_name);
+                output.add_file(
+                    PathBuf::from(format!("src/seeders/{}_seeder.rs", snake_name)),
+                    seeder_content,
+                );
+            }
+
+            // Generate seeder binary
+            let binary_content = self.generate_seeder_binary(&models, module_name);
+            output.add_file(PathBuf::from("src/bin/seeder.rs"), binary_content);
         }
-
-        // Generate seeder binary
-        let binary_content = self.generate_seeder_binary(&models, module_name);
-        output.add_file(PathBuf::from("src/bin/seeder.rs"), binary_content);
 
         // Generate SQL seed files
         for model in &models {
@@ -910,6 +914,25 @@ impl Generator for SeederGenerator {
 mod seed_order_tests {
     use super::*;
     use crate::ast::{Attribute, AttributeValue, Field, PrimitiveType, TypeRef};
+
+    #[test]
+    fn sql_seeds_are_generated_by_default_and_rust_seeders_only_when_the_module_opts_in() {
+        use crate::ast::ModuleSchema;
+        let mut schema = ModuleSchema::new("orders");
+        schema.models.push(Model::new("Order"));
+        let mut resolved = ResolvedSchema { schema };
+        let files = |s: &ResolvedSchema| {
+            let out = SeederGenerator::new().generate(s).unwrap();
+            let has = |p: &str| out.files.contains_key(&PathBuf::from(p));
+            [has("migrations/seeds/order_seed.sql"), has("migrations/seeds/seed_order.yml"), has("src/seeders/mod.rs"), has("src/bin/seeder.rs")]
+        };
+        assert_eq!(files(&resolved), [true, true, false, false], "default");
+        resolved.schema.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig {
+            opt_in: Some(vec!["seeder".into()]),
+            ..Default::default()
+        });
+        assert_eq!(files(&resolved), [true, true, true, true], "opted in");
+    }
 
     fn fk(name: &str, target: &str) -> Field {
         let mut f = Field::new(name, TypeRef::Primitive(PrimitiveType::Uuid));

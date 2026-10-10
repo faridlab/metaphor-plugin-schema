@@ -161,6 +161,10 @@ generators:
   event-store: false
 ```
 
+Targets nothing uses (`trigger`, `specification`, `versioning`, `graphql`,
+`grpc`, `proto`, and the Rust seeders of `seeder`; its SQL seeds stay on) are off
+by default; turn one on with `opt_in: [seeder]`. See [schema-format.md](schema-format.md#generators-configuration).
+
 > **`grpc` / `graphql` flow into module wiring.** When `grpc` or
 > `graphql` is disabled, the `module` target also drops the matching
 > router-mount / service-registration / `MergedObject!` entries from

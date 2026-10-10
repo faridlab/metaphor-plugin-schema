@@ -89,7 +89,9 @@ impl ModuleGenerator {
         writeln!(output, "pub mod application;").unwrap();
         writeln!(output, "pub mod presentation;").unwrap();
         if !schema.schema.models.is_empty() {
-            if !is_generator_disabled(schema, "seeder") {
+            if !is_generator_disabled(schema, "seeder")
+                && super::rust_seeders_opted_in(&schema.schema.generators_config)
+            {
                 writeln!(output, "pub mod seeders;").unwrap();
             }
             // exports/ is generated alongside the entities (query-service trait +
@@ -1259,6 +1261,12 @@ fn workflows_emitted(schema: &ResolvedSchema) -> bool {
 /// module declarations, grpc/graphql composition stubs) so that disabling a
 /// per-target generator also suppresses references to its output.
 fn is_generator_disabled(schema: &ResolvedSchema, name: &str) -> bool {
+    // A target that is off by default is disabled until the module opts in.
+    if let Some(t) = super::GenerationTarget::from_str(name) {
+        if super::is_off_by_default(&schema.schema.generators_config, t) {
+            return true;
+        }
+    }
     schema
         .schema
         .generators_config
@@ -1475,6 +1483,36 @@ mod tests {
         assert!(lib.contains("pub mod exports;"), "unrelated declarations stay");
     }
 
+    #[test]
+    fn seeders_triggers_and_specifications_are_declared_only_when_the_module_opts_in() {
+        use crate::ast::hook::{Action, Hook, Trigger, TriggerEvent};
+        let mut schema = create_test_schema();
+        let mut hook = Hook::new("User", "User");
+        hook.triggers = vec![Trigger { event: TriggerEvent::AfterCreate, actions: vec![Action::default()], ..Default::default() }];
+        schema.schema.hooks.push(hook);
+        let gen = |s: &ResolvedSchema| {
+            let o = ModuleGenerator::new().generate(s).unwrap();
+            let f = |p: &str| o.files.get(&PathBuf::from(p)).cloned().unwrap_or_default();
+            (f("src/lib.rs"), f("src/application/mod.rs"), f("src/domain/mod.rs"))
+        };
+        let wanted = |lib: &String, app: &String, domain: &String| {
+            [
+                lib.contains("pub mod seeders;"),
+                lib.contains("pub use application::triggers::*;"),
+                app.contains("pub mod triggers;"),
+                domain.contains("pub mod specifications;"),
+            ]
+        };
+        let (lib, app, domain) = gen(&schema);
+        assert_eq!(wanted(&lib, &app, &domain), [false; 4], "off by default");
+        schema.schema.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig {
+            opt_in: Some(vec!["seeder".into(), "trigger".into(), "specification".into()]),
+            ..Default::default()
+        });
+        let (lib, app, domain) = gen(&schema);
+        assert_eq!(wanted(&lib, &app, &domain), [true; 4], "opted in");
+    }
+
     fn create_test_schema_with_reexport(reexport: bool) -> ResolvedSchema {
         let mut schema = ModuleSchema::new("orders");
         schema.models.push(create_test_model());
@@ -1556,8 +1594,18 @@ mod tests {
 
     #[test]
     fn test_module_generator_creates_grpc_server() {
-        let schema = create_test_schema();
         let generator = ModuleGenerator::new();
+        let output = generator.generate(&create_test_schema()).unwrap();
+        assert!(
+            !output.files.contains_key(&PathBuf::from("src/presentation/grpc/server.rs")),
+            "gRPC is off until a module opts in"
+        );
+
+        let mut schema = create_test_schema();
+        schema.schema.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig {
+            opt_in: Some(vec!["grpc".into()]),
+            ..Default::default()
+        });
         let output = generator.generate(&schema).unwrap();
 
         assert!(output

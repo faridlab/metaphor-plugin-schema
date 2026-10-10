@@ -842,6 +842,11 @@ pub struct GeneratorsConfig {
     /// breaking release rewrites them.
     #[serde(default)]
     pub legacy_triggers: Option<bool>,
+    /// Targets that are off by default because nothing uses them (trigger, specification,
+    /// versioning, seeder, graphql, grpc, proto), turned on for this module. A module whose
+    /// released API still carries one lists it until a breaking release removes it.
+    #[serde(default)]
+    pub opt_in: Option<Vec<String>>,
     /// Opt-OUT flag for the generated company-RLS-fence migration (`<ts>_enable_company_rls`).
     /// Default (absent / `true`): emit the fence migration for every company-scoped model. Set to
     /// `false` when a module hand-authors its own RLS fence (e.g. one with a fail-loud stray check)
