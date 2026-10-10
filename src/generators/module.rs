@@ -40,6 +40,8 @@ impl ModuleGenerator {
         let mut output = String::new();
         let module_name = &schema.schema.name;
         let pascal_name = to_pascal_case(module_name);
+        // `lib.ext.rs` extends the module struct and its builder (ADR-0031).
+        let lib_ext = super::uses_extensions(schema) && schema.schema.extension_files.contains("src/lib.ext.rs");
         // Collect model names to detect service name collisions
         let model_names: std::collections::HashSet<&str> = schema
             .schema
@@ -104,6 +106,18 @@ impl ModuleGenerator {
         writeln!(output, "// <<< CUSTOM MODULES").unwrap();
         writeln!(output, "// END CUSTOM").unwrap();
         writeln!(output).unwrap();
+        if lib_ext {
+            writeln!(output, "// The module's extension (hand-written; ADR-0031).").unwrap();
+            writeln!(output, "#[path = \"lib.ext.rs\"]").unwrap();
+            writeln!(output, "mod lib_ext;").unwrap();
+            writeln!(output, "pub use lib_ext::*;").unwrap();
+            writeln!(output, "/// This crate's module and builder under fixed names, for the extension's `impl` blocks.").unwrap();
+            writeln!(output, "#[allow(dead_code)]").unwrap();
+            writeln!(output, "pub(crate) type ThisModule = {}Module;", pascal_name).unwrap();
+            writeln!(output, "#[allow(dead_code)]").unwrap();
+            writeln!(output, "pub(crate) type ThisModuleBuilder = {}ModuleBuilder;", pascal_name).unwrap();
+            writeln!(output).unwrap();
+        }
 
         // Re-exports - Domain entities. Opt-out via config.generators.reexport_entities: false — a
         // module that exposes its contract only through exports::types DTOs + ports omits the glob so
@@ -316,10 +330,35 @@ impl ModuleGenerator {
         // Lives inside a CUSTOM marker so it survives regeneration — pair it with
         // the builder-body and struct-literal CUSTOM blocks (construction + init),
         // which are emitted below.
+        if lib_ext {
+            writeln!(output, "    /// The module's extension state (`lib.ext.rs`); its fields read through `Deref`.").unwrap();
+            writeln!(output, "    pub(crate) ext: ModuleExt,").unwrap();
+        }
         writeln!(output, "    // <<< CUSTOM FIELDS").unwrap();
         writeln!(output, "    // END CUSTOM").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
+        if lib_ext {
+            writeln!(output, "impl std::ops::Deref for {}Module {{", pascal_name).unwrap();
+            writeln!(output, "    type Target = ModuleExt;").unwrap();
+            writeln!(output, "    fn deref(&self) -> &Self::Target {{").unwrap();
+            writeln!(output, "        &self.ext").unwrap();
+            writeln!(output, "    }}").unwrap();
+            writeln!(output, "}}").unwrap();
+            writeln!(output).unwrap();
+            // What the extension's build hook receives: the pool and every generated service.
+            writeln!(output, "/// What the extension's `build` hook receives from the generated build (ADR-0031).").unwrap();
+            writeln!(output, "#[allow(dead_code)]").unwrap();
+            writeln!(output, "pub(crate) struct ModuleParts<'a> {{").unwrap();
+            writeln!(output, "    pub(crate) db_pool: &'a PgPool,").unwrap();
+            for model in &schema.schema.models {
+                let service_name = format!("{}Service", model.name);
+                let service_type = if model_names.contains(service_name.as_str()) { format!("{}AppService", model.name) } else { service_name };
+                writeln!(output, "    pub(crate) {}_service: &'a Arc<{}>,", to_snake_case(&model.name), service_type).unwrap();
+            }
+            writeln!(output, "}}").unwrap();
+            writeln!(output).unwrap();
+        }
 
         // CrudServices grouping intentionally NOT emitted (council 2026-07-28). A read/seed
         // accessor that hands out full-mutation GenericCrudService handles lets sibling crates
@@ -496,10 +535,27 @@ impl ModuleGenerator {
         // paired by its position among other bare markers at the same indent,
         // so a module's hand-added defaults were paired with the `build()`
         // literal's zone and one of the two was dropped.
+        if lib_ext {
+            writeln!(output, "    /// The builder's extension state (`lib.ext.rs`); its fields read through `Deref`.").unwrap();
+            writeln!(output, "    ext: ModuleBuilderExt,").unwrap();
+        }
         writeln!(output, "    // <<< CUSTOM BUILDER FIELDS").unwrap();
         writeln!(output, "    // END CUSTOM").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
+        if lib_ext {
+            for (tr, f, mutb) in [("Deref", "deref", ""), ("DerefMut", "deref_mut", "mut ")] {
+                writeln!(output, "impl std::ops::{} for {}ModuleBuilder {{", tr, pascal_name).unwrap();
+                if tr == "Deref" {
+                    writeln!(output, "    type Target = ModuleBuilderExt;").unwrap();
+                }
+                writeln!(output, "    fn {}(&{}self) -> &{}Self::Target {{", f, mutb, mutb).unwrap();
+                writeln!(output, "        &{}self.ext", mutb).unwrap();
+                writeln!(output, "    }}").unwrap();
+                writeln!(output, "}}").unwrap();
+                writeln!(output).unwrap();
+            }
+        }
 
         // Builder implementation
         writeln!(output, "impl {}ModuleBuilder {{", pascal_name).unwrap();
@@ -507,6 +563,9 @@ impl ModuleGenerator {
         writeln!(output, "    pub fn new() -> Self {{").unwrap();
         writeln!(output, "        Self {{").unwrap();
         writeln!(output, "            db_pool: None,").unwrap();
+        if lib_ext {
+            writeln!(output, "            ext: Default::default(),").unwrap();
+        }
         writeln!(output, "            // <<< CUSTOM BUILDER DEFAULTS").unwrap();
         writeln!(output, "            // END CUSTOM").unwrap();
         writeln!(output, "        }}").unwrap();
@@ -581,6 +640,17 @@ impl ModuleGenerator {
         writeln!(output, "        // <<< CUSTOM").unwrap();
         writeln!(output, "        // END CUSTOM").unwrap();
         writeln!(output).unwrap();
+        if lib_ext {
+            writeln!(output, "        // The extension builds its own state from what the generated build made.").unwrap();
+            writeln!(output, "        let ext = self.ext.build(&ModuleParts {{").unwrap();
+            writeln!(output, "            db_pool: &db_pool,").unwrap();
+            for model in &schema.schema.models {
+                let sn = to_snake_case(&model.name);
+                writeln!(output, "            {sn}_service: &{sn}_service,").unwrap();
+            }
+            writeln!(output, "        }})?;").unwrap();
+            writeln!(output).unwrap();
+        }
         writeln!(output, "        Ok({}Module {{", pascal_name).unwrap();
         for model in &schema.schema.models {
             writeln!(
@@ -589,6 +659,9 @@ impl ModuleGenerator {
                 to_snake_case(&model.name)
             )
             .unwrap();
+        }
+        if lib_ext {
+            writeln!(output, "            ext,").unwrap();
         }
         // Placeholder for custom struct fields. Council #2 convention: if this module has a
         // hand-authored {Base}WriteService (src/application/service/{base}_write_service.rs),
@@ -1451,6 +1524,33 @@ mod tests {
         schema.schema.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { workflows: Some(true), ..Default::default() });
         let (lib, app) = gen(&schema);
         assert!(app.contains("pub mod workflows;") && lib.contains("pub use application::workflows::*;"), "opted in");
+    }
+
+    #[test]
+    fn a_lib_extension_carries_the_modules_and_builders_state_and_builds_from_the_generated_parts() {
+        let mut schema = create_test_schema();
+        let lib = |s: &ResolvedSchema| ModuleGenerator::new().generate(s).unwrap().files.get(&PathBuf::from("src/lib.rs")).cloned().unwrap();
+        schema.schema.extension_files.insert("src/lib.ext.rs".into());
+        assert!(!lib(&schema).contains("mod lib_ext"), "the layout is opt-in");
+        schema.schema.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { extensions: Some(true), ..Default::default() });
+        let out = lib(&schema);
+        for needle in [
+            "#[path = \"lib.ext.rs\"]\nmod lib_ext;\npub use lib_ext::*;",
+            "pub(crate) ext: ModuleExt,",
+            "impl std::ops::Deref for OrdersModule {",
+            "ext: ModuleBuilderExt,",
+            "impl std::ops::DerefMut for OrdersModuleBuilder {",
+            "pub(crate) type ThisModule = OrdersModule;",
+            "pub(crate) type ThisModuleBuilder = OrdersModuleBuilder;",
+            "ext: Default::default(),",
+            "let ext = self.ext.build(&ModuleParts {",
+            "user_service: &user_service,",
+            "            ext,\n",
+        ] {
+            assert!(out.contains(needle), "missing `{needle}` in:\n{out}");
+        }
+        schema.schema.extension_files.clear();
+        assert!(!lib(&schema).contains("ModuleExt") && !lib(&schema).contains("mod lib_ext"), "no extension file, no wiring");
     }
 
     #[test]

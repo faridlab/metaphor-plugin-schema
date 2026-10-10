@@ -13,6 +13,7 @@
 //! 6. summary print.
 //! 7. [`post_check`] — optional `cargo check` on the result.
 
+mod extensions;
 mod announce;
 mod change_detect;
 mod load;
@@ -81,6 +82,9 @@ pub(super) fn execute_generate(
     let mut generated = run_generators(&resolved, &targets, split, &output_dir)?;
 
     let user_owned = load_user_owned_globs(&output_dir)?;
+    if resolved.schema.generators_config.as_ref().and_then(|c| c.extensions) == Some(true) {
+        extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
+    }
 
     // Stabilize migration filenames against on-disk state so existing
     // migrations keep their timestamp and new ones get a fresh, collision-free

@@ -61,6 +61,15 @@ pub(super) fn load_openapi_vendor(output_dir: &Path) -> Result<Option<OpenapiVen
     Ok(manifest.openapi_vendor)
 }
 
+/// Every extension file (`<name>.ext.rs`, ADR-0031) is user-owned.
+const EXTENSION_GLOB: &str = "src/**/*.ext.rs";
+
+fn extension_globs() -> GlobSet {
+    let mut builder = GlobSetBuilder::new();
+    builder.add(Glob::new(EXTENSION_GLOB).expect("a valid glob"));
+    builder.build().expect("a valid glob set")
+}
+
 /// Load `metaphor.codegen.yaml` from `output_dir` and compile its
 /// `user_owned` patterns into a [`GlobSet`]. Returns an empty `GlobSet` when
 /// the manifest is missing — preserving today's behavior for repos that
@@ -68,13 +77,15 @@ pub(super) fn load_openapi_vendor(output_dir: &Path) -> Result<Option<OpenapiVen
 pub(super) fn load_user_owned_globs(output_dir: &Path) -> Result<GlobSet> {
     let manifest_path = output_dir.join("metaphor.codegen.yaml");
     if !manifest_path.exists() {
-        return Ok(GlobSet::empty());
+        return Ok(extension_globs());
     }
     let raw = fs::read_to_string(&manifest_path)
         .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
     let manifest: CodegenManifest = serde_yaml::from_str(&raw)
         .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
     let mut builder = GlobSetBuilder::new();
+    // An extension file (ADR-0031) is hand-written by definition, declared or not.
+    builder.add(Glob::new(EXTENSION_GLOB).expect("a valid glob"));
     for pattern in &manifest.user_owned {
         let glob = Glob::new(pattern).with_context(|| {
             format!(

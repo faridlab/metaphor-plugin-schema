@@ -181,6 +181,11 @@ pub struct ModuleSchema {
     /// Generator configuration from index.model.yaml config.generators
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generators_config: Option<crate::parser::yaml_parser::GeneratorsConfig>,
+    /// The extension files (`*.ext.rs`, ADR-0031) present in the module, as paths relative to
+    /// the module root (`src/lib.ext.rs`). Read from disk by the loader, so a generator stays a
+    /// function of what it is given.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub extension_files: std::collections::BTreeSet<String>,
     /// All type definitions
     pub type_defs: Vec<TypeDef>,
     /// All enum definitions

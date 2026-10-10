@@ -847,6 +847,12 @@ pub struct GeneratorsConfig {
     /// released API still carries one lists it until a breaking release removes it.
     #[serde(default)]
     pub opt_in: Option<Vec<String>>,
+    /// The extension-file layout (ADR-0031): hand code lives in `<name>.ext.rs` beside the
+    /// generated file, the generator declares the module's hand-written files itself, and
+    /// `lib.ext.rs` extends the module struct and its builder. A module turns it on once its
+    /// CUSTOM blocks have moved into extension files (it would declare their modules twice).
+    #[serde(default)]
+    pub extensions: Option<bool>,
     /// Opt-OUT flag for the generated company-RLS-fence migration (`<ts>_enable_company_rls`).
     /// Default (absent / `true`): emit the fence migration for every company-scoped model. Set to
     /// `false` when a module hand-authors its own RLS fence (e.g. one with a fail-loud stray check)

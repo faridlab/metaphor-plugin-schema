@@ -152,6 +152,32 @@ pub struct GenerationOptions {
     pub output_dir: Option<std::path::PathBuf>,
 }
 
+/// The extension files (`*.ext.rs`, ADR-0031) under `<module_root>/src`, as paths relative to
+/// the module root (`src/lib.ext.rs`, `src/application/service/mod.ext.rs`).
+pub fn extension_files_in(module_root: &std::path::Path) -> std::collections::BTreeSet<String> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.to_string_lossy().ends_with(".ext.rs") {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.insert(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    walk(&module_root.join("src"), module_root, &mut out);
+    out
+}
+
+/// Whether the module uses the extension-file layout (`generators: extensions: true`).
+pub(crate) fn uses_extensions(schema: &crate::resolver::ResolvedSchema) -> bool {
+    schema.schema.generators_config.as_ref().and_then(|c| c.extensions) == Some(true)
+}
+
 /// Build file path for generated code, optionally grouping by domain
 ///
 /// # Examples
@@ -964,6 +990,7 @@ mod tests {
             workflows: None,
             legacy_triggers: None,
             opt_in: None,
+            extensions: None,
             reexport_entities: None,
         })
     }
@@ -1047,6 +1074,7 @@ mod tests {
             workflows: None,
             legacy_triggers: None,
             opt_in: None,
+            extensions: None,
             reexport_entities: None,
         })
     }

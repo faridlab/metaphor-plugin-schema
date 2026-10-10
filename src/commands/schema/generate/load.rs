@@ -39,6 +39,9 @@ pub(super) fn load_and_resolve(
     }
 
     let (mut module_schema, parse_errors) = build_module_schema(module, &schema_files)?;
+    if let Some(root) = schema_path.parent() {
+        module_schema.extension_files = crate::generators::extension_files_in(root);
+    }
 
     if !parse_errors.is_empty() {
         for error in &parse_errors {
