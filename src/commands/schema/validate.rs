@@ -5,7 +5,8 @@ use anyhow::Result;
 use colored::Colorize;
 
 use crate::resolver::{
-    declaration_warnings, naming_warnings, resolve_schema, trigger_warnings, workflow_warnings,
+    declaration_warnings, naming_warnings, resolve_schema, secret_warnings, trigger_warnings,
+    workflow_warnings,
 };
 
 use super::discovery::{find_module_schema_path, find_schema_files};
@@ -45,6 +46,9 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             for warning in naming_warnings(&module_schema) {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
+            for warning in secret_warnings(&module_schema) {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             for warning in trigger_warnings(&module_schema) {

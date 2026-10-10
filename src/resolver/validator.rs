@@ -423,6 +423,24 @@ impl<'a> SchemaValidator<'a> {
     fn validate_model(&self, model: &crate::ast::Model) -> Vec<ResolveError> {
         let mut errors = Vec::new();
 
+        // The data-change audit captures whole row images and the history endpoint
+        // serves them, so a secret on an audited model would be stored and served.
+        if model.has_attribute("audited") {
+            let secrets: Vec<&str> = model
+                .fields
+                .iter()
+                .filter(|f| f.has_attribute("sensitive") || f.has_attribute("hashed"))
+                .map(|f| f.name.as_str())
+                .collect();
+            if !secrets.is_empty() {
+                errors.push(ResolveError::validation(format!(
+                    "Model '{}' is @audited and declares the secret field(s) {}: the audit trail stores whole rows and the history endpoint serves them; move the secret to a model that is not audited",
+                    model.name,
+                    secrets.join(", ")
+                )));
+            }
+        }
+
         // Check for primary key
         let has_id = model.fields.iter().any(|f| f.has_attribute("id"));
         if !has_id {
@@ -1987,6 +2005,48 @@ pub fn trigger_warnings(schema: &ModuleSchema) -> Vec<String> {
     out
 }
 
+/// Fields named like a secret (a password, token, PIN or key, or a digest of one) that
+/// carry none of `@sensitive`, `@hashed` or `@not_secret`, so every reader of the model
+/// is served them. Advisory: `@not_secret` acknowledges a field that is meant to be read,
+/// such as a public URL key.
+pub fn secret_warnings(schema: &ModuleSchema) -> Vec<String> {
+    const SECRET: &[&str] = &[
+        "password", "passwd", "secret", "token", "api_key", "apikey", "private_key", "otp",
+        "pin_hash", "pin_code", "salt", "credential", "_hash", "recovery_code", "backup_code",
+        "signing_key", "access_key",
+    ];
+    // Facts about a secret, not the secret: when it expires, how it is used, its policy.
+    const ABOUT: &[&str] = &[
+        "_id", "_ids", "_at", "_count", "_length", "_type", "_expires", "expires_", "_enabled",
+        "_required", "is_", "has_", "_policy", "_hint", "_url", "_format", "_version",
+        "_algorithm", "_method", "_status", "_prefix", "_last4", "_ttl", "_days", "_limit",
+        "_scope", "_name", "_ref", "_generated", "_strength", "_metadata", "_requirements",
+        "_history", "require_",
+    ];
+    let mut out = Vec::new();
+    for model in &schema.models {
+        for f in &model.fields {
+            let name = f.name.to_lowercase();
+            let looks_secret = SECRET.iter().any(|w| name.contains(w)) || name == "pin";
+            let about = ABOUT.iter().any(|w| {
+                if let Some(rest) = w.strip_prefix('_') {
+                    name.ends_with(&format!("_{rest}")) || (w.ends_with('_') && name.contains(*w))
+                } else {
+                    name.starts_with(*w)
+                }
+            });
+            let marked = ["sensitive", "hashed", "not_secret"].iter().any(|a| f.has_attribute(a));
+            if looks_secret && !about && !marked {
+                out.push(format!(
+                    "Field '{}.{}' looks like a secret and is served to every reader of the model: mark it @sensitive (never served), or @not_secret if it is meant to be read",
+                    model.name, f.name
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Names the generator has to change because two models would otherwise emit the
 /// same type: a model called `<Model>Filter` beside `<Model>` makes the `<Model>`
 /// repository filter come out as `<Model>RepositoryFilter`. Advisory: printed by
@@ -2045,6 +2105,59 @@ mod trigger_warning_tests {
         assert_eq!(w.len(), 1, "only hooks that declare actions: {w:?}");
         assert!(w[0].contains("'Order'") && w[0].contains("3 trigger action(s)"), "{w:?}");
         assert!(w[0].contains("none is executed"));
+    }
+}
+
+#[cfg(test)]
+mod secret_rule_tests {
+    use super::*;
+    use crate::ast::{Attribute, Field, Model};
+
+    fn model(attrs: &[&str], fields: Vec<Field>) -> ModuleSchema {
+        let mut m = Model::new("Session");
+        m.attributes = attrs.iter().map(|a| Attribute::new(*a)).collect();
+        m.fields = fields;
+        let mut s = ModuleSchema::new("test");
+        s.models = vec![m];
+        s
+    }
+    fn field(name: &str, attrs: &[&str]) -> Field {
+        let mut f = Field::new(name, crate::ast::TypeRef::Primitive(crate::ast::PrimitiveType::String));
+        f.attributes = attrs.iter().map(|a| Attribute::new(*a)).collect();
+        f
+    }
+
+    #[test]
+    fn an_unmarked_secret_is_reported_and_a_marked_or_acknowledged_one_is_not() {
+        let s = model(&[], vec![
+            field("token_hash", &[]),
+            field("password_hash", &["hashed"]),
+            field("session_token", &["sensitive"]),
+            field("access_token", &["not_secret"]),
+            field("token_expires_at", &[]),
+            field("password_policy", &[]),
+            field("name", &[]),
+        ]);
+        let w = secret_warnings(&s);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("'Session.token_hash'"), "{w:?}");
+    }
+
+    #[test]
+    fn an_audited_model_with_a_secret_fails_validation() {
+        let s = model(&["audited"], vec![field("token_hash", &["sensitive"])]);
+        let errors: Vec<String> = SchemaValidator::new(&s)
+            .validate()
+            .err()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| e.to_string())
+            .filter(|e| e.contains("@audited"))
+            .collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("token_hash"));
+        let plain = model(&[], vec![field("token_hash", &["sensitive"])]);
+        assert!(SchemaValidator::new(&plain).validate().err().unwrap_or_default().iter().all(|e| !e.to_string().contains("@audited")));
     }
 }
 
