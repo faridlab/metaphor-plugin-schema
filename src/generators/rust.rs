@@ -27,6 +27,17 @@ use std::path::PathBuf;
 /// Generates Rust code from schema
 pub struct RustGenerator;
 
+/// A model's secrets as response keys (camelCase): its `@sensitive` and `@hashed`
+/// fields, which no generic response carries.
+fn secret_keys(model: &Model) -> Vec<String> {
+    model
+        .fields
+        .iter()
+        .filter(|f| f.has_attribute("sensitive") || f.has_attribute("hashed"))
+        .map(|f| crate::webgen::parser::to_camel_case(&f.name))
+        .collect()
+}
+
 impl RustGenerator {
     pub fn new() -> Self {
         Self
@@ -1542,6 +1553,7 @@ impl RustGenerator {
         model: &Model,
         enum_names: &std::collections::HashSet<String>,
         collections: &std::collections::HashMap<String, String>,
+        secrets: &std::collections::HashMap<String, Vec<String>>,
         output: &mut String,
     ) {
         let name = &model.name;
@@ -1611,7 +1623,8 @@ impl RustGenerator {
             })
             .collect();
 
-        // Collect search fields: text-like primitives
+        // Collect search fields: text-like primitives, never a secret — `?search=` is a
+        // substring match, so a searchable digest is recovered one character at a time.
         let search_fields: Vec<&str> = model
             .fields
             .iter()
@@ -1621,25 +1634,22 @@ impl RustGenerator {
                     TypeRef::Primitive(PrimitiveType::String)
                         | TypeRef::Primitive(PrimitiveType::Email)
                         | TypeRef::Primitive(PrimitiveType::Slug)
-                )
+                ) && !f.has_attribute("sensitive")
+                    && !f.has_attribute("hashed")
             })
             .map(|f| f.name.as_str())
             .collect();
 
-        // Field-level security: @private (owner/root-only) and @owner (the tenant-id
-        // column). Emitted as RESPONSE keys (camelCase) to match the serialized
-        // response the handler prunes — see backbone-core's apply_field_security.
-        // `@sensitive` counts too, and in practice it is the one authors reach
-        // for: every secret in the tree is marked `@sensitive` and not one field
-        // anywhere declares `@private`. A password hash carrying
-        // `@sensitive` with the description "never exposed in API" was being
-        // serialized to any caller, because the attribute the author wrote was
-        // not the attribute the pruner read. Two spellings for one intent, and
-        // only one of them wired up, is a gap nobody can see from the schema.
+        // Field-level security, emitted as RESPONSE keys (camelCase) to match the
+        // serialized response the handler prunes — see backbone-core's `secure`.
+        // `@sensitive` and `@hashed` fields are secrets: no caller is served them, a
+        // platform caller or the row's owner included. `@private` fields are served
+        // only to the owner (`@owner`, the tenant-id column) and platform callers.
+        let secret_fields = secret_keys(model);
         let private_fields: Vec<String> = model
             .fields
             .iter()
-            .filter(|f| f.has_attribute("private") || f.has_attribute("sensitive"))
+            .filter(|f| f.has_attribute("private"))
             .map(|f| crate::webgen::parser::to_camel_case(&f.name))
             .collect();
         let owner_field: Option<String> = model
@@ -1673,6 +1683,10 @@ impl RustGenerator {
         // To-one relations expandable via `?include=` — (relation_name, target_table,
         // local_fk). relation_name + local_fk are response keys (camelCase); the
         // target table comes from the target model's collection.
+        // The secrets of each related model, stripped from the row an `?include=`
+        // hydrates (it is read raw). A cross-module `@include` names only a table, so
+        // its target's secrets are not known here.
+        let mut relation_secrets: Vec<(String, Vec<String>)> = Vec::new();
         let relations: Vec<(String, String, String)> = model
             .relations
             .iter()
@@ -1687,6 +1701,9 @@ impl RustGenerator {
                     _ => None,
                 }?;
                 let table = collections.get(target)?.clone();
+                if let Some(keys) = secrets.get(target).filter(|k| !k.is_empty()) {
+                    relation_secrets.push((crate::webgen::parser::to_camel_case(&r.name), keys.clone()));
+                }
                 // Read the relation's @foreign_key locally — a bare FK name parses as
                 // `Ident`, which the shared `Relation::foreign_key()` ignores (and we
                 // don't want to widen it: that would change FK-constraint emission in
@@ -1782,6 +1799,14 @@ impl RustGenerator {
         }
         writeln!(output, "    }}").unwrap();
 
+        // secret_fields() — only override when the model declares @sensitive or @hashed fields.
+        if !secret_fields.is_empty() {
+            let joined: Vec<String> = secret_fields.iter().map(|f| format!("\"{f}\"")).collect();
+            writeln!(output, "    fn secret_fields() -> &'static [&'static str] {{").unwrap();
+            writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
         // private_fields() — only override when the model declares @private fields.
         if !private_fields.is_empty() {
             let joined: Vec<String> = private_fields.iter().map(|f| format!("\"{f}\"")).collect();
@@ -1808,6 +1833,23 @@ impl RustGenerator {
         if let Some(tf) = &company_field {
             writeln!(output, "    fn company_field() -> Option<&'static str> {{").unwrap();
             writeln!(output, "        Some(\"{tf}\")").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
+        // relation_secret_fields() — only override when a related model has secrets.
+        if !relation_secrets.is_empty() {
+            writeln!(
+                output,
+                "    fn relation_secret_fields(relation: &str) -> &'static [&'static str] {{"
+            )
+            .unwrap();
+            writeln!(output, "        match relation {{").unwrap();
+            for (rel, keys) in &relation_secrets {
+                let joined: Vec<String> = keys.iter().map(|f| format!("\"{f}\"")).collect();
+                writeln!(output, "            \"{rel}\" => &[{}],", joined.join(", ")).unwrap();
+            }
+            writeln!(output, "            _ => &[],").unwrap();
+            writeln!(output, "        }}").unwrap();
             writeln!(output, "    }}").unwrap();
         }
 
@@ -2087,7 +2129,14 @@ impl RustGenerator {
                 .iter()
                 .map(|m| (m.name.clone(), m.collection_name()))
                 .collect();
-            self.generate_entity_repo_meta_impl(model, &enum_names, &collections, &mut output);
+            // entity name → its secrets, so a relation strips them from the included row.
+            let secrets: std::collections::HashMap<String, Vec<String>> = schema
+                .schema
+                .models
+                .iter()
+                .map(|m| (m.name.clone(), secret_keys(m)))
+                .collect();
+            self.generate_entity_repo_meta_impl(model, &enum_names, &collections, &secrets, &mut output);
         }
 
         // Generate builder struct for fluent entity construction
@@ -3089,6 +3138,48 @@ mod tests {
         let mut schema = ModuleSchema::new("test");
         schema.models.push(model);
         ResolvedSchema { schema }
+    }
+
+    #[test]
+    fn secrets_are_emitted_for_the_model_and_for_each_relation_to_a_model_with_secrets() {
+        let field = |name: &str, attributes: Vec<Attribute>| Field {
+            name: name.to_string(),
+            type_ref: TypeRef::Primitive(PrimitiveType::String),
+            attributes,
+            ..Default::default()
+        };
+        let id = || Field {
+            name: "id".to_string(),
+            type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+            attributes: vec![Attribute::new("id")],
+            ..Default::default()
+        };
+        let mut user = Model::new("User");
+        user.fields = vec![id(), field("email", vec![]), field("password_hash", vec![Attribute::new("hashed")])];
+        let mut session = Model::new("Session");
+        session.fields = vec![
+            id(),
+            field("user_id", vec![]),
+            field("token_hash", vec![Attribute::new("sensitive"), Attribute::new("immutable")]),
+        ];
+        session.relations.push(crate::ast::Relation {
+            name: "user".to_string(),
+            target: TypeRef::Custom("User".to_string()),
+            relation_type: crate::ast::model::RelationType::One,
+            attributes: vec![Attribute::new("foreign_key").with_arg(AttributeValue::Ident("user_id".to_string()))],
+            ..Default::default()
+        });
+        let mut schema = ModuleSchema::new("test");
+        schema.models = vec![user, session];
+        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let file = |p: &str| output.files.get(&PathBuf::from(p)).cloned().unwrap_or_default();
+        let (session, user) = (file("src/domain/entity/session.rs"), file("src/domain/entity/user.rs"));
+        assert!(session.contains("fn secret_fields() -> &'static [&'static str] {\n        &[\"tokenHash\"]"), "{session}");
+        assert!(session.contains("\"user\" => &[\"passwordHash\"],"), "the included user loses its hash");
+        assert!(user.contains("&[\"passwordHash\"]"), "a @hashed field is a secret too");
+        assert!(!session.contains("fn private_fields()"), "a secret is not a private field");
+        let search = session.split("fn search_fields()").nth(1).and_then(|r| r.split('}').next()).unwrap_or_default();
+        assert!(search.contains("user_id") && !search.contains("token_hash"), "a secret is not searchable: {search}");
     }
 
     fn persistent_entity_impl(file: &str, model: &str) -> String {
