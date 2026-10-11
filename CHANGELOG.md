@@ -7,6 +7,15 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-10-11
+
+### Added
+
+- **`enforced_by:` on a rule bound to a verb.** A rule whose check lives in hand-written verb code
+  names the function, `"<file under the module>::<fn>"`, comma-separated when it holds on several
+  paths. The register verifies the file defines each function: the rule then reads `verb` and no
+  longer counts as unenforced; a claim naming no existing function is a warning.
+
 ## [0.21.0] — 2026-10-11
 
 ### Added
