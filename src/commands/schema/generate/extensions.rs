@@ -45,6 +45,32 @@ pub(super) fn weave_extensions(generated: &mut GeneratedOutput, output_dir: &Pat
     }
 }
 
+/// Remove the CUSTOM marker lines from a layout module's generated files: its hand code lives
+/// in extension files, so a generated file carries no zone to edit (ADR-0031). A zone the
+/// generator itself fills is never emitted between markers, so only empty markers are removed.
+pub(super) fn strip_custom_markers(generated: &mut GeneratedOutput) {
+    for (path, content) in generated.files.iter_mut() {
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        if !content.contains("CUSTOM") {
+            continue;
+        }
+        let kept: Vec<&str> = content
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !(t.starts_with("// <<< CUSTOM") || t.starts_with("// END CUSTOM"))
+            })
+            .collect();
+        let mut out = kept.join("\n");
+        if content.ends_with('\n') {
+            out.push('\n');
+        }
+        *content = out;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +99,15 @@ mod tests {
         assert!(m.ends_with("include!(\"mod.ext.rs\");\n"), "{m}");
         let u = &generated.files[&PathBuf::from("src/application/service/user_service.rs")];
         assert!(u.contains("#[path = \"user_service.ext.rs\"]\nmod user_service_ext;\npub use user_service_ext::*;"), "{u}");
+    }
+
+    #[test]
+    fn a_layout_modules_generated_file_carries_no_custom_zone() {
+        let mut generated = GeneratedOutput::new();
+        generated.add_file(PathBuf::from("src/lib.rs"), "pub mod domain;\n// <<< CUSTOM MODULES\n// END CUSTOM\n    // <<< CUSTOM FIELDS\n    // END CUSTOM\n/// Extend in the `// <<< CUSTOM` zone.\n");
+        generated.add_file(PathBuf::from("migrations/x.up.sql"), "-- <<< CUSTOM\n");
+        strip_custom_markers(&mut generated);
+        assert_eq!(generated.files[&PathBuf::from("src/lib.rs")], "pub mod domain;\n/// Extend in the `// <<< CUSTOM` zone.\n");
+        assert_eq!(generated.files[&PathBuf::from("migrations/x.up.sql")], "-- <<< CUSTOM\n", "only Rust files");
     }
 }

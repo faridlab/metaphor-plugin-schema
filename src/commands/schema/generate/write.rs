@@ -53,6 +53,7 @@ pub(super) fn write_generated_files(
     force: bool,
     dry_run: bool,
     full_run: bool,
+    merge_custom: bool,
 ) -> Result<WriteStats> {
     println!();
     println!(
@@ -143,7 +144,13 @@ pub(super) fn write_generated_files(
             }
 
             // (5) Strategy routing.
-            let final_content = route_merge(&full_path, content, &pb, &mut stats.custom_warnings)?;
+            // A module on the extension layout keeps no hand code in a generated file, so its
+            // output is written whole: there is nothing to merge back (ADR-0031).
+            let final_content = if merge_custom {
+                route_merge(&full_path, content, &pb, &mut stats.custom_warnings)?
+            } else {
+                content.clone()
+            };
 
             fs::write(&full_path, final_content)
                 .with_context(|| format!("Failed to write {}", full_path.display()))?;
@@ -369,7 +376,7 @@ mod tests {
         files.insert(code.clone(), "new".to_string());
         let generated = GeneratedOutput { files };
 
-        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true)
+        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true, true)
             .unwrap();
 
         // Migration kept its applied bytes (immutable).
@@ -400,7 +407,7 @@ mod tests {
         files.insert(mig.clone(), bytes.clone());
         let generated = GeneratedOutput { files };
 
-        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true)
+        let _ = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true, true)
             .unwrap();
 
         assert_eq!(
@@ -436,7 +443,7 @@ mod tests {
         let user_owned = user_owned.build().unwrap();
 
         let stats =
-            write_generated_files(&generated, &dir, &user_owned, true, false, true).unwrap();
+            write_generated_files(&generated, &dir, &user_owned, true, false, true, true).unwrap();
 
         assert_eq!(
             stats.orphans, 1,
@@ -446,7 +453,7 @@ mod tests {
         // A non-full run (filtered) never reports: the partial emission would
         // flag everything outside the filter.
         let stats_filtered =
-            write_generated_files(&generated, &dir, &user_owned, true, false, false).unwrap();
+            write_generated_files(&generated, &dir, &user_owned, true, false, false, true).unwrap();
         assert_eq!(stats_filtered.orphans, 0, "filtered runs skip the report");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -483,7 +490,7 @@ mod tests {
         let mut files = HashMap::new();
         files.insert(PathBuf::from("src/lib.rs"), "// emitted".to_string());
         let generated = GeneratedOutput { files };
-        let stats = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true).unwrap();
+        let stats = write_generated_files(&generated, &dir, &empty_user_owned(), true, false, true, true).unwrap();
 
         assert!(!dir.join("src/presentation/http/old_handler.rs").exists(), "retired output is removed");
         for kept in ["scaffold.rs", "kept_custom.rs", "edited.rs", "untracked.rs"] {

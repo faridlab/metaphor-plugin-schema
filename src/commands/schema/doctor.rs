@@ -189,6 +189,20 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
 
     println!("  audited {} .rs file(s)", audited_files);
 
+    // A module on the extension layout keeps no hand code in a generated file (ADR-0031):
+    // every generated `src/**/*.rs` file must equal what a generation writes now.
+    let edited = generated_file_drift(module)?;
+    for rel in &edited {
+        println!(
+            "  {} {} differs from the generator's output: move the hand code into an extension file, or regenerate if the schema changed",
+            "✗".red().bold(),
+            rel
+        );
+    }
+    if !edited.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} generated file(s) differ from the generator's output", edited.len());
+    }
+
     if findings.is_empty() {
         println!("  {} no drift detected", "✓".green().bold());
         return Ok(());
@@ -246,6 +260,28 @@ struct Finding {
 /// Compile the `user_owned:` glob list from a `metaphor.codegen.yaml` into a
 /// matchable set. Shared with `schema undeclared`, which tests hand-written
 /// files against the very same globs.
+/// The generated `src/**/*.rs` files of a layout module whose content on disk differs from what
+/// a generation writes now, as paths relative to the module root. Empty for a module that is
+/// not on the extension layout.
+fn generated_file_drift(module: &str) -> Result<Vec<String>> {
+    let Some((generated, root, user_owned)) = super::generate::render_layout_module(module)? else {
+        return Ok(Vec::new());
+    };
+    let mut edited = Vec::new();
+    for (path, content) in &generated.files {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        if !rel.starts_with("src/") || !rel.ends_with(".rs") || user_owned.is_match(&rel) {
+            continue;
+        }
+        match fs::read_to_string(root.join(path)) {
+            Ok(disk) if disk != *content => edited.push(rel),
+            _ => {}
+        }
+    }
+    edited.sort();
+    Ok(edited)
+}
+
 pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {

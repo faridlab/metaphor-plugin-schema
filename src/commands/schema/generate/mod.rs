@@ -82,8 +82,10 @@ pub(super) fn execute_generate(
     let mut generated = run_generators(&resolved, &targets, split, &output_dir)?;
 
     let user_owned = load_user_owned_globs(&output_dir)?;
-    if resolved.schema.generators_config.as_ref().and_then(|c| c.extensions) == Some(true) {
+    let layout = resolved.schema.generators_config.as_ref().and_then(|c| c.extensions) == Some(true);
+    if layout {
         extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
+        extensions::strip_custom_markers(&mut generated);
     }
 
     // Stabilize migration filenames against on-disk state so existing
@@ -109,6 +111,7 @@ pub(super) fn execute_generate(
         force,
         dry_run,
         full_run,
+        !layout,
     )?;
 
     print_summary(&stats, generated.files.len(), dry_run);
@@ -118,6 +121,28 @@ pub(super) fn execute_generate(
     }
 
     Ok(())
+}
+
+/// The files a full generation of `module` would write, as the generate command renders them,
+/// for a module on the extension layout (ADR-0031); `None` for any other module. With the
+/// module root and its `user_owned` set, so a caller can compare them with what is on disk.
+pub(in crate::commands::schema) fn render_layout_module(
+    module: &str,
+) -> Result<Option<(crate::generators::GeneratedOutput, PathBuf, globset::GlobSet)>> {
+    let Some(LoadedSchema { schema_path, resolved }) = load_and_resolve(module, None, None, None, false)? else {
+        return Ok(None);
+    };
+    if resolved.schema.generators_config.as_ref().and_then(|c| c.extensions) != Some(true) {
+        return Ok(None);
+    }
+    let output_dir = schema_path.parent().unwrap_or(&schema_path).to_path_buf();
+    let targets = parse_targets("all");
+    let options = GenerationOptions { split: false, group_by_domain: true, output_dir: Some(output_dir.clone()) };
+    let mut generated = generate_all_with_options(&resolved, &targets, &options)?;
+    let user_owned = load_user_owned_globs(&output_dir)?;
+    extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
+    extensions::strip_custom_markers(&mut generated);
+    Ok(Some((generated, output_dir, user_owned)))
 }
 
 /// Phase 3: run every selected generator and collect the produced files
