@@ -395,7 +395,8 @@ impl Relation {
             .find(|a| a.name == "foreign_key")
             .and_then(|a| a.args.first())
             .and_then(|(_, v)| match v {
-                AttributeValue::String(s) => Some(s.clone()),
+                // Written quoted or bare: `@foreign_key(customer_id)` parses as an identifier.
+                AttributeValue::String(s) | AttributeValue::Ident(s) => Some(s.clone()),
                 _ => None,
             })
     }

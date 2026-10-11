@@ -233,7 +233,8 @@ impl YamlModel {
             if let Some(fk_attr) = field.attributes.iter().find(|a| a.name == "foreign_key") {
                 // Parse the foreign key value (e.g., "core.Country.id" or "Country.id")
                 if let Some((_, fk_value)) = fk_attr.args.first() {
-                    if let AttributeValue::String(fk_str) = fk_value {
+                    // Written quoted or bare: `@foreign_key(StoredFile.id)` parses as an identifier.
+                    if let AttributeValue::String(fk_str) | AttributeValue::Ident(fk_str) = fk_value {
                         // Parse "Module.Entity.column" or "Entity.column"
                         let parts: Vec<&str> = fk_str.split('.').collect();
                         if parts.len() >= 2 {
@@ -2380,5 +2381,29 @@ mod enum_schema_tests {
 
         let bare: YamlEnum = serde_yaml::from_str("name: ProjectType\nvariants: [internal]").unwrap();
         assert_eq!(bare.into_enum().pg_type_name(), "project_type");
+    }
+}
+
+#[cfg(test)]
+mod field_foreign_key_tests {
+    use super::*;
+
+    fn comment(attr: &str) -> Model {
+        let yaml = format!(
+            "name: FileComment\ncollection: file_comments\nfields:\n  id:\n    type: uuid\n    attributes: [\"@id\"]\n  file_id:\n    type: uuid\n    attributes: [\"@required\", \"{attr}\"]\n"
+        );
+        serde_yaml::from_str::<YamlModel>(&yaml).unwrap().into_model().unwrap()
+    }
+
+    #[test]
+    fn an_unquoted_field_foreign_key_creates_its_relation() {
+        // `@foreign_key(StoredFile.id)` parses as an identifier, not a string; it must still
+        // name the relation the database constraint is built from.
+        for attr in ["@foreign_key(StoredFile.id)", "@foreign_key(\\\"StoredFile.id\\\")"] {
+            let model = comment(attr);
+            let rel = model.relations.iter().find(|r| r.name == "file").unwrap_or_else(|| panic!("{attr}: no relation"));
+            assert_eq!(rel.target, TypeRef::Custom("StoredFile".into()), "{attr}");
+            assert_eq!(rel.foreign_key().as_deref(), Some("file_id"), "{attr}");
+        }
     }
 }
