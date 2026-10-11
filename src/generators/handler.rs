@@ -1030,8 +1030,15 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             .unwrap();
             // `AuthContext` exposes raw `permissions: Vec<String>` — no
             // `has_permission` method exists on the framework type.
-            writeln!(output, "        let has_specific_perm = auth.permissions.iter().any(|p| p == \"{}:transition:{}\");", model_snake, transition_snake).unwrap();
-            writeln!(output, "        let has_update_perm = auth.permissions.iter().any(|p| p == \"{}:update\");", model_snake).unwrap();
+            // `resource:action` permissions with `*` wildcards: a `*` segment matches any one, and
+            // a trailing `*` covers the rest (`*:*` and `{model}:*` grant every transition).
+            writeln!(output, "        let granted = |required: &str| auth.permissions.iter().any(|p| {{").unwrap();
+            writeln!(output, "            let (have, want): (Vec<&str>, Vec<&str>) = (p.split(':').collect(), required.split(':').collect());").unwrap();
+            writeln!(output, "            have.iter().enumerate().all(|(i, h)| *h == \"*\" || want.get(i) == Some(h))").unwrap();
+            writeln!(output, "                && (have.len() == want.len() || (have.len() < want.len() && have.last() == Some(&\"*\")))").unwrap();
+            writeln!(output, "        }});").unwrap();
+            writeln!(output, "        let has_specific_perm = granted(\"{}:transition:{}\");", model_snake, transition_snake).unwrap();
+            writeln!(output, "        let has_update_perm = granted(\"{}:update\");", model_snake).unwrap();
             // The verb's own permission or a listed role grants it. `{model}:update` alone still
             // does, while it runs in shadow, and is logged so the permission seeds can catch up.
             if !transition.allowed_roles.is_empty() {
@@ -1543,6 +1550,9 @@ mod tests {
         let mut roles_out = String::new();
         HandlerGenerator::new().write_transition_handlers(&mut roles_out, &model, "TicketState", &with_roles, None).unwrap();
         assert!(roles_out.contains("or one of the roles admin, owner"), "{roles_out}");
+        // Permissions match with wildcards, as serpa's `*:*` superuser grant needs.
+        assert!(out.contains("let has_specific_perm = granted(\"ticket:transition:put_on_hold\");"), "{out}");
+        assert!(out.contains("have.last() == Some(&\"*\")"), "{out}");
         assert!(!roles_out.contains("[\"admin\""), "{roles_out}");
 
         // A state field that is not an enum (a bool `resolved`) gets no routes, never another column.
