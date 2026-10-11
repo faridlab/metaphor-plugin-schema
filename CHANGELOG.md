@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.23.4] — 2026-10-12
+
+### Fixed
+
+- **A transition with roles generates valid code.** Its shadow log line embedded the roles as
+  quoted names, ending the generated string literal early; it compiled only while the permission
+  check sat behind the `auth` feature, which 0.23.3 removed. The roles are now plain words.
+
 ## [0.23.3] — 2026-10-12
 
 ### Fixed
