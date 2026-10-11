@@ -7,6 +7,15 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.23.3] — 2026-10-12
+
+### Fixed
+
+- **A generated transition checks its caller's permission whatever the module's cargo features.**
+  The check sat behind `#[cfg(feature = "auth")]`, so a module built without that feature compiled
+  transition routes that checked no permission at all. The handler now takes the host's
+  `AuthContext` as optional and answers 401 when there is none.
+
 ## [0.23.2] — 2026-10-11
 
 ### Fixed
