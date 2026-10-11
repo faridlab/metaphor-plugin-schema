@@ -1052,7 +1052,8 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 model_snake,
                 model_snake,
                 transition_snake,
-                if transition.allowed_roles.is_empty() { String::new() } else { format!(" or a role of {:?}", transition.allowed_roles) }
+                // Plain names: the message is a string literal in the generated code.
+                if transition.allowed_roles.is_empty() { String::new() } else { format!(" or one of the roles {}", transition.allowed_roles.join(", ")) }
             )
             .unwrap();
             writeln!(output, "        }}").unwrap();
@@ -1532,6 +1533,17 @@ mod tests {
         // caller is refused rather than let through.
         assert!(!out.contains("cfg(feature = \"auth\")"), "no permission check behind a feature: {out}");
         assert!(out.contains("auth: Option<axum::Extension<AuthContext>>,") && out.contains("StatusCode::UNAUTHORIZED"), "{out}");
+
+        // A verb with roles names them in the shadow log as plain words: quoted names would end
+        // the generated string literal early.
+        let with_roles = StateMachine {
+            transitions: vec![Transition { name: "lock".into(), from: vec!["active".into()], to: "locked".into(), allowed_roles: vec!["admin".into(), "owner".into()], ..Default::default() }],
+            ..sm.clone()
+        };
+        let mut roles_out = String::new();
+        HandlerGenerator::new().write_transition_handlers(&mut roles_out, &model, "TicketState", &with_roles, None).unwrap();
+        assert!(roles_out.contains("or one of the roles admin, owner"), "{roles_out}");
+        assert!(!roles_out.contains("[\"admin\""), "{roles_out}");
 
         // A state field that is not an enum (a bool `resolved`) gets no routes, never another column.
         let flag = Model {
