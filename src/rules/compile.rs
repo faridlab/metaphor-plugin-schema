@@ -433,14 +433,28 @@ pub fn transition_guards(schema: &crate::ast::ModuleSchema, model: &Model, verb:
     out
 }
 
+/// Whether `field` of `model` is an enum field, the only kind of state field a generated
+/// transition writes.
+pub fn state_field_is_enum(model: &Model, field: &str) -> bool {
+    model.find_field(field).is_some_and(|f| {
+        let mut t = &f.type_ref;
+        while let TypeRef::Optional(inner) = t {
+            t = inner;
+        }
+        matches!(t, TypeRef::Custom(_))
+    })
+}
+
 /// Whether `model`'s generated transition verbs are mounted: its hook has a machine the
-/// generator emits transition routes for, and the machine declares `verbs: generated`.
+/// generator emits transition routes for (on an enum state field), and the machine declares
+/// `verbs: generated`.
 pub fn mounts_generated_verbs(schema: &crate::ast::ModuleSchema, model: &Model) -> bool {
     let has_routes = schema
         .hooks
         .iter()
         .find(|h| h.model_ref == model.name || h.name == model.name)
-        .is_some_and(|h| h.state_machine.is_some());
+        .and_then(|h| h.state_machine.as_ref())
+        .is_some_and(|sm| state_field_is_enum(model, &sm.field));
     has_routes
         && schema
             .rule_register

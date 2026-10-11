@@ -1522,15 +1522,20 @@ mod tests {
     fn only_machines_declaring_generated_verbs_mount_their_transition_routes() {
         let lib = |verbs: &str| {
             let mut resolved = create_test_schema();
+            resolved.schema.models[0].fields.push(Field {
+                name: "status".into(),
+                type_ref: TypeRef::Custom("UserStatus".into()),
+                ..Default::default()
+            });
             let user = resolved.schema.models[0].clone();
             resolved.schema.hooks.push(crate::ast::Hook {
                 name: "User".into(),
                 model_ref: "User".into(),
-                state_machine: Some(crate::ast::StateMachine { field: "email".into(), ..Default::default() }),
+                state_machine: Some(crate::ast::StateMachine { field: "status".into(), ..Default::default() }),
                 ..Default::default()
             });
             let hook = format!(
-                "module: orders\nstate_machines:\n  - entity: User\n    field: email\n    verbs: {verbs}\n    transitions:\n      - {{ from: a, to: b, on: go }}\n"
+                "module: orders\nstate_machines:\n  - entity: User\n    field: status\n    verbs: {verbs}\n    transitions:\n      - {{ from: a, to: b, on: go }}\n"
             );
             resolved.schema.rule_register.read_file("user.hook.yaml", &hook);
             resolved.schema.rule_register.bind(&[user]);

@@ -924,6 +924,15 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         sm: &crate::ast::StateMachine,
         module: Option<&crate::ast::ModuleSchema>,
     ) -> Result<(), GenerateError> {
+        if self.find_status_field(model, &sm.field).is_none() {
+            writeln!(
+                output,
+                "\n// No transition routes: the machine's state field `{}` is not an enum field of {}.",
+                sm.field, model.name
+            )
+            .unwrap();
+            return Ok(());
+        }
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
         // A model with secrets answers every arm as JSON through `without_secrets`, since its
@@ -1037,7 +1046,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
-            let status_field = self.find_status_field(model, &sm.field);
+            let status_field = self.find_status_field(model, &sm.field).unwrap_or(&sm.field);
             writeln!(
                 output,
                 "    // Create state machine from entity's actual status and validate transition"
@@ -1239,41 +1248,12 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
     /// 2. Look for a field named `status` or `state` with a `Custom` type.
     /// 3. Fall back to the first `Custom`-typed field found.
     /// 4. Last resort: return `sm_field` unchanged (preserves old behaviour).
-    fn find_status_field<'a>(&self, model: &'a Model, sm_field: &'a str) -> &'a str {
-        use crate::ast::TypeRef;
-
-        // Helper: strip Optional wrapper and check for Custom type.
-        let is_custom = |type_ref: &TypeRef| -> bool {
-            match type_ref {
-                TypeRef::Custom(_) => true,
-                TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Custom(_)),
-                _ => false,
-            }
-        };
-
-        // 1. If the hook's sm_field itself has a Custom type, it is already correct.
-        if let Some(f) = model.fields.iter().find(|f| f.name == sm_field) {
-            if is_custom(&f.type_ref) {
-                return sm_field;
-            }
-        }
-
-        // 2. Prefer a field named `status` or `state` with a Custom type.
-        for name in &["status", "state", "workflow_state"] {
-            if let Some(f) = model.fields.iter().find(|f| f.name == *name) {
-                if is_custom(&f.type_ref) {
-                    return &f.name;
-                }
-            }
-        }
-
-        // 3. Fall back to the first Custom-typed field in the model.
-        if let Some(f) = model.fields.iter().find(|f| is_custom(&f.type_ref)) {
-            return &f.name;
-        }
-
-        // 4. Last resort – return the original sm_field.
-        sm_field
+    /// The state field a machine's verbs write: exactly the field the machine declares, and only
+    /// when it is an enum field. Any other column would be the wrong one (a bool state field, or
+    /// a name the model lacks, once fell back to the model's first enum and wrote `"True"` into
+    /// it), so no transition routes are generated for such a machine.
+    fn find_status_field<'a>(&self, model: &'a Model, sm_field: &'a str) -> Option<&'a str> {
+        crate::rules::compile::state_field_is_enum(model, sm_field).then_some(sm_field)
     }
 
     /// Check if a specific field is optional (wrapped in Option<>)
@@ -1502,13 +1482,14 @@ mod tests {
             HandlerGenerator::new().write_transition_handlers(&mut out, model, "SessionState", &sm, None).unwrap();
             out
         };
-        let secret = Model { name: "Session".into(), fields: vec![field("status", vec![]), field("token_hash", vec![Attribute::new("sensitive")])], ..Default::default() };
+        let state = || Field { name: "status".into(), type_ref: TypeRef::Custom("SessionStatus".into()), ..Default::default() };
+        let secret = Model { name: "Session".into(), fields: vec![state(), field("token_hash", vec![Attribute::new("sensitive")])], ..Default::default() };
         let out = render(&secret);
         assert!(out.contains("backbone_core::http::without_secrets::<Session, _>(response)"), "{out}");
         assert!(out.contains("ApiResponse::<serde_json::Value>::not_found"), "every arm answers the same type");
         assert!(!out.contains("ApiResponse::<SessionResponseDto>"), "no arm is typed with the DTO: {out}");
 
-        let plain = Model { name: "Ticket".into(), fields: vec![field("status", vec![])], ..Default::default() };
+        let plain = Model { name: "Ticket".into(), fields: vec![state()], ..Default::default() };
         let out = render(&plain);
         assert!(!out.contains("without_secrets") && out.contains("ApiResponse::<TicketResponseDto>::not_found"), "unchanged output without secrets");
     }
@@ -1523,7 +1504,7 @@ mod tests {
         };
         let model = Model {
             name: "Ticket".into(),
-            fields: vec![Field { name: "status".into(), type_ref: TypeRef::Primitive(PrimitiveType::String), ..Default::default() }],
+            fields: vec![Field { name: "status".into(), type_ref: TypeRef::Custom("TicketStatus".into()), ..Default::default() }],
             ..Default::default()
         };
         let mut out = String::new();
@@ -1534,6 +1515,20 @@ mod tests {
         assert!(out.contains("backbone_core::write_guard::as_transition(\"put_on_hold\", service.partial_update(&id, fields))"), "{out}");
         // An unreadable stored state is refused, never read as the initial state.
         assert!(out.contains("StatusCode::CONFLICT") && !out.contains("unwrap_or(TicketState::default())"), "{out}");
+
+        // A state field that is not an enum (a bool `resolved`) gets no routes, never another column.
+        let flag = Model {
+            name: "Ticket".into(),
+            fields: vec![
+                Field { name: "resolved".into(), type_ref: TypeRef::Primitive(PrimitiveType::Bool), ..Default::default() },
+                Field { name: "kind".into(), type_ref: TypeRef::Custom("TicketKind".into()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let sm_flag = StateMachine { field: "resolved".into(), ..sm.clone() };
+        let mut none = String::new();
+        HandlerGenerator::new().write_transition_handlers(&mut none, &flag, "TicketState", &sm_flag, None).unwrap();
+        assert!(none.contains("No transition routes") && !none.contains("\"kind\"") && !none.contains("transition_routes("), "{none}");
     }
 
     fn create_test_schema() -> ResolvedSchema {
