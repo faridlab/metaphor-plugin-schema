@@ -7,6 +7,19 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-10-11
+
+### Added
+
+- **Role checks compile.** `$actor.has_role('admin')` asks the roles source the composing service
+  installs (`backbone_core::actor_roles`); without one the rule holds. Needs **backbone-core 3.6**.
+- **Delete guards compile.** `count(<another model>, fk == $this.id && …) == 0` on delete counts the
+  rows still referencing the row, on the request's own connection, since deletes are soft and a
+  foreign key's `ON DELETE` never fires. A guard with only delete rules checks nothing else.
+- **Declared foreign keys are audited.** `schema rules --audit` counts, for every same-module
+  `@foreign_key(Entity.column)`, quoted or bare, the stored rows referencing nothing. A declaration
+  naming the target's table in place of the column is read as the primary key and flagged.
+
 ## [0.20.0] — 2026-10-11
 
 ### Added
