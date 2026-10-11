@@ -1,8 +1,10 @@
 //! Compile a declared row rule into the code that checks it.
 //!
 //! A row rule is a condition over one row's own fields, checked on create,
-//! update or both: no other row, no relation, no `$old`, `$actor` or `now()`.
-//! It compiles to two forms that give the same answer:
+//! update or both: no other row and no relation. It may also read the row
+//! before the write (`$old.x`, a transition rule), the writer (`$actor.id`) or
+//! the time of the write (`now()`) — a context rule. A row-layer rule compiles
+//! to two forms that give the same answer:
 //!
 //! - a Rust expression over `backbone_core::row_rule`, evaluated by the
 //!   entity's generated write guard against the row a write would store;
@@ -12,7 +14,12 @@
 //!
 //! Both follow SQL's semantics: an operator over a null is null, and a rule
 //! holds unless it is definitely false. `x == null` and `x != null` test for
-//! null itself. Anything outside the row subset is not compiled and says why.
+//! null itself. A transition or context rule has only the Rust form: no `CHECK`
+//! can read the row before the write, the writer or the moment of the write. A
+//! context rule about time checks an update only when the update changes a
+//! field the rule reads. `$actor.has_role(..)` needs a lookup into
+//! authorization data and is not compiled here. Anything else outside the
+//! subset is not compiled and says why.
 
 use std::collections::HashSet;
 
@@ -33,10 +40,19 @@ pub struct CompiledRowRule {
     pub path: String,
     pub on_create: bool,
     pub on_update: bool,
-    /// A Rust expression of type `backbone_core::row_rule::Val`, reading the row as `row`.
+    /// A Rust expression of type `backbone_core::row_rule::Val`, reading the row as `row`,
+    /// the row before the write as `old_row` and the write's context as `ctx`.
     pub rust: String,
-    /// The same rule as an SQL boolean expression over the table's columns.
-    pub sql: String,
+    /// The same rule as an SQL boolean expression over the table's columns; `None` for a
+    /// transition or context rule, which no `CHECK` can express.
+    pub sql: Option<String>,
+    /// `row`, `transition` (reads `$old`) or `context` (reads the writer or the time).
+    pub layer: &'static str,
+    /// Whether the rule reads the row before the write.
+    pub reads_old: bool,
+    /// For a rule about the time of the write, the fields it reads: an update is checked
+    /// only when it changes one of them. Empty for every other rule.
+    pub time_fields: Vec<String>,
     /// Where the rule is declared, for the generated comment.
     pub source: String,
 }
@@ -88,8 +104,17 @@ pub fn compile_row_rule(rule: &DeclaredRule, model: &Model, enums: &HashSet<Stri
         return Err(format!("applies on {:?}, not only on create and update", rule.when));
     }
     let ast = expr::parse(text)?;
-    let mut c = Compiler { model, enums, fields: Vec::new() };
+    let mut c = Compiler { model, enums, fields: Vec::new(), row_var: "row", reads_old: false, reads_actor: false, reads_time: false };
     let (rust, sql, _) = c.emit(&ast)?;
+    let layer = if c.reads_actor || c.reads_time {
+        "context"
+    } else if c.reads_old {
+        "transition"
+    } else {
+        "row"
+    };
+    let sql = (layer == "row").then_some(sql);
+    let time_fields = if c.reads_time { c.fields.clone() } else { Vec::new() };
     let path = c.fields.first().cloned().unwrap_or_default();
     let code = code_of(rule.code.as_deref().unwrap_or(&rule.name));
     let message = rule.message.clone().unwrap_or_else(|| format!("breaks the rule `{}`: {}", rule.name, text));
@@ -102,6 +127,9 @@ pub fn compile_row_rule(rule: &DeclaredRule, model: &Model, enums: &HashSet<Stri
         on_update,
         rust,
         sql,
+        layer,
+        reads_old: c.reads_old,
+        time_fields,
         source: rule.source.to_string(),
     })
 }
@@ -142,6 +170,136 @@ pub fn model_row_rules(schema: &crate::ast::ModuleSchema, model: &Model) -> Vec<
     row_rules_of(&schema.rule_register.rules, model, &enums)
 }
 
+/// A uniqueness rule written as a count over the rule's own entity, compiled.
+///
+/// `count(Bucket, slug == $this.slug && id != $this.id && metadata.deleted_at == null) == 0`
+/// says no other live bucket shares the slug: a partial unique index on `slug` where the
+/// filter holds, emitted when the rule is enforced. Until then the audit lists the stored
+/// duplicates. The write guard does not check it: that would need a query on every write.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledUnique {
+    pub name: String,
+    pub code: String,
+    /// The fields that must not repeat together (`f == $this.f`).
+    pub keys: Vec<String>,
+    /// The rows the uniqueness covers, as an SQL condition: the index's `WHERE`.
+    pub filter_sql: Option<String>,
+    pub source: String,
+}
+
+/// Compile a `count(<this entity>, …) == 0` rule into a uniqueness rule, or say why not.
+pub fn compile_uniqueness(rule: &DeclaredRule, model: &Model, enums: &HashSet<String>) -> Result<CompiledUnique, String> {
+    let text = match &rule.body {
+        RuleBody::Condition(t) | RuleBody::Assertion(t) => t,
+        _ => return Err("not an expression".into()),
+    };
+    let ast = expr::parse(text)?;
+    let Expression::Binary { left, op: BinaryOp::Eq, right } = &ast else {
+        return Err("not `count(..) == 0`".into());
+    };
+    let (Expression::FunctionCall { name, args }, Expression::Literal(Literal::Int(0))) = (left.as_ref(), right.as_ref()) else {
+        return Err("not `count(..) == 0`".into());
+    };
+    let [Expression::FieldRef(FieldRef::Simple(entity)), predicate] = (name == "count").then_some(args.as_slice()).unwrap_or(&[]) else {
+        return Err("not `count(<entity>, <predicate>) == 0`".into());
+    };
+    if entity != &model.name {
+        return Err(format!("counts `{entity}`, not `{}`: a lookup into another entity", model.name));
+    }
+    let mut terms = Vec::new();
+    conjuncts(predicate, &mut terms);
+    let this_field = |e: &Expression| match e {
+        Expression::MemberAccess { object, member } if matches!(object.as_ref(), Expression::Context(c) if c == "this") => Some(member.clone()),
+        _ => None,
+    };
+    let plain_field = |e: &Expression| match e {
+        Expression::FieldRef(FieldRef::Simple(f)) => Some(f.clone()),
+        _ => None,
+    };
+    let mut keys = Vec::new();
+    let mut filters = Vec::new();
+    for term in terms {
+        match term {
+            Expression::Binary { left, op, right } if matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
+                let pair = plain_field(left)
+                    .zip(this_field(right))
+                    .or_else(|| plain_field(right).zip(this_field(left)));
+                match (pair, op) {
+                    (Some((f, g)), BinaryOp::Eq) if f == g => {
+                        if model.find_field(&f).is_none() {
+                            return Err(format!("`{f}` is not a field of {}", model.name));
+                        }
+                        keys.push(f);
+                    }
+                    // `id != $this.id`: the row itself is not a duplicate; an index implies it.
+                    (Some((f, g)), BinaryOp::Ne) if f == g && f == "id" => {}
+                    (Some(_), _) => return Err("compares a field with another field of the row being written".into()),
+                    (None, _) => filters.push(term),
+                }
+            }
+            other => filters.push(other),
+        }
+    }
+    if keys.is_empty() {
+        return Err("names no field that must not repeat (`f == $this.f`)".into());
+    }
+    let mut c = Compiler { model, enums, fields: Vec::new(), row_var: "row", reads_old: false, reads_actor: false, reads_time: false };
+    let mut sqls = Vec::new();
+    for f in filters {
+        let (_, sql, _) = c.emit(f)?;
+        if c.reads_old || c.reads_actor || c.reads_time {
+            return Err("its filter reads the writer, the time or the row being written, which an index cannot".into());
+        }
+        sqls.push(sql);
+    }
+    Ok(CompiledUnique {
+        name: rule.name.clone(),
+        code: code_of(rule.code.as_deref().unwrap_or(&rule.name)),
+        keys,
+        filter_sql: (!sqls.is_empty()).then(|| sqls.join(" AND ")),
+        source: rule.source.to_string(),
+    })
+}
+
+fn conjuncts<'e>(e: &'e Expression, out: &mut Vec<&'e Expression>) {
+    match e {
+        Expression::Binary { left, op: BinaryOp::And, right } => {
+            conjuncts(left, out);
+            conjuncts(right, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// Every uniqueness rule of `model` that compiles, in declaration order.
+pub fn model_uniqueness_rules(schema: &crate::ast::ModuleSchema, model: &Model) -> Vec<CompiledUnique> {
+    let enums: HashSet<String> = schema.enums.iter().map(|e| e.name.clone()).collect();
+    schema
+        .rule_register
+        .rules
+        .iter()
+        .filter(|r| r.bound_model.as_deref() == Some(model.name.as_str()))
+        .filter_map(|r| compile_uniqueness(r, model, &enums).ok())
+        .collect()
+}
+
+/// The audit query for a uniqueness rule: how many groups of stored rows already share its
+/// keys. Rows with a null key are left out, as a unique index treats nulls as distinct.
+pub fn uniqueness_audit_query(model: &Model, rule: &CompiledUnique) -> String {
+    let keys: Vec<String> = rule.keys.iter().map(|k| format!("\"{k}\"")).collect();
+    let mut wheres: Vec<String> = keys.iter().map(|k| format!("{k} IS NOT NULL")).collect();
+    if let Some(f) = &rule.filter_sql {
+        wheres.push(f.clone());
+    }
+    format!(
+        "SELECT '{}' AS rule, count(*) AS breaking FROM (SELECT 1 FROM {} WHERE {} GROUP BY {} HAVING count(*) > 1) AS duplicates;",
+        rule.code.replace('\'', "''"),
+        model.qualified_table_name(),
+        wheres.join(" AND "),
+        keys.join(", ")
+    )
+}
+
 /// The Rust items of `model`'s write guard: `<Model>RowRules`, checking each compiled row rule
 /// against the row a create or update would store. Every rule runs in shadow.
 pub fn render_guard(model: &Model, rules: &[CompiledRowRule]) -> String {
@@ -168,14 +326,29 @@ pub fn render_guard(model: &Model, rules: &[CompiledRowRule]) -> String {
          \x20       let Ok(row) = serde_json::to_value(after) else {{\n\
          \x20           return GuardOutcome::allow();\n\
          \x20       }};\n\
-         \x20       let row = &row;\n\
-         \x20       let mut shadow = Vec::new();\n"
+         \x20       let row = &row;\n"
     ));
+    // `old` serves the change test of a time rule and the reads of a transition rule; bind
+    // only what the rules use, so the generated module stays warning-free.
+    if rules.iter().any(|r| r.reads_old || (!r.time_fields.is_empty() && r.on_update)) {
+        out.push_str("        let old = ctx.before.and_then(|b| serde_json::to_value(b).ok());\n");
+    }
+    if rules.iter().any(|r| r.reads_old) {
+        out.push_str("        let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);\n");
+    }
+    out.push_str("        let mut shadow = Vec::new();\n");
     for rule in rules {
+        // A rule about the time of the write checks an update only when it changes what it reads.
+        let update = if rule.time_fields.is_empty() {
+            "update".to_string()
+        } else {
+            let fields: Vec<String> = rule.time_fields.iter().map(|f| format!("{f:?}")).collect();
+            format!("(update && r::changed(old.as_ref(), row, &[{}]))", fields.join(", "))
+        };
         let on = match (rule.on_create, rule.on_update) {
-            (true, true) => "create || update",
-            (true, false) => "create",
-            _ => "update",
+            (true, true) => format!("create || {update}"),
+            (true, false) => "create".to_string(),
+            _ => update,
         };
         out.push_str(&format!(
             "        // `{}` ({})\n        if ({on}) && !r::holds(&{}) {{\n            shadow.push(Violation::new({:?}, {:?}, {:?}));\n        }}\n",
@@ -188,13 +361,14 @@ pub fn render_guard(model: &Model, rules: &[CompiledRowRule]) -> String {
 
 /// The audit query for one compiled rule: how many stored rows break it, soft-deleted rows
 /// included, since a `CHECK` constraint covers every row. A null result is not a break.
-pub fn audit_query(model: &Model, rule: &CompiledRowRule) -> String {
-    format!(
+/// `None` for a transition or context rule, which stored rows cannot be checked against.
+pub fn audit_query(model: &Model, rule: &CompiledRowRule) -> Option<String> {
+    Some(format!(
         "SELECT '{}' AS rule, count(*) AS breaking FROM {} WHERE NOT ({});",
         rule.code.replace('\'', "''"),
         model.qualified_table_name(),
-        rule.sql
-    )
+        rule.sql.as_ref()?
+    ))
 }
 
 struct Compiler<'a> {
@@ -202,6 +376,11 @@ struct Compiler<'a> {
     enums: &'a HashSet<String>,
     /// The fields the rule reads, first first.
     fields: Vec<String>,
+    /// The row a field reference reads: `row`, or `old_row` inside `$old.`.
+    row_var: &'static str,
+    reads_old: bool,
+    reads_actor: bool,
+    reads_time: bool,
 }
 
 /// What an emitted sub-expression is, so the SQL side can pick the right function.
@@ -214,6 +393,8 @@ enum Ty {
     Enum,
     Time,
     List,
+    /// A key inside a JSON field: untyped text, fit only for a null test.
+    JsonKey,
 }
 
 fn rust_str(s: &str) -> String {
@@ -247,7 +428,7 @@ impl Compiler<'_> {
             Kind::Time => (col, Ty::Time),
             Kind::List => (col, Ty::List),
         };
-        Ok((format!("r::field(row, {})", rust_str(name)), sql, ty))
+        Ok((format!("r::field({}, {})", self.row_var, rust_str(name)), sql, ty))
     }
 
     fn emit(&mut self, e: &Expression) -> Result<(String, String, Ty), String> {
@@ -263,13 +444,36 @@ impl Compiler<'_> {
             Expression::FieldRef(_) => Err("reads another row or entity".into()),
             Expression::MemberAccess { object, member } => match object.as_ref() {
                 Expression::Context(c) if c == "this" => self.field(member),
-                Expression::Context(c) => Err(format!("reads `${c}`, which is not the row alone")),
+                Expression::Context(c) if c == "old" => {
+                    self.reads_old = true;
+                    let outer = std::mem::replace(&mut self.row_var, "old_row");
+                    let read = self.field(member);
+                    self.row_var = outer;
+                    read
+                }
+                Expression::Context(c) if c == "actor" && member == "id" => {
+                    self.reads_actor = true;
+                    Ok(("r::actor(ctx.actor.as_deref())".into(), "NULL".into(), Ty::Text))
+                }
+                Expression::Context(c) => Err(format!("reads `${c}.{member}`, which a row rule cannot")),
+                // `metadata.deleted_at`: a key inside a JSON field, read as text.
+                Expression::FieldRef(FieldRef::Simple(f)) if self.is_json(f) => {
+                    if !self.fields.iter().any(|x| x == f) {
+                        self.fields.push(f.clone());
+                    }
+                    Ok((
+                        format!("r::field({}.get({}).unwrap_or(&serde_json::Value::Null), {})", self.row_var, rust_str(f), rust_str(member)),
+                        format!("(\"{f}\"->>{})", sql_str(member)),
+                        Ty::JsonKey,
+                    ))
+                }
                 _ if member == "length" || member == "len" => {
                     let (r, s, t) = self.emit(object)?;
                     Ok(self.length(r, s, t))
                 }
                 _ => Err(format!("`.{member}` reads a relation or a duration")),
             },
+            Expression::Context(c) if c == "now" => Ok(self.now()),
             Expression::Context(c) => Err(format!("reads `${c}`, which is not the row alone")),
             Expression::Array(items) => {
                 let mut rs = Vec::new();
@@ -302,6 +506,22 @@ impl Compiler<'_> {
         }
     }
 
+    fn is_json(&self, name: &str) -> bool {
+        self.model.find_field(name).is_some_and(|f| {
+            let mut t = &f.type_ref;
+            while let TypeRef::Optional(inner) = t {
+                t = inner;
+            }
+            matches!(t, TypeRef::Primitive(PrimitiveType::Json) | TypeRef::Map { .. })
+        })
+    }
+
+    /// The time of the write: `now()` or `$now`.
+    fn now(&mut self) -> (String, String, Ty) {
+        self.reads_time = true;
+        ("r::at(ctx.at)".into(), "now()".into(), Ty::Time)
+    }
+
     fn length(&self, r: String, s: String, t: Ty) -> (String, String, Ty) {
         let sql = if t == Ty::List { format!("cardinality({s})") } else { format!("char_length({s})") };
         (format!("r::length({r})"), sql, Ty::Number)
@@ -328,7 +548,10 @@ impl Compiler<'_> {
             return Ok((format!("r::matches({r}, {})", rust_str(pattern)), format!("({s} ~ {})", sql_str(pattern)), Ty::Bool));
         }
         let (lr, ls, lt) = self.emit(left)?;
-        let (rr, rs, _) = self.emit(right)?;
+        let (rr, rs, rt) = self.emit(right)?;
+        if lt == Ty::JsonKey || rt == Ty::JsonKey {
+            return Err("a key inside a JSON field has no type; a rule can only test it for null".into());
+        }
         let (f, sql, ty) = match op {
             BinaryOp::Eq => ("eq", format!("({ls} = {rs})"), Ty::Bool),
             BinaryOp::Ne => ("ne", format!("({ls} <> {rs})"), Ty::Bool),
@@ -360,7 +583,13 @@ impl Compiler<'_> {
     }
 
     fn method(&mut self, object: &Expression, method: &str, args: &[Expression]) -> Result<(String, String, Ty), String> {
+        if matches!(object, Expression::Context(c) if c == "actor") {
+            return Err(format!("`$actor.{method}(..)` needs a lookup into authorization data (graph rules)"));
+        }
         let (or, os, ot) = self.emit(object)?;
+        if ot == Ty::JsonKey {
+            return Err("a key inside a JSON field has no type; a rule can only test it for null".into());
+        }
         match (method, args) {
             ("length" | "len", []) => Ok(self.length(or, os, ot)),
             ("trim", []) => Ok((format!("r::trim({or})"), format!("btrim({os})"), Ty::Text)),
@@ -388,6 +617,7 @@ impl Compiler<'_> {
 
     fn function(&mut self, name: &str, args: &[Expression]) -> Result<(String, String, Ty), String> {
         match (name, args) {
+            ("now", []) => Ok(self.now()),
             ("abs" | "ceil" | "floor" | "round", [arg]) => {
                 let (r, s, _) = self.emit(arg)?;
                 Ok((format!("r::{name}({r})"), format!("{name}({s})"), Ty::Number))
@@ -474,7 +704,7 @@ mod tests {
             "r::and(r::ge(r::length(r::field(row, \"name\")), r::Val::Num(1.0_f64)), \
              r::le(r::length(r::field(row, \"name\")), r::Val::Num(255.0_f64)))"
         );
-        assert_eq!(c.sql, "((char_length(\"name\") >= 1) AND (char_length(\"name\") <= 255))");
+        assert_eq!(c.sql.as_deref().unwrap(), "((char_length(\"name\") >= 1) AND (char_length(\"name\") <= 255))");
         assert_eq!((c.path.as_str(), c.code.as_str()), ("name", "a_rule"));
         assert!(c.on_create && c.on_update);
     }
@@ -483,25 +713,26 @@ mod tests {
     fn a_null_comparison_tests_for_null_and_an_enum_compares_as_text() {
         let c = compile("root_path != null && status in ['active', 'archived']").unwrap();
         assert!(c.rust.starts_with("r::and(r::is_not_null(r::field(row, \"root_path\")), r::in_list("));
-        assert_eq!(c.sql, "((\"root_path\" IS NOT NULL) AND (\"status\"::text IN ('active', 'archived')))");
+        assert_eq!(c.sql.as_deref().unwrap(), "((\"root_path\" IS NOT NULL) AND (\"status\"::text IN ('active', 'archived')))");
     }
 
     #[test]
     fn text_methods_patterns_and_lists_compile() {
-        assert_eq!(compile("!root_path.contains('..')").unwrap().sql, "(NOT (strpos(\"root_path\", '..') > 0))");
-        assert_eq!(compile("name matches '^[a-z0-9-]+$'").unwrap().sql, "(\"name\" ~ '^[a-z0-9-]+$')");
-        assert_eq!(compile("tags.length <= 10").unwrap().sql, "(cardinality(\"tags\") <= 10)");
-        assert_eq!(compile("name.trim().length > 0").unwrap().sql, "(char_length(btrim(\"name\")) > 0)");
+        assert_eq!(compile("!root_path.contains('..')").unwrap().sql.as_deref().unwrap(), "(NOT (strpos(\"root_path\", '..') > 0))");
+        assert_eq!(compile("name matches '^[a-z0-9-]+$'").unwrap().sql.as_deref().unwrap(), "(\"name\" ~ '^[a-z0-9-]+$')");
+        assert_eq!(compile("tags.length <= 10").unwrap().sql.as_deref().unwrap(), "(cardinality(\"tags\") <= 10)");
+        assert_eq!(compile("name.trim().length > 0").unwrap().sql.as_deref().unwrap(), "(char_length(btrim(\"name\")) > 0)");
     }
 
     #[test]
-    fn what_is_not_the_row_alone_is_refused_with_a_reason() {
+    fn what_a_row_rule_cannot_read_is_refused_with_a_reason() {
         for (text, says) in [
-            ("$old.name == name", "`$old`"),
-            ("$actor.id == name", "`$actor`"),
-            ("risk_score > now()", "not a row-rule function"),
+            ("$actor.has_role('admin') || name != null", "lookup into authorization data"),
+            ("$actor.email == name", "`$actor.email`"),
             ("metadata != null", "cannot read"),
+            ("risk_score > metadata.created_at", "only test it for null"),
             ("name matches '('", "does not compile"),
+            ("(now() - risk_score).years <= 150", "relation or a duration"),
         ] {
             let err = compile(text).unwrap_err();
             assert!(err.contains(says), "{text}: {err}");
@@ -512,10 +743,76 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_reading_the_row_before_the_write_is_a_transition_rule_without_sql() {
+        let c = compile("risk_score >= $old.risk_score").unwrap();
+        assert_eq!(c.rust, "r::ge(r::field(row, \"risk_score\"), r::field(old_row, \"risk_score\"))");
+        assert_eq!((c.layer, c.reads_old, c.sql.is_none()), ("transition", true, true));
+        assert!(c.time_fields.is_empty());
+    }
+
+    #[test]
+    fn a_rule_reading_the_writer_or_the_time_is_a_context_rule() {
+        let owner = compile("$actor.id == name").unwrap();
+        assert_eq!(owner.rust, "r::eq(r::actor(ctx.actor.as_deref()), r::field(row, \"name\"))");
+        assert_eq!((owner.layer, owner.sql.is_none()), ("context", true));
+        assert!(owner.time_fields.is_empty(), "only a time rule waits for a change");
+
+        let expiry = compile("root_path == null || $this.risk_score > now()").unwrap();
+        assert!(expiry.rust.ends_with("r::gt(r::field(row, \"risk_score\"), r::at(ctx.at)))"), "{}", expiry.rust);
+        assert_eq!(expiry.time_fields, vec!["root_path".to_string(), "risk_score".to_string()]);
+    }
+
+    #[test]
+    fn the_guard_checks_a_time_rule_on_update_only_when_its_fields_change() {
+        let mut rules = vec![compile("risk_score > now()").unwrap(), compile("risk_score >= $old.risk_score").unwrap()];
+        rules[1].on_create = false;
+        let guard = render_guard(&bucket(), &rules);
+        assert!(guard.contains("let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);"));
+        assert!(guard.contains("if (create || (update && r::changed(old.as_ref(), row, &[\"risk_score\"]))) && !r::holds("), "{guard}");
+        assert!(guard.contains("if (update) && !r::holds(&r::ge("), "{guard}");
+        // A guard with only row rules binds no `old`; one with only time rules binds no `old_row`.
+        assert!(!render_guard(&bucket(), &[compile("name.length > 0").unwrap()]).contains("let old"));
+        let time_only = render_guard(&bucket(), &[compile("risk_score > now()").unwrap()]);
+        assert!(time_only.contains("let old =") && !time_only.contains("let old_row"), "{time_only}");
+        // A time rule checked on create alone never asks whether an update changed anything.
+        let mut on_create = compile("risk_score > now()").unwrap();
+        on_create.on_update = false;
+        assert!(!render_guard(&bucket(), &[on_create]).contains("let old"));
+    }
+
+    #[test]
+    fn a_count_of_its_own_entity_equal_to_zero_is_a_uniqueness_rule() {
+        let u = compile_uniqueness(
+            &rule("count(Bucket, name == $this.name && id != $this.id && metadata.deleted_at == null) == 0", &["create", "update"]),
+            &bucket(),
+            &enums(),
+        )
+        .unwrap();
+        assert_eq!(u.keys, vec!["name".to_string()]);
+        assert_eq!(u.filter_sql.as_deref(), Some("((\"metadata\"->>'deleted_at') IS NULL)"));
+        assert_eq!(
+            uniqueness_audit_query(&bucket(), &u),
+            "SELECT 'a_rule' AS rule, count(*) AS breaking FROM (SELECT 1 FROM bucket.buckets \
+             WHERE \"name\" IS NOT NULL AND ((\"metadata\"->>'deleted_at') IS NULL) GROUP BY \"name\" \
+             HAVING count(*) > 1) AS duplicates;"
+        );
+        for (text, says) in [
+            ("count(User, name == $this.name) == 0", "another entity"),
+            ("count(Bucket, status == 'active') == 0", "no field that must not repeat"),
+            ("count(Bucket, name == $this.name && risk_score > now()) == 0", "an index cannot"),
+            ("name.length > 0", "not `count(..) == 0`"),
+        ] {
+            let err = compile_uniqueness(&rule(text, &["create"]), &bucket(), &enums()).unwrap_err();
+            assert!(err.contains(says), "{text}: {err}");
+        }
+    }
+
+    #[test]
     fn the_audit_query_counts_definite_breaks_over_every_row() {
+        assert_eq!(audit_query(&bucket(), &compile("$actor.id == name").unwrap()), None);
         let c = compile("risk_score <= 1.0").unwrap();
         assert_eq!(
-            audit_query(&bucket(), &c),
+            audit_query(&bucket(), &c).unwrap(),
             "SELECT 'a_rule' AS rule, count(*) AS breaking FROM bucket.buckets WHERE NOT ((\"risk_score\" <= 1.0));"
         );
     }

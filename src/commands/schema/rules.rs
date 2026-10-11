@@ -22,8 +22,14 @@ pub(super) fn execute_rules(module: &str, format: OutputFormat, suggest: bool, a
     if audit {
         for model in &module_schema.models {
             for rule in crate::rules::compile::model_row_rules(&module_schema, model) {
+                // A transition or context rule cannot be checked against stored rows.
+                let Some(query) = crate::rules::compile::audit_query(model, &rule) else { continue };
                 println!("-- {} `{}` ({})", model.name, rule.name, rule.source);
-                println!("{}", crate::rules::compile::audit_query(model, &rule));
+                println!("{query}");
+            }
+            for rule in crate::rules::compile::model_uniqueness_rules(&module_schema, model) {
+                println!("-- {} `{}` ({}): uniqueness, a unique index once enforced", model.name, rule.name, rule.source);
+                println!("{}", crate::rules::compile::uniqueness_audit_query(model, &rule));
             }
         }
         return Ok(());

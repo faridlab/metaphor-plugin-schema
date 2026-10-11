@@ -331,7 +331,7 @@ mod tests {
     /// The test schema with one row rule on `Order` and one rule the compiler does not take.
     fn schema_with_rules() -> ResolvedSchema {
         let mut resolved = create_test_schema();
-        let hook = "name: OrderRules\nmodel: Order\nrules:\n  name_length:\n    when: [create, update]\n    condition: \"name.length <= 80\"\n    code: NAME_TOO_LONG\n  only_owner:\n    when: [update]\n    condition: \"$actor.id == name\"\n";
+        let hook = "name: OrderRules\nmodel: Order\nrules:\n  name_length:\n    when: [create, update]\n    condition: \"name.length <= 80\"\n    code: NAME_TOO_LONG\n  only_owner:\n    when: [update]\n    condition: \"$actor.has_role('admin')\"\n";
         let models = resolved.schema.models.clone();
         let register = &mut resolved.schema.rule_register;
         register.read_file("order.hook.yaml", hook);
@@ -351,7 +351,7 @@ mod tests {
         assert!(service.contains("r::le(r::length(r::field(row, \"name\")), r::Val::Num(80.0_f64))"));
         assert!(service.contains("Violation::new(\"name\", \"name_too_long\""));
         assert!(service.contains("GuardOutcome { refuse: Vec::new(), shadow }"));
-        // The `$actor` rule is not a row rule: no check for it, and it stays unenforced.
+        // A role check needs a lookup: no check for it, and it stays unenforced.
         assert!(!service.contains("only_owner"));
         let statuses: Vec<_> = resolved.schema.rule_register.rules.iter().map(|r| (r.name.as_str(), r.status)).collect();
         assert_eq!(
