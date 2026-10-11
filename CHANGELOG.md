@@ -7,6 +7,22 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-10-11
+
+### Added
+
+- **Transition and context rules compile into the shadow guard.** A rule may read the row
+  before the write (`$old.x`), the writer (`$actor.id`) and the time of the write (`now()`).
+  A rule about time checks an update only when the update changes a field it reads, so a
+  later edit of a row whose deadline has passed is not a break. These rules have no SQL form
+  and no audit query. `$actor.has_role(..)` needs a lookup into authorization data and stays
+  unenforced. The generated code needs **backbone-core 3.5**.
+- **Uniqueness rules are recognized and audited.** `count(<own entity>, f == $this.f && … ) == 0`
+  compiles to its keys and filter, the shape of the partial unique index it becomes once
+  enforced; `schema rules --audit` counts the stored groups that already share the keys.
+- A key inside a JSON field (`metadata.deleted_at`) may be tested for null; it has no type,
+  so any other comparison is refused.
+
 ## [0.19.0] — 2026-10-11
 
 ### Added
