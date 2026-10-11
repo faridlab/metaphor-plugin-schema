@@ -7,6 +7,15 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.23.2] — 2026-10-11
+
+### Fixed
+
+- **The state-transition trigger is emitted only for a machine whose states are the values its
+  column holds** (an enum or text field, or a bool field with `true`/`false` states). A bool field
+  with named states (`enforced`/`unenforced`) got a trigger that warned on every legitimate toggle;
+  such a machine now gets a `drop_state_transition_check_<table>` migration removing it.
+
 ## [0.23.1] — 2026-10-11
 
 ### Fixed
