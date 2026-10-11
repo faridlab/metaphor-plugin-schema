@@ -166,7 +166,14 @@ impl HandlerGenerator {
         // crate root and in `middleware`. Only the middleware one carries
         // `user_id` / `roles` / `permissions`, which is what handlers need.
         writeln!(output, "// Auth integration (optional)").unwrap();
-        writeln!(output, "#[cfg(feature = \"auth\")]").unwrap();
+        // A transition checks its caller's permissions whatever the module's features: the
+        // handlers read the AuthContext the host provides, so the import is unconditional there.
+        let has_transitions = hook
+            .and_then(|h| h.state_machine.as_ref())
+            .is_some_and(|sm| self.find_status_field(model, &sm.field).is_some());
+        if !has_transitions {
+            writeln!(output, "#[cfg(feature = \"auth\")]").unwrap();
+        }
         writeln!(output, "use backbone_auth::middleware::AuthContext;").unwrap();
         writeln!(output, "#[cfg(feature = \"auth\")]").unwrap();
         writeln!(output, "use backbone_auth::AuthMiddleware;").unwrap();
@@ -987,7 +994,9 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             // Destructure the Extension so `auth.permissions` / `auth.roles`
             // resolve directly to the inner AuthContext fields. `axum::Extension`
             // does not impl `Deref<Target = T>`.
-            writeln!(output, "    #[cfg(feature = \"auth\")] axum::Extension(auth): axum::Extension<AuthContext>,").unwrap();
+            // Optional so a missing AuthContext is refused here (401), never skipped and never a
+            // bare extractor failure.
+            writeln!(output, "    auth: Option<axum::Extension<AuthContext>>,").unwrap();
             writeln!(output, ") -> impl axum::response::IntoResponse {{").unwrap();
             writeln!(output, "    use axum::{{http::StatusCode, Json}};").unwrap();
             writeln!(output).unwrap();
@@ -1004,8 +1013,12 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             writeln!(output, "    }};").unwrap();
             writeln!(output).unwrap();
 
-            writeln!(output, "    // Check permission (if auth enabled)").unwrap();
-            writeln!(output, "    #[cfg(feature = \"auth\")]").unwrap();
+            // The caller's permission is checked whatever the module's cargo features: a
+            // transition without a known caller is refused.
+            writeln!(output, "    // Check permission").unwrap();
+            writeln!(output, "    let Some(axum::Extension(auth)) = auth else {{").unwrap();
+            writeln!(output, "        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<{}>::error(\"A transition needs an authenticated caller\")));", body_type).unwrap();
+            writeln!(output, "    }};").unwrap();
             writeln!(output, "    {{").unwrap();
             // Permission-based check: use transition's allowed_roles() method
             writeln!(
@@ -1515,6 +1528,10 @@ mod tests {
         assert!(out.contains("backbone_core::write_guard::as_transition(\"put_on_hold\", service.partial_update(&id, fields))"), "{out}");
         // An unreadable stored state is refused, never read as the initial state.
         assert!(out.contains("StatusCode::CONFLICT") && !out.contains("unwrap_or(TicketState::default())"), "{out}");
+        // The caller's permission is checked whatever the module's features, and an unknown
+        // caller is refused rather than let through.
+        assert!(!out.contains("cfg(feature = \"auth\")"), "no permission check behind a feature: {out}");
+        assert!(out.contains("auth: Option<axum::Extension<AuthContext>>,") && out.contains("StatusCode::UNAUTHORIZED"), "{out}");
 
         // A state field that is not an enum (a bool `resolved`) gets no routes, never another column.
         let flag = Model {
