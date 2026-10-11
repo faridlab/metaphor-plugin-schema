@@ -71,6 +71,12 @@ pub struct DeclaredRule {
     /// rule does not say, which the legacy parser reads as `db`.
     pub enforcement: Option<String>,
     pub justification: Option<String>,
+    /// The hand-written functions that enforce the rule, as `<file under the module>::<fn>`
+    /// (`src/domain/services/posting_rules.rs::validate`), comma-separated when the rule holds
+    /// on several paths: for a rule on a verb, whose check lives in that verb's code rather than
+    /// in a generated guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforced_by: Option<String>,
     pub status: EnforcementStatus,
     /// Whether its condition or assertion parses in the rule grammar and
     /// resolves against its model; set by [`RuleRegister::check`].
@@ -117,6 +123,8 @@ pub enum EnforcementStatus {
     /// Compiled into the entity's write guard, which reports a break without
     /// refusing the write yet.
     Shadow,
+    /// Enforced by the hand-written function its `enforced_by:` names, which exists.
+    Verb,
 }
 
 /// One state machine as its hook file declares it.
@@ -297,6 +305,38 @@ impl RuleRegister {
         }
     }
 
+    /// Check every `enforced_by:` against the module's sources under `root`: the file must
+    /// exist and define the function. A rule whose claim holds reads `verb`; one whose claim
+    /// does not is warned about, so the declaration cannot outlive the code it names.
+    pub fn verify_enforced_by(&mut self, root: &std::path::Path) {
+        for rule in &mut self.rules {
+            let Some(claim) = rule.enforced_by.clone() else { continue };
+            // One function, or several separated by commas when the rule holds on several paths.
+            let found = claim.split(',').map(str::trim).try_for_each(|one| one.rsplit_once("::").and_then(|(file, func)| {
+                let text = std::fs::read_to_string(root.join(file)).ok()?;
+                let defines = text.lines().any(|l| {
+                    let l = l.trim_start();
+                    let l = l.strip_prefix("pub(crate) ").or_else(|| l.strip_prefix("pub(super) ")).or_else(|| l.strip_prefix("pub ")).unwrap_or(l);
+                    let l = l.strip_prefix("async ").unwrap_or(l);
+                    l.strip_prefix("fn ").is_some_and(|rest| rest.starts_with(func) && rest[func.len()..].starts_with(['(', '<']))
+                });
+                defines.then_some(())
+            }));
+            match found {
+                Some(()) if rule.status == EnforcementStatus::Unenforced => rule.status = EnforcementStatus::Verb,
+                Some(()) => {}
+                None => self.warnings.push(RegisterWarning {
+                    source: rule.source.clone(),
+                    message: format!(
+                        "rule `{}` says it is enforced by `{claim}`, but no such function exists; \
+                         write it as `<file under the module>::<fn>`",
+                        rule.name
+                    ),
+                }),
+            }
+        }
+    }
+
     pub fn unenforced_rules(&self) -> usize {
         self.rules.iter().filter(|r| r.status == EnforcementStatus::Unenforced).count()
     }
@@ -397,5 +437,32 @@ mod tests {
         register.bind(&models(&["Journal"]));
         assert_eq!(register.rules[0].bound_model, None);
         assert!(register.warnings.iter().any(|w| w.message.contains("not a model of this module")));
+    }
+}
+
+#[cfg(test)]
+mod enforced_by_tests {
+    use super::*;
+
+    #[test]
+    fn an_enforced_by_claim_holds_only_while_every_function_it_names_exists() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(
+            root.path().join("src/verbs.rs"),
+            "pub async fn submit(x: u8) {}\npub(crate) fn validate<T>(t: T) {}\nfn submit_all() {}\n",
+        )
+        .unwrap();
+        let hook = "name: Rules\nrules:\n  a:\n    when: [submit]\n    condition: \"x > 0\"\n    enforced_by: \"src/verbs.rs::submit, src/verbs.rs::validate\"\n  b:\n    when: [submit]\n    condition: \"x > 0\"\n    enforced_by: \"src/verbs.rs::sub\"\n  c:\n    when: [submit]\n    condition: \"x > 0\"\n    enforced_by: \"src/gone.rs::submit\"\n";
+        let mut register = RuleRegister::default();
+        register.read_file("rules.hook.yaml", hook);
+        register.verify_enforced_by(root.path());
+        let status: Vec<_> = register.rules.iter().map(|r| (r.name.as_str(), r.status)).collect();
+        assert_eq!(
+            status,
+            vec![("a", EnforcementStatus::Verb), ("b", EnforcementStatus::Unenforced), ("c", EnforcementStatus::Unenforced)],
+            "`sub` is not `submit_all`, and a missing file proves nothing"
+        );
+        assert_eq!(register.warnings.iter().filter(|w| w.message.contains("no such function")).count(), 2);
     }
 }

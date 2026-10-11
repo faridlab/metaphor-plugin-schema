@@ -866,6 +866,7 @@ mod tests {
             severity: None,
             enforcement: None,
             justification: None,
+            enforced_by: None,
             status: EnforcementStatus::Unenforced,
             expression: expr::check(text, Some(&m)),
         }
