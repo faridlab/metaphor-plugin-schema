@@ -74,6 +74,7 @@ fn target_label(t: &GenerationTarget) -> &'static str {
         GenerationTarget::IntegrationTest => "integration-test",
         GenerationTarget::AuditTriggers => "audit-triggers",
         GenerationTarget::DataChangeAudit => "data-change-audit",
+        GenerationTarget::StateTransitionCheck => "state-transition-check",
         GenerationTarget::AppState => "app-state",
         GenerationTarget::RoutesComposer => "routes-composer",
         GenerationTarget::HandlersModule => "handlers-module",

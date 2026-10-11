@@ -10,6 +10,7 @@ pub mod computed;
 pub mod config;
 pub mod cqrs;
 pub mod data_change_audit;
+pub mod state_transition_check;
 pub mod domain_service;
 pub mod events;
 pub mod flow;
@@ -51,6 +52,7 @@ pub use computed::ComputedGenerator;
 pub use config::ConfigGenerator;
 pub use cqrs::CqrsGenerator;
 pub use data_change_audit::DataChangeAuditGenerator;
+pub use state_transition_check::StateTransitionCheckGenerator;
 pub use domain_service::DomainServiceGenerator;
 pub use events::EventsGenerator;
 pub use flow::FlowGenerator;
@@ -582,6 +584,7 @@ pub fn generate_all_with_options(
             GenerationTarget::IntegrationTest,
             GenerationTarget::AuditTriggers,
             GenerationTarget::DataChangeAudit,
+            GenerationTarget::StateTransitionCheck,
             // Framework compliance generators
             GenerationTarget::AppState,
             GenerationTarget::RoutesComposer,
@@ -643,6 +646,9 @@ pub fn generate_all_with_options(
                     GenerationTarget::DataChangeAudit => {
                         DataChangeAuditGenerator::new().generate(s)?
                     }
+                    GenerationTarget::StateTransitionCheck => {
+                        StateTransitionCheckGenerator::new().generate(s)?
+                    }
                     // Framework compliance generators
                     GenerationTarget::AppState => AppStateGenerator::new().generate(s)?,
                     GenerationTarget::RoutesComposer => {
@@ -701,6 +707,8 @@ pub enum GenerationTarget {
     IntegrationTest,
     AuditTriggers,
     DataChangeAudit,
+    /// A shadow trigger per state machine checking each move against the declared transitions.
+    StateTransitionCheck,
     // Framework compliance targets
     AppState,
     RoutesComposer,
@@ -755,6 +763,7 @@ impl GenerationTarget {
             "data-change-audit" | "data_change_audit" | "audited" | "data-audit" => {
                 Some(Self::DataChangeAudit)
             }
+            "state-transition-check" | "state_transition_check" => Some(Self::StateTransitionCheck),
             // Framework compliance generators
             "app-state" | "app_state" | "appstate" => Some(Self::AppState),
             "routes-composer" | "routes_composer" => Some(Self::RoutesComposer),
@@ -800,6 +809,7 @@ impl GenerationTarget {
             Self::IntegrationTest,
             Self::AuditTriggers,
             Self::DataChangeAudit,
+            Self::StateTransitionCheck,
             // Framework compliance generators
             Self::AppState,
             Self::RoutesComposer,
