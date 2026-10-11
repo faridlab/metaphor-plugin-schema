@@ -7,7 +7,38 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-10-11
+
+### Added
+
+- **The extension-file layout (ADR-0031)**, for a module with `generators: extensions: true`.
+  Hand code lives beside generated files, never in them: `lib.ext.rs` (the module's
+  `ModuleExt` / `ModuleBuilderExt` state, reached through `Deref`, its `impl ThisModule` /
+  `impl ThisModuleBuilder` methods, and a `build` hook receiving `ModuleParts`: the pool and
+  every generated service and repository), `mod.ext.rs` (a directory's hand-written module
+  declarations and re-exports, `include!`d by its `mod.rs`, or by `lib.rs` for `src/`), and
+  `<name>.ext.rs` beside an item file (attached through `#[path]` and re-exported). A
+  validator with an extension passes through its `extend`; an entity with an extension gets no
+  default domain-method stubs. Every `*.ext.rs` is user-owned.
+- **`schema doctor` fails on a hand-edited generated file**: for a layout module, every
+  generated `src/**/*.rs` file must equal what a generation writes now, and none may still hold
+  hand code in a CUSTOM zone.
+- **Secret fields are emitted for the runtime**: `@sensitive` and `@hashed` fields become
+  `EntityRepoMeta::secret_fields`, and each relation's target secrets
+  `relation_secret_fields`, so no generic route serves them (backbone-core 3.1+); secrets are
+  left out of the searchable columns; a state transition of a model with secrets answers
+  through `backbone_core::http::without_secrets` (backbone-core 3.2+).
+- **`schema validate` secret rules**: an `@audited` model with a secret field is an error (the
+  audit trail stores whole rows), and a field named like a secret that carries none of
+  `@sensitive`, `@hashed` or `@not_secret` is a warning.
+
 ### Changed
+
+- **CUSTOM zones are retired for a layout module**: its generated Rust files carry no markers
+  and are written whole, and a generation refuses to overwrite a generated file that still
+  holds hand code in a zone of any form. YAML config and seed files still merge as before.
+- **`@sensitive` is no longer `@private`**: a secret is served to no caller, a platform caller
+  or the row's owner included; `@private` keeps its owner/platform rule.
 
 - **Targets nothing uses are off by default.** `trigger`, `specification`, `versioning`,
   `graphql`, `grpc` and `proto`, and the Rust seeders of `seeder` (`src/seeders`, the seeder
