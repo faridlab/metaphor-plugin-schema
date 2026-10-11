@@ -21,7 +21,9 @@
 //! - Otherwise the migration is genuinely new: assign a fresh timestamp
 //!   strictly greater than every existing migration timestamp, shared by the
 //!   up/down pair. Multiple new migrations get successive timestamps, assigned
-//!   in sorted base-name order for determinism.
+//!   in the order of the positional timestamps the generators gave them (base
+//!   name breaking ties), so a migration that depends on another — an audit
+//!   trigger on a new table — still sorts after it.
 //! - A HAND-WRITTEN migration (no marker) sharing a base name means the table
 //!   is already covered: the generated migration is DROPPED (not emitted at a
 //!   fresh timestamp), so the generator never creates a duplicate of a table
@@ -86,7 +88,21 @@ pub(super) fn stabilize_migration_timestamps(generated: &mut GeneratedOutput, ou
     // this table on disk, so emitting a generated one would duplicate it.
     let mut drop_paths: Vec<PathBuf> = Vec::new();
 
-    for (base, paths) in &by_name {
+    // Decide in the order the generators placed the migrations (their positional timestamps),
+    // so a genuinely new migration keeps its place relative to the others: an audit trigger
+    // named `add_…` still lands after the `create_…` table it attaches to. The base name breaks
+    // ties, which keeps the assignment deterministic.
+    let mut ordered: Vec<(&String, &Vec<PathBuf>)> = by_name.iter().collect();
+    ordered.sort_by_cached_key(|(base, paths)| {
+        let positional = paths
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str()?.get(..14).map(str::to_string))
+            .min()
+            .unwrap_or_default();
+        (positional, (*base).clone())
+    });
+
+    for (base, paths) in ordered {
         // A hand-written migration already owns this table — don't emit a
         // generated duplicate. (Generator-authored bases fall through to the
         // reuse-or-fresh logic below; only no-marker coverage is a drop.) The
@@ -462,6 +478,41 @@ mod tests {
         tses.sort();
         tses.dedup();
         assert_eq!(tses.len(), 2); // no duplicates
+    }
+
+    #[test]
+    fn new_migrations_keep_the_order_the_generators_gave_them() {
+        // A new audited entity yields its table and the table's audit trigger; the trigger's
+        // name sorts first alphabetically, but it must still apply after the table exists.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let md = dir.join("migrations");
+        std::fs::create_dir_all(&md).unwrap();
+        write_authored(&md, "20260927110003", "create_salary_component_table", ".up.sql");
+
+        let mut generated = GeneratedOutput::default();
+        for d in [".up.sql", ".down.sql"] {
+            generated.files.insert(
+                mig("20260927110004", "create_salary_component_version_table", d),
+                "-- table\n".to_string(),
+            );
+            generated.files.insert(
+                mig("20260927110008", "add_data_change_audit_salary_component_versions", d),
+                "-- trigger\n".to_string(),
+            );
+        }
+
+        stabilize_migration_timestamps(&mut generated, dir);
+
+        for d in [".up.sql", ".down.sql"] {
+            assert!(has(&generated, "20260927110004", "create_salary_component_version_table", d));
+            assert!(has(
+                &generated,
+                "20260927110005",
+                "add_data_change_audit_salary_component_versions",
+                d
+            ));
+        }
     }
 
     #[test]
