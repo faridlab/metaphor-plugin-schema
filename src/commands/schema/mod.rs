@@ -96,6 +96,11 @@ pub enum SchemaAction {
         /// SQL style or with `=>`; nothing is written
         #[arg(long)]
         suggest: bool,
+
+        /// Print, for every rule compiled into a write guard, the SQL query counting the
+        /// stored rows that break it; run it before the rule is enforced
+        #[arg(long)]
+        audit: bool,
     },
 
     /// Validate cross-module foreign keys across the whole workspace
@@ -345,7 +350,7 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         SchemaAction::Parse { path, format } => execute_parse(&path, format),
         SchemaAction::Validate { module, warnings } => execute_validate(&module, warnings),
         SchemaAction::ValidateWorkspace => execute_validate_workspace(),
-        SchemaAction::Rules { module, format, suggest } => execute_rules(&module, format, suggest),
+        SchemaAction::Rules { module, format, suggest, audit } => execute_rules(&module, format, suggest, audit),
         SchemaAction::Generate {
             module,
             target,

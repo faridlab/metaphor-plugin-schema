@@ -72,6 +72,36 @@ pub(super) fn files_with_hand_code(generated: &GeneratedOutput, output_dir: &Pat
     out
 }
 
+/// The generated row-rule guards (`<Entity>RowRules`) a hand-owned `src/lib.rs` never attaches.
+/// The generated build attaches each one; a module that owns its build must attach them itself
+/// (`.with_guard(Arc::new(<Entity>RowRules))`), or the entity's declared rules check nothing.
+pub(in crate::commands::schema) fn unattached_guards(
+    generated: &GeneratedOutput,
+    output_dir: &Path,
+    user_owned: &GlobSet,
+) -> Vec<String> {
+    if !user_owned.is_match("src/lib.rs") {
+        return Vec::new();
+    }
+    let build: String = ["src/lib.rs", "src/lib.ext.rs"]
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(output_dir.join(f)).ok())
+        .collect();
+    let mut missing: Vec<String> = generated
+        .files
+        .values()
+        .flat_map(|content| {
+            content.lines().filter_map(|l| {
+                l.strip_prefix("pub struct ").and_then(|r| r.strip_suffix("RowRules;")).map(|e| format!("{e}RowRules"))
+            })
+        })
+        .filter(|guard| !build.contains(guard.as_str()))
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
 /// Remove the CUSTOM marker lines from a layout module's generated files: its hand code lives
 /// in extension files, so a generated file carries no zone to edit (ADR-0031). A zone the
 /// generator itself fills is never emitted between markers, so only empty markers are removed.

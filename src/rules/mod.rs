@@ -12,6 +12,7 @@
 //! generated file.
 
 pub mod catalog;
+pub mod compile;
 pub mod expr;
 pub mod reader;
 pub mod rewrite;
@@ -107,13 +108,15 @@ impl RuleBody {
     }
 }
 
-/// How a declared rule is enforced by generated code. Every rule is
-/// `Unenforced` until the emitters that compile rules exist; the report
-/// counts them so that number can only go down.
+/// How a declared rule is enforced by generated code. The report counts the
+/// unenforced ones, so that number can only go down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnforcementStatus {
     Unenforced,
+    /// Compiled into the entity's write guard, which reports a break without
+    /// refusing the write yet.
+    Shadow,
 }
 
 /// One state machine as its hook file declares it.
@@ -274,6 +277,19 @@ impl RuleRegister {
             }
         }
         r
+    }
+
+    /// Mark every rule the row-rule compiler takes as compiled into its
+    /// entity's write guard, the same set the generator emits.
+    pub fn mark_compiled(&mut self, models: &[Model], enums: &std::collections::HashSet<String>) {
+        for rule in &mut self.rules {
+            let Some(model) = rule.bound_model.as_ref().and_then(|n| models.iter().find(|m| &m.name == n)) else {
+                continue;
+            };
+            if compile::compile_row_rule(rule, model, enums).is_ok() {
+                rule.status = EnforcementStatus::Shadow;
+            }
+        }
     }
 
     pub fn unenforced_rules(&self) -> usize {

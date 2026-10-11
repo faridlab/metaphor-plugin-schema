@@ -344,6 +344,8 @@ pub(super) fn build_module_schema(
     let models = module_schema.models.clone();
     module_schema.rule_register.bind(&models);
     module_schema.rule_register.check(&models);
+    let enums = module_schema.enums.iter().map(|e| e.name.clone()).collect();
+    module_schema.rule_register.mark_compiled(&models, &enums);
 
     Ok((module_schema, errors))
 }

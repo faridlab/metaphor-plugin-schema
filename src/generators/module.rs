@@ -634,10 +634,16 @@ impl ModuleGenerator {
                 snake_name, name
             )
             .unwrap();
+            // An entity whose schema declares row rules gets its generated guard.
+            let guard = if crate::rules::compile::model_row_rules(&schema.schema, model).is_empty() {
+                String::new()
+            } else {
+                format!(".with_guard(Arc::new(crate::application::service::{}RowRules))", name)
+            };
             writeln!(
                 output,
-                "        let {}_service = Arc::new({}::with_repository({}_repository.clone()));",
-                snake_name, service_type, snake_name
+                "        let {}_service = Arc::new({}::with_repository({}_repository.clone()){});",
+                snake_name, service_type, snake_name, guard
             )
             .unwrap();
             writeln!(output).unwrap();

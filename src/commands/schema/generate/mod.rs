@@ -13,7 +13,7 @@
 //! 6. summary print.
 //! 7. [`post_check`] — optional `cargo check` on the result.
 
-mod extensions;
+pub(in crate::commands::schema) mod extensions;
 mod announce;
 mod change_detect;
 mod load;
@@ -98,6 +98,12 @@ pub(super) fn execute_generate(
         }
         extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
         extensions::strip_custom_markers(&mut generated);
+    }
+    for guard in extensions::unattached_guards(&generated, &output_dir, &user_owned) {
+        println!(
+            "  {} the hand-owned src/lib.rs never attaches {guard}: add `.with_guard(Arc::new({guard}))` where it builds the service, or the entity's rules check nothing",
+            "⚠".yellow().bold()
+        );
     }
 
     // Stabilize migration filenames against on-disk state so existing

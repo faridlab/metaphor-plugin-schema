@@ -15,10 +15,19 @@ use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
 use super::OutputFormat;
 
-pub(super) fn execute_rules(module: &str, format: OutputFormat, suggest: bool) -> Result<()> {
+pub(super) fn execute_rules(module: &str, format: OutputFormat, suggest: bool, audit: bool) -> Result<()> {
     let schema_path = find_module_schema_path(module)?;
     let schema_files = find_schema_files(&schema_path)?;
     let (module_schema, _parse_errors) = build_module_schema(module, &schema_files)?;
+    if audit {
+        for model in &module_schema.models {
+            for rule in crate::rules::compile::model_row_rules(&module_schema, model) {
+                println!("-- {} `{}` ({})", model.name, rule.name, rule.source);
+                println!("{}", crate::rules::compile::audit_query(model, &rule));
+            }
+        }
+        return Ok(());
+    }
     let register = &module_schema.rule_register;
 
     match format {

@@ -191,7 +191,16 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
 
     // A module on the extension layout keeps no hand code in a generated file (ADR-0031):
     // every generated `src/**/*.rs` file must equal what a generation writes now.
-    let edited = generated_file_drift(module)?;
+    let (edited, unattached) = generated_file_drift(module)?;
+    for guard in &unattached {
+        println!(
+            "  {} the hand-owned src/lib.rs never attaches {guard}: the entity's declared rules check nothing",
+            "✗".red().bold()
+        );
+    }
+    if !unattached.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} generated rule guard(s) are not attached to their service", unattached.len());
+    }
     for rel in &edited {
         println!(
             "  {} {} differs from the generator's output: move the hand code into an extension file, or regenerate if the schema changed",
@@ -263,10 +272,11 @@ struct Finding {
 /// The generated `src/**/*.rs` files of a layout module whose content on disk differs from what
 /// a generation writes now, as paths relative to the module root. Empty for a module that is
 /// not on the extension layout.
-fn generated_file_drift(module: &str) -> Result<Vec<String>> {
+fn generated_file_drift(module: &str) -> Result<(Vec<String>, Vec<String>)> {
     let Some((generated, root, user_owned, hand)) = super::generate::render_layout_module(module)? else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
+    let unattached = super::generate::extensions::unattached_guards(&generated, &root, &user_owned);
     for f in &hand {
         println!("  {} {} still holds hand code in a CUSTOM zone: move it into an extension file", "✗".red().bold(), f);
     }
@@ -282,7 +292,7 @@ fn generated_file_drift(module: &str) -> Result<Vec<String>> {
         }
     }
     edited.sort();
-    Ok(edited)
+    Ok((edited, unattached))
 }
 
 pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
