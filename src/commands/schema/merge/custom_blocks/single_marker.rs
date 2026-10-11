@@ -56,7 +56,7 @@ impl CustomRegion {
     }
 
     /// Whether the region carries hand-written code worth preserving.
-    fn has_real_code(&self) -> bool {
+    pub(super) fn has_real_code(&self) -> bool {
         self.first_code_line().is_some()
     }
 

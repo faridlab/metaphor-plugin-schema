@@ -144,12 +144,14 @@ pub(super) fn write_generated_files(
             }
 
             // (5) Strategy routing.
-            // A module on the extension layout keeps no hand code in a generated file, so its
-            // output is written whole: there is nothing to merge back (ADR-0031).
-            let final_content = if merge_custom {
-                route_merge(&full_path, content, &pb, &mut stats.custom_warnings)?
-            } else {
+            // A module on the extension layout keeps no hand code in a generated Rust file, so
+            // that file is written whole: there is nothing to merge back (ADR-0031). Its YAML
+            // config and seed files still merge as before.
+            let is_rs = full_path.extension().and_then(|s| s.to_str()) == Some("rs");
+            let final_content = if !merge_custom && is_rs {
                 content.clone()
+            } else {
+                route_merge(&full_path, content, &pb, &mut stats.custom_warnings)?
             };
 
             fs::write(&full_path, final_content)

@@ -18,6 +18,6 @@ mod custom_blocks;
 mod seed;
 mod yaml_config;
 
-pub(super) use custom_blocks::{detect_unprotected_custom_code, merge_rust_mod_custom};
+pub(super) use custom_blocks::{detect_unprotected_custom_code, hand_code_regions, merge_rust_mod_custom};
 pub(super) use seed::{merge_seed_file, merge_seed_order};
 pub(super) use yaml_config::merge_yaml_config;

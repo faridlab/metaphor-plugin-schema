@@ -264,9 +264,12 @@ struct Finding {
 /// a generation writes now, as paths relative to the module root. Empty for a module that is
 /// not on the extension layout.
 fn generated_file_drift(module: &str) -> Result<Vec<String>> {
-    let Some((generated, root, user_owned)) = super::generate::render_layout_module(module)? else {
+    let Some((generated, root, user_owned, hand)) = super::generate::render_layout_module(module)? else {
         return Ok(Vec::new());
     };
+    for f in &hand {
+        println!("  {} {} still holds hand code in a CUSTOM zone: move it into an extension file", "✗".red().bold(), f);
+    }
     let mut edited = Vec::new();
     for (path, content) in &generated.files {
         let rel = path.to_string_lossy().replace('\\', "/");

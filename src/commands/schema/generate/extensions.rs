@@ -45,6 +45,33 @@ pub(super) fn weave_extensions(generated: &mut GeneratedOutput, output_dir: &Pat
     }
 }
 
+/// The generated Rust files whose copy on disk still holds hand code in a CUSTOM zone, in any
+/// of the merge's marker forms (paired, `START >>>`/`END >>>`, a bare marker running to a blank
+/// line, an inline tag): those where merging the disk copy into fresh output would keep
+/// anything. A layout module's generated files are written whole, so such a file must not be
+/// overwritten until its hand code has moved to an extension file. Run before
+/// [`strip_custom_markers`], while the fresh output still carries the zones the merge anchors on.
+pub(super) fn files_with_hand_code(generated: &GeneratedOutput, output_dir: &Path, user_owned: &GlobSet) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, content) in &generated.files {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        if !rel.ends_with(".rs") || rel.ends_with(".ext.rs") || user_owned.is_match(&rel) {
+            continue;
+        }
+        let disk = output_dir.join(path);
+        if !disk.is_file() {
+            continue;
+        }
+        if let Ok(existing) = std::fs::read_to_string(&disk) {
+            if !super::super::merge::hand_code_regions(&existing, content).is_empty() {
+                out.push(rel);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Remove the CUSTOM marker lines from a layout module's generated files: its hand code lives
 /// in extension files, so a generated file carries no zone to edit (ADR-0031). A zone the
 /// generator itself fills is never emitted between markers, so only empty markers are removed.
@@ -99,6 +126,20 @@ mod tests {
         assert!(m.ends_with("include!(\"mod.ext.rs\");\n"), "{m}");
         let u = &generated.files[&PathBuf::from("src/application/service/user_service.rs")];
         assert!(u.contains("#[path = \"user_service.ext.rs\"]\nmod user_service_ext;\npub use user_service_ext::*;"), "{u}");
+    }
+
+    #[test]
+    fn a_generated_file_still_holding_hand_code_in_any_zone_form_is_found() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src/exports")).unwrap();
+        let fresh = "pub mod types;\n// <<< CUSTOM SERVICES START >>>\n// <<< CUSTOM SERVICES END >>>\n";
+        std::fs::write(root.path().join("src/exports/services.rs"), "pub mod types;\n// <<< CUSTOM SERVICES START >>>\npub trait QueryService {}\n// <<< CUSTOM SERVICES END >>>\n").unwrap();
+        std::fs::write(root.path().join("src/exports/events.rs"), fresh).unwrap();
+        let mut generated = GeneratedOutput::new();
+        generated.add_file(PathBuf::from("src/exports/services.rs"), fresh);
+        generated.add_file(PathBuf::from("src/exports/events.rs"), fresh);
+        let none = globset::GlobSetBuilder::new().build().unwrap();
+        assert_eq!(files_with_hand_code(&generated, root.path(), &none), vec!["src/exports/services.rs".to_string()]);
     }
 
     #[test]

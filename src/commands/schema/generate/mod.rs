@@ -84,6 +84,18 @@ pub(super) fn execute_generate(
     let user_owned = load_user_owned_globs(&output_dir)?;
     let layout = resolved.schema.generators_config.as_ref().and_then(|c| c.extensions) == Some(true);
     if layout {
+        // Nothing hand-written may be overwritten: refuse while a generated file still holds
+        // hand code in a CUSTOM zone (it belongs in an extension file).
+        let hand = extensions::files_with_hand_code(&generated, &output_dir, &user_owned);
+        if !hand.is_empty() {
+            for f in &hand {
+                println!("  {} {} still holds hand code in a CUSTOM zone", "✗".red().bold(), f);
+            }
+            anyhow::bail!(
+                "{} generated file(s) still hold hand code: move it into extension files (ADR-0031) before regenerating",
+                hand.len()
+            );
+        }
         extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
         extensions::strip_custom_markers(&mut generated);
     }
@@ -128,7 +140,7 @@ pub(super) fn execute_generate(
 /// module root and its `user_owned` set, so a caller can compare them with what is on disk.
 pub(in crate::commands::schema) fn render_layout_module(
     module: &str,
-) -> Result<Option<(crate::generators::GeneratedOutput, PathBuf, globset::GlobSet)>> {
+) -> Result<Option<(crate::generators::GeneratedOutput, PathBuf, globset::GlobSet, Vec<String>)>> {
     let Some(LoadedSchema { schema_path, resolved }) = load_and_resolve(module, None, None, None, false)? else {
         return Ok(None);
     };
@@ -140,9 +152,10 @@ pub(in crate::commands::schema) fn render_layout_module(
     let options = GenerationOptions { split: false, group_by_domain: true, output_dir: Some(output_dir.clone()) };
     let mut generated = generate_all_with_options(&resolved, &targets, &options)?;
     let user_owned = load_user_owned_globs(&output_dir)?;
+    let hand = extensions::files_with_hand_code(&generated, &output_dir, &user_owned);
     extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
     extensions::strip_custom_markers(&mut generated);
-    Ok(Some((generated, output_dir, user_owned)))
+    Ok(Some((generated, output_dir, user_owned, hand)))
 }
 
 /// Phase 3: run every selected generator and collect the produced files

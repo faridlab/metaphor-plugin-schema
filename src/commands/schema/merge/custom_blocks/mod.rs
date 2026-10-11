@@ -29,6 +29,33 @@ use std::path::Path;
 use paired_methods::merge_custom_methods_block;
 use single_marker::{insert_custom_blocks, parse_custom_regions};
 
+/// The names of the CUSTOM regions in `existing` that hold hand-written code: a region (in any
+/// marker form) with a real code line that the freshly `generated` file does not already carry,
+/// or a `CUSTOM METHODS` paired block with real content. Placeholder comments do not count.
+pub(in crate::commands::schema) fn hand_code_regions(existing: &str, generated: &str) -> Vec<String> {
+    let generated_lines: Vec<String> = generated.lines().map(str::to_string).collect();
+    let mut out: Vec<String> = parse_custom_regions(existing, &generated_lines)
+        .into_iter()
+        .filter(|r| r.has_real_code())
+        .map(|r| if r.name.is_empty() { "custom".to_string() } else { r.name })
+        .collect();
+    let lines: Vec<&str> = existing.lines().collect();
+    if let (Some(s), Some(e)) = (
+        lines.iter().position(|l| l.contains("// <<< CUSTOM METHODS START >>>")),
+        lines.iter().position(|l| l.contains("// <<< CUSTOM METHODS END >>>")),
+    ) {
+        if e > s
+            && lines[s + 1..e].iter().any(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with("//") && !generated_lines.iter().any(|g| g.trim() == t)
+            })
+        {
+            out.push("methods".to_string());
+        }
+    }
+    out
+}
+
 /// Merge Rust files (typically `mod.rs`, but the strategy applies to any
 /// generated `.rs` file), preserving `// <<< CUSTOM` regions.
 ///
