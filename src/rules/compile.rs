@@ -300,6 +300,58 @@ pub fn uniqueness_audit_query(model: &Model, rule: &CompiledUnique) -> String {
     )
 }
 
+/// A foreign key a field declares (`@foreign_key(Entity.column)`, quoted or bare) on another
+/// entity of the same module: the reference an existence rule rests on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclaredForeignKey {
+    pub field: String,
+    pub target: String,
+    pub target_column: String,
+    /// The declaration named the target's table where a column belongs
+    /// (`@foreign_key(Event.events)`); read as the target's primary key.
+    pub names_table: bool,
+}
+
+/// The same-module foreign keys `model`'s fields declare, in field order. A reference into
+/// another module is left out: the workspace validator checks those.
+pub fn declared_foreign_keys(schema: &crate::ast::ModuleSchema, model: &Model) -> Vec<DeclaredForeignKey> {
+    use crate::ast::AttributeValue;
+    model
+        .fields
+        .iter()
+        .filter_map(|f| {
+            let (_, v) = f.attributes.iter().find(|a| a.name == "foreign_key")?.args.first()?;
+            let (AttributeValue::String(s) | AttributeValue::Ident(s)) = v else { return None };
+            let [entity, column] = s.split('.').collect::<Vec<_>>()[..] else { return None };
+            let target = schema.models.iter().find(|m| m.name == entity)?;
+            let names_table = target.find_field(column).is_none() && column == target.collection_name();
+            let target_column = if names_table {
+                target.primary_key().map(|p| p.name.clone()).unwrap_or_else(|| "id".into())
+            } else {
+                column.to_string()
+            };
+            Some(DeclaredForeignKey { field: f.name.clone(), target: entity.to_string(), target_column, names_table })
+        })
+        .collect()
+}
+
+/// The audit query for a declared foreign key: how many stored rows reference a row that does
+/// not exist. Run before the constraint is added, since `VALIDATE` fails on any such row.
+pub fn foreign_key_audit_query(schema: &crate::ast::ModuleSchema, model: &Model, fk: &DeclaredForeignKey) -> Option<String> {
+    let target = schema.models.iter().find(|m| m.name == fk.target)?;
+    Some(format!(
+        "SELECT 'fk_{}_{}' AS rule, count(*) AS breaking FROM {} c WHERE c.\"{}\" IS NOT NULL \
+         AND NOT EXISTS (SELECT 1 FROM {} p WHERE p.\"{}\" = c.\"{}\");",
+        model.collection_name(),
+        fk.field,
+        model.qualified_table_name(),
+        fk.field,
+        target.qualified_table_name(),
+        fk.target_column,
+        fk.field
+    ))
+}
+
 /// The Rust items of `model`'s write guard: `<Model>RowRules`, checking each compiled row rule
 /// against the row a create or update would store. Every rule runs in shadow.
 pub fn render_guard(model: &Model, rules: &[CompiledRowRule]) -> String {
@@ -805,6 +857,35 @@ mod tests {
             let err = compile_uniqueness(&rule(text, &["create"]), &bucket(), &enums()).unwrap_err();
             assert!(err.contains(says), "{text}: {err}");
         }
+    }
+
+    #[test]
+    fn a_declared_foreign_key_is_audited_for_orphans_quoted_or_not() {
+        use crate::ast::{Attribute, AttributeValue};
+        let mut comment = Model::new("FileComment");
+        comment.schema = Some("bucket".into());
+        for (name, v) in [
+            ("file_id", AttributeValue::Ident("Bucket.id".into())),
+            ("parent_id", AttributeValue::String("FileComment.id".into())),
+            ("user_id", AttributeValue::Ident("sapiens.User.id".into())),
+            ("bucket_id", AttributeValue::Ident("Bucket.buckets".into())),
+        ] {
+            let mut f = crate::ast::Field::new(name, TypeRef::Primitive(PrimitiveType::Uuid));
+            f.attributes.push(Attribute::new("foreign_key").with_arg(v));
+            comment.fields.push(f);
+        }
+        let mut schema = crate::ast::ModuleSchema::new("bucket");
+        schema.models = vec![bucket(), comment.clone()];
+        let fks = declared_foreign_keys(&schema, &comment);
+        assert_eq!(fks.iter().map(|f| f.field.as_str()).collect::<Vec<_>>(), ["file_id", "parent_id", "bucket_id"], "another module's reference is left out");
+        // `Bucket.buckets` names the table: read as the primary key, and flagged.
+        assert_eq!((fks[2].target_column.as_str(), fks[2].names_table), ("id", true));
+        assert!(!fks[0].names_table);
+        assert_eq!(
+            foreign_key_audit_query(&schema, &comment, &fks[0]).unwrap(),
+            "SELECT 'fk_file_comments_file_id' AS rule, count(*) AS breaking FROM bucket.file_comments c \
+             WHERE c.\"file_id\" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM bucket.buckets p WHERE p.\"id\" = c.\"file_id\");"
+        );
     }
 
     #[test]

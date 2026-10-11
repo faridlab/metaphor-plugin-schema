@@ -27,6 +27,12 @@ pub(super) fn execute_rules(module: &str, format: OutputFormat, suggest: bool, a
                 println!("-- {} `{}` ({})", model.name, rule.name, rule.source);
                 println!("{query}");
             }
+            for fk in crate::rules::compile::declared_foreign_keys(&module_schema, model) {
+                let Some(query) = crate::rules::compile::foreign_key_audit_query(&module_schema, model, &fk) else { continue };
+                let spelling = if fk.names_table { " (declared with the table's name; write the column)" } else { "" };
+                println!("-- {}.{} -> {}.{}: declared foreign key, a constraint once enforced{spelling}", model.name, fk.field, fk.target, fk.target_column);
+                println!("{query}");
+            }
             for rule in crate::rules::compile::model_uniqueness_rules(&module_schema, model) {
                 println!("-- {} `{}` ({}): uniqueness, a unique index once enforced", model.name, rule.name, rule.source);
                 println!("{}", crate::rules::compile::uniqueness_audit_query(model, &rule));
