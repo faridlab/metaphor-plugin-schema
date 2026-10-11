@@ -7,6 +7,15 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.23.1] — 2026-10-11
+
+### Fixed
+
+- **A model whose service file is hand-owned** gets its write guard in a generated file of its
+  own (`src/application/service/<model>_row_rules.rs`), declared by the generated `mod.rs`. The
+  guard used to be emitted only into the service file, which the generator never writes there, so
+  the module failed to compile on the re-export.
+
 ## [0.23.0] — 2026-10-11
 
 ### Added
