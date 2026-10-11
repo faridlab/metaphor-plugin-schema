@@ -7,6 +7,32 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-10-11
+
+### Added
+
+- **Row rules compile into a write guard, running in shadow.** Each declared rule that is a
+  condition over one row's own fields, applied on create and/or update, compiles into an
+  `<Entity>RowRules` guard emitted beside the entity's service and attached by the generated
+  build (`.with_guard`). A break is logged under `backbone::write_guard` (entity, rule code,
+  write kind) and the write goes ahead; enforcing comes in a later release. Rules reading
+  `$old`, `$actor`, `now()`, relations or aggregates, and rules bound to a verb, are not
+  compiled and stay `unenforced` in `schema rules`; compiled ones read `shadow`. The generated
+  code needs **backbone-core 3.4** (`backbone_core::row_rule`).
+- **`schema doctor` fails, and `schema generate` warns, when a hand-owned `src/lib.rs` never
+  attaches a generated guard**, since the entity's declared rules would then check nothing.
+- **`schema rules --audit`** prints, per compiled rule, the SQL counting the stored rows that
+  break it (null is not a break, soft-deleted rows count), to run before a rule is enforced.
+
+### Fixed
+
+- **Rule strings keep their regex escapes.** The rule lexer dropped every backslash, so
+  `'^\+?[1-9]\d{1,14}$'` read as `^+?[1-9]d{1,14}$`. A backslash now escapes only a quote or
+  itself.
+- **New migrations keep the order the generators gave them.** Fresh timestamps were assigned by
+  base name, so a new audited table's `add_data_change_audit_…` migration sorted before its
+  `create_…` table and failed on a fresh database.
+
 ## [0.18.0] — 2026-10-11
 
 ### Added
