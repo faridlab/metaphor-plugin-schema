@@ -41,6 +41,17 @@ pub(super) fn load_and_resolve(
     let (mut module_schema, parse_errors) = build_module_schema(module, &schema_files)?;
     if let Some(root) = schema_path.parent() {
         module_schema.extension_files = crate::generators::extension_files_in(root);
+        if let Ok(user_owned) = super::super::manifest::load_user_owned_globs(root) {
+            module_schema.hand_owned_services = module_schema
+                .models
+                .iter()
+                .filter(|m| {
+                    let path = format!("src/application/service/{}_service.rs", crate::utils::to_snake_case(&m.name));
+                    user_owned.is_match(&path)
+                })
+                .map(|m| m.name.clone())
+                .collect();
+        }
     }
 
     if !parse_errors.is_empty() {

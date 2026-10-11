@@ -186,6 +186,11 @@ pub struct ModuleSchema {
     /// function of what it is given.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub extension_files: std::collections::BTreeSet<String>,
+    /// The models whose generated service file (`src/application/service/<model>_service.rs`)
+    /// the module declares hand-owned, so the generator never writes it: a model's write guard
+    /// then goes into a file of its own. Read by the loader from `metaphor.codegen.yaml`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub hand_owned_services: std::collections::BTreeSet<String>,
     /// All type definitions
     pub type_defs: Vec<TypeDef>,
     /// All enum definitions
