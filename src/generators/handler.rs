@@ -51,6 +51,7 @@ impl HandlerGenerator {
         &self,
         model: &Model,
         hook: Option<&Hook>,
+        module: Option<&crate::ast::ModuleSchema>,
     ) -> Result<String, GenerateError> {
         let mut output = String::new();
 
@@ -68,7 +69,7 @@ impl HandlerGenerator {
         // Generate custom action handlers if hook has state machine
         if let Some(h) = hook {
             if let Some(sm) = &h.state_machine {
-                self.write_transition_handlers(&mut output, model, &h.type_prefix(), sm)?;
+                self.write_transition_handlers(&mut output, model, &h.type_prefix(), sm, module)?;
             }
         }
 
@@ -921,6 +922,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         model: &Model,
         sm_name: &str,
         sm: &crate::ast::StateMachine,
+        module: Option<&crate::ast::ModuleSchema>,
     ) -> Result<(), GenerateError> {
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
@@ -1008,21 +1010,29 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             // `has_permission` method exists on the framework type.
             writeln!(output, "        let has_specific_perm = auth.permissions.iter().any(|p| p == \"{}:transition:{}\");", model_snake, transition_snake).unwrap();
             writeln!(output, "        let has_update_perm = auth.permissions.iter().any(|p| p == \"{}:update\");", model_snake).unwrap();
+            // The verb's own permission or a listed role grants it. `{model}:update` alone still
+            // does, while it runs in shadow, and is logged so the permission seeds can catch up.
             if !transition.allowed_roles.is_empty() {
                 writeln!(output, "        let has_role = auth.roles.iter().any(|r| allowed_roles.contains(&r.as_str()));").unwrap();
-                writeln!(
-                    output,
-                    "        if !has_specific_perm && !has_update_perm && !has_role {{"
-                )
-                .unwrap();
+                writeln!(output, "        if !has_specific_perm && !has_role {{").unwrap();
             } else {
-                writeln!(
-                    output,
-                    "        if !has_specific_perm && !has_update_perm {{"
-                )
-                .unwrap();
+                writeln!(output, "        let _ = &allowed_roles;").unwrap();
+                writeln!(output, "        if !has_specific_perm {{").unwrap();
             }
-            writeln!(output, "            return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}>::error(\"Insufficient permissions for {} transition\")));", body_type, transition.name).unwrap();
+            writeln!(output, "            if !has_update_perm {{").unwrap();
+            writeln!(output, "                return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}>::error(\"Insufficient permissions for {} transition\")));", body_type, transition.name).unwrap();
+            writeln!(output, "            }}").unwrap();
+            writeln!(
+                output,
+                "            tracing::warn!(target: \"backbone::write_guard\", entity = \"{}\", verb = \"{}\", code = \"transition_by_update_permission\", \"a transition granted only by {}:update, running in shadow; it needs {}:transition:{}{}\");",
+                model.name,
+                transition.name,
+                model_snake,
+                model_snake,
+                transition_snake,
+                if transition.allowed_roles.is_empty() { String::new() } else { format!(" or a role of {:?}", transition.allowed_roles) }
+            )
+            .unwrap();
             writeln!(output, "        }}").unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
@@ -1042,7 +1052,11 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                     sm_name, status_field
                 )
                 .unwrap();
-                writeln!(output, "        Some(v) => v.to_string().parse().ok(),").unwrap();
+                // A stored value the machine does not know is refused, never read as unset.
+                writeln!(output, "        Some(v) => match v.to_string().parse() {{").unwrap();
+                writeln!(output, "            Ok(s) => Some(s),").unwrap();
+                writeln!(output, "            Err(_) => return (StatusCode::CONFLICT, Json(ApiResponse::<{}>::error(\"The stored state is not a state of this machine\"))),", body_type).unwrap();
+                writeln!(output, "        }},").unwrap();
                 writeln!(output, "        None => None,").unwrap();
                 writeln!(output, "    }};").unwrap();
                 writeln!(
@@ -1052,13 +1066,17 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 )
                 .unwrap();
             } else {
+                // A stored value the machine does not know is refused, never read as the initial
+                // state, which would let the first transitions run again.
                 writeln!(
                     output,
-                    "    let current_state: {}State = entity.{}.to_string().parse()",
+                    "    let current_state: {}State = match entity.{}.to_string().parse() {{",
                     sm_name, status_field
                 )
                 .unwrap();
-                writeln!(output, "        .unwrap_or({}State::default());", sm_name).unwrap();
+                writeln!(output, "        Ok(s) => s,").unwrap();
+                writeln!(output, "        Err(_) => return (StatusCode::CONFLICT, Json(ApiResponse::<{}>::error(\"The stored state is not a state of this machine\"))),", body_type).unwrap();
+                writeln!(output, "    }};").unwrap();
                 writeln!(
                     output,
                     "    let sm = {}StateMachine::from_state(current_state);",
@@ -1077,6 +1095,33 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
+            // The verb's declared guards, each checked when the record is in a state it leaves.
+            let guards = module.map(|m| crate::rules::compile::transition_guards(m, model, &transition.name)).unwrap_or_default();
+            let compiled: Vec<_> = guards.iter().filter_map(|g| g.rust.as_ref().ok().map(|r| (g, r))).collect();
+            for g in guards.iter().filter(|g| g.rust.is_err()) {
+                writeln!(output, "    // Guard `{}` not compiled ({}); the transition is not checked against it.", g.text, g.rust.as_ref().unwrap_err()).unwrap();
+            }
+            if !compiled.is_empty() {
+                writeln!(output, "    {{").unwrap();
+                writeln!(output, "        use backbone_core::row_rule as r;").unwrap();
+                writeln!(output, "        let row = &serde_json::to_value(&entity).unwrap_or_default();").unwrap();
+                writeln!(output, "        let state = row.get({:?}).and_then(|v| v.as_str()).unwrap_or_default();", status_field).unwrap();
+                for (g, rust) in compiled {
+                    let applies = if g.from.is_empty() || g.from.iter().any(|f| f == "*") {
+                        "true".to_string()
+                    } else {
+                        let states: Vec<String> = g.from.iter().map(|f| format!("{:?}", to_snake_case(&to_pascal_case(f)))).collect();
+                        format!("[{}].contains(&state)", states.join(", "))
+                    };
+                    writeln!(output, "        // Guard: {}", g.text.replace('\n', " ")).unwrap();
+                    writeln!(output, "        if {applies} && !r::holds(&{rust}) {{").unwrap();
+                    writeln!(output, "            return (StatusCode::UNPROCESSABLE_ENTITY, Json(ApiResponse::<{}>::error({:?})));", body_type, format!("The {} transition's guard does not hold: {}", transition.name, g.text)).unwrap();
+                    writeln!(output, "        }}").unwrap();
+                }
+                writeln!(output, "    }}").unwrap();
+                writeln!(output).unwrap();
+            }
+
             writeln!(output, "    // Apply transition via partial update").unwrap();
             writeln!(
                 output,
@@ -1092,13 +1137,16 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 )
                 .unwrap();
             } else {
-                writeln!(output, "    fields.insert(\"{}\".to_string(), serde_json::Value::String(\"{}\".to_string()));", status_field, to_pascal_case(&transition.to)).unwrap();
+                // Written as the state enum serializes (snake_case), the form the entity reads back.
+                writeln!(output, "    fields.insert(\"{}\".to_string(), serde_json::Value::String(\"{}\".to_string()));", status_field, to_snake_case(&to_pascal_case(&transition.to))).unwrap();
             }
             writeln!(output).unwrap();
 
+            // The write runs as the verb, so the rule keeping the state field verbs-only lets it through.
             writeln!(
                 output,
-                "    match service.partial_update(&id, fields).await {{"
+                "    match backbone_core::write_guard::as_transition({:?}, service.partial_update(&id, fields)).await {{",
+                transition.name
             )
             .unwrap();
             writeln!(output, "        Ok(Some(updated)) => {{").unwrap();
@@ -1291,7 +1339,7 @@ impl Generator for HandlerGenerator {
                 .iter()
                 .find(|h| h.model_ref == model.name || h.name == model.name);
 
-            let content = self.generate_handler(model, hook)?;
+            let content = self.generate_handler(model, hook, Some(&schema.schema))?;
 
             if self.group_by_domain {
                 // Grouped structure: src/presentation/http/{model}/{model}_handler.rs
@@ -1451,7 +1499,7 @@ mod tests {
         };
         let render = |model: &Model| {
             let mut out = String::new();
-            HandlerGenerator::new().write_transition_handlers(&mut out, model, "SessionState", &sm).unwrap();
+            HandlerGenerator::new().write_transition_handlers(&mut out, model, "SessionState", &sm, None).unwrap();
             out
         };
         let secret = Model { name: "Session".into(), fields: vec![field("status", vec![]), field("token_hash", vec![Attribute::new("sensitive")])], ..Default::default() };
@@ -1463,6 +1511,29 @@ mod tests {
         let plain = Model { name: "Ticket".into(), fields: vec![field("status", vec![])], ..Default::default() };
         let out = render(&plain);
         assert!(!out.contains("without_secrets") && out.contains("ApiResponse::<TicketResponseDto>::not_found"), "unchanged output without secrets");
+    }
+
+    #[test]
+    fn a_transition_writes_the_state_as_the_enum_reads_it_and_runs_as_its_verb() {
+        use crate::ast::hook::{StateMachine, Transition};
+        let sm = StateMachine {
+            field: "status".to_string(),
+            transitions: vec![Transition { name: "put_on_hold".into(), from: vec!["active".into()], to: "on_hold".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let model = Model {
+            name: "Ticket".into(),
+            fields: vec![Field { name: "status".into(), type_ref: TypeRef::Primitive(PrimitiveType::String), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut out = String::new();
+        HandlerGenerator::new().write_transition_handlers(&mut out, &model, "TicketState", &sm, None).unwrap();
+        // snake_case, the enum's serde form; PascalCase ("OnHold") deserialized into nothing.
+        assert!(out.contains("serde_json::Value::String(\"on_hold\".to_string())"), "{out}");
+        assert!(!out.contains("\"OnHold\""), "{out}");
+        assert!(out.contains("backbone_core::write_guard::as_transition(\"put_on_hold\", service.partial_update(&id, fields))"), "{out}");
+        // An unreadable stored state is refused, never read as the initial state.
+        assert!(out.contains("StatusCode::CONFLICT") && !out.contains("unwrap_or(TicketState::default())"), "{out}");
     }
 
     fn create_test_schema() -> ResolvedSchema {

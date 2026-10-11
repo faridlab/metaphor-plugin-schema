@@ -527,6 +527,32 @@ impl ModuleGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
+        // The generated state-machine verbs of the entities whose machines declare
+        // `verbs: generated`; a host mounts them beside the module's guarded routes.
+        let verb_models: Vec<_> = schema
+            .schema
+            .models
+            .iter()
+            .filter(|m| handler_emitted(m) && crate::rules::compile::mounts_generated_verbs(&schema.schema, m))
+            .collect();
+        if !verb_models.is_empty() {
+            writeln!(output, "    /// The generated state-machine verbs (`POST /<entities>/:id/transitions/<verb>`) of the").unwrap();
+            writeln!(output, "    /// entities whose machines declare `verbs: generated`: the only way their states move,").unwrap();
+            writeln!(output, "    /// since a generic write changing a state field is a rule break.").unwrap();
+            writeln!(output, "    pub fn transition_routes(&self) -> Router {{").unwrap();
+            writeln!(output, "        Router::new()").unwrap();
+            for model in &verb_models {
+                let snake_name = to_snake_case(&model.name);
+                writeln!(
+                    output,
+                    "            .merge(presentation::http::{snake_name}_handler::create_{snake_name}_transition_routes(self.{snake_name}_service.clone()))"
+                )
+                .unwrap();
+            }
+            writeln!(output, "    }}").unwrap();
+            writeln!(output).unwrap();
+        }
+
         // Custom methods (e.g. a guarded_routes() composer) — survives regeneration.
         writeln!(output, "    // <<< CUSTOM METHODS").unwrap();
         writeln!(output, "    // END CUSTOM").unwrap();
@@ -1490,6 +1516,34 @@ mod tests {
         let mut schema = ModuleSchema::new("orders");
         schema.models.push(create_test_model());
         ResolvedSchema { schema }
+    }
+
+    #[test]
+    fn only_machines_declaring_generated_verbs_mount_their_transition_routes() {
+        let lib = |verbs: &str| {
+            let mut resolved = create_test_schema();
+            let user = resolved.schema.models[0].clone();
+            resolved.schema.hooks.push(crate::ast::Hook {
+                name: "User".into(),
+                model_ref: "User".into(),
+                state_machine: Some(crate::ast::StateMachine { field: "email".into(), ..Default::default() }),
+                ..Default::default()
+            });
+            let hook = format!(
+                "module: orders\nstate_machines:\n  - entity: User\n    field: email\n    verbs: {verbs}\n    transitions:\n      - {{ from: a, to: b, on: go }}\n"
+            );
+            resolved.schema.rule_register.read_file("user.hook.yaml", &hook);
+            resolved.schema.rule_register.bind(&[user]);
+            ModuleGenerator::new().generate(&resolved).unwrap().files[&PathBuf::from("src/lib.rs")].clone()
+        };
+        let generated = lib("generated");
+        assert!(generated.contains("pub fn transition_routes(&self) -> Router {"), "{generated}");
+        assert!(
+            generated.contains(".merge(presentation::http::user_handler::create_user_transition_routes(self.user_service.clone()))"),
+            "{generated}"
+        );
+        // Hand-written verbs own the state: nothing generated is mounted.
+        assert!(!lib("hand").contains("transition_routes"));
     }
 
     #[test]

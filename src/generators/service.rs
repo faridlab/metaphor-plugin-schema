@@ -128,7 +128,8 @@ impl ServiceGenerator {
         if crate::rules::compile::model_has_guard(schema, model) {
             let rules = crate::rules::compile::model_row_rules(schema, model);
             let deletes = crate::rules::compile::model_delete_guards(schema, model);
-            output.push_str(&crate::rules::compile::render_guard(model, &rules, &deletes));
+            let state_fields = crate::rules::compile::model_state_fields(schema, model);
+            output.push_str(&crate::rules::compile::render_guard(model, &rules, &deletes, &state_fields));
         }
         writeln!(output).unwrap();
         writeln!(output, "// <<< CUSTOM").unwrap();

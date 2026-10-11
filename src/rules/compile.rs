@@ -398,9 +398,77 @@ pub fn model_delete_guards(schema: &crate::ast::ModuleSchema, model: &Model) -> 
         .collect()
 }
 
+/// One guard of `model`'s verb, from the source states it applies in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionGuard {
+    /// The states the guarded transition leaves; empty or `*` for any.
+    pub from: Vec<String>,
+    pub text: String,
+    /// A Rust expression over the record as `row`, or why the guard does not compile (it reads
+    /// the writer, the time or another row).
+    pub rust: Result<String, String>,
+}
+
+/// The guards of `model`'s verb `verb`, one per guarded transition. A verb can leave several
+/// states under different guards (`post` from `approved` needs `balanced`; from `draft` it also
+/// needs `!requires_approval`), so each guard carries the states it applies in.
+pub fn transition_guards(schema: &crate::ast::ModuleSchema, model: &Model, verb: &str) -> Vec<TransitionGuard> {
+    let enums: HashSet<String> = schema.enums.iter().map(|e| e.name.clone()).collect();
+    let mut out = Vec::new();
+    for machine in schema.rule_register.machines.iter().filter(|m| m.bound_model.as_deref() == Some(model.name.as_str())) {
+        for t in machine.transitions.iter().filter(|t| t.verb.as_deref() == Some(verb)) {
+            let Some(guard) = t.guard.as_deref() else { continue };
+            let text = machine.composed_guard(guard);
+            let rust = expr::parse(&text).and_then(|ast| {
+                let mut c = Compiler { model, enums: &enums, fields: Vec::new(), row_var: "row", reads_old: false, reads_actor: false, reads_time: false };
+                let (rust, _, _) = c.emit(&ast)?;
+                if c.reads_old || c.reads_actor || c.reads_time {
+                    return Err("reads the writer, the time or the row before the write".into());
+                }
+                Ok(rust)
+            });
+            out.push(TransitionGuard { from: t.from.clone(), text, rust });
+        }
+    }
+    out
+}
+
+/// Whether `model`'s generated transition verbs are mounted: its hook has a machine the
+/// generator emits transition routes for, and the machine declares `verbs: generated`.
+pub fn mounts_generated_verbs(schema: &crate::ast::ModuleSchema, model: &Model) -> bool {
+    let has_routes = schema
+        .hooks
+        .iter()
+        .find(|h| h.model_ref == model.name || h.name == model.name)
+        .is_some_and(|h| h.state_machine.is_some());
+    has_routes
+        && schema
+            .rule_register
+            .machines
+            .iter()
+            .any(|m| m.bound_model.as_deref() == Some(model.name.as_str()) && m.verbs.as_deref() == Some("generated"))
+}
+
+/// The state fields of the machines declared on `model`: fields only a verb may move.
+pub fn model_state_fields(schema: &crate::ast::ModuleSchema, model: &Model) -> Vec<String> {
+    let mut fields: Vec<String> = schema
+        .rule_register
+        .machines
+        .iter()
+        .filter(|m| m.bound_model.as_deref() == Some(model.name.as_str()))
+        .map(|m| m.field.clone())
+        .filter(|f| model.find_field(f).is_some())
+        .collect();
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
 /// Whether the generator emits a write guard for `model`.
 pub fn model_has_guard(schema: &crate::ast::ModuleSchema, model: &Model) -> bool {
-    !model_row_rules(schema, model).is_empty() || !model_delete_guards(schema, model).is_empty()
+    !model_row_rules(schema, model).is_empty()
+        || !model_delete_guards(schema, model).is_empty()
+        || !model_state_fields(schema, model).is_empty()
 }
 
 /// A foreign key a field declares (`@foreign_key(Entity.column)`, quoted or bare) on another
@@ -457,7 +525,12 @@ pub fn foreign_key_audit_query(schema: &crate::ast::ModuleSchema, model: &Model,
 
 /// The Rust items of `model`'s write guard: `<Model>RowRules`, checking each compiled row rule
 /// against the row a create or update would store. Every rule runs in shadow.
-pub fn render_guard(model: &Model, rules: &[CompiledRowRule], deletes: &[CompiledDeleteGuard]) -> String {
+pub fn render_guard(
+    model: &Model,
+    rules: &[CompiledRowRule],
+    deletes: &[CompiledDeleteGuard],
+    state_fields: &[String],
+) -> String {
     let name = &model.name;
     let mut out = String::new();
     out.push_str(&format!(
@@ -492,7 +565,7 @@ pub fn render_guard(model: &Model, rules: &[CompiledRowRule], deletes: &[Compile
         }
         out.push_str("            return GuardOutcome { refuse: Vec::new(), shadow };\n        }\n");
     }
-    if rules.is_empty() {
+    if rules.is_empty() && state_fields.is_empty() {
         out.push_str("        GuardOutcome::allow()\n    }\n}\n");
         return out;
     }
@@ -508,13 +581,22 @@ pub fn render_guard(model: &Model, rules: &[CompiledRowRule], deletes: &[Compile
     ));
     // `old` serves the change test of a time rule and the reads of a transition rule; bind
     // only what the rules use, so the generated module stays warning-free.
-    if rules.iter().any(|r| r.reads_old || (!r.time_fields.is_empty() && r.on_update)) {
+    if !state_fields.is_empty() || rules.iter().any(|r| r.reads_old || (!r.time_fields.is_empty() && r.on_update)) {
         out.push_str("        let old = ctx.before.and_then(|b| serde_json::to_value(b).ok());\n");
     }
     if rules.iter().any(|r| r.reads_old) {
         out.push_str("        let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);\n");
     }
     out.push_str("        let mut shadow = Vec::new();\n");
+    // A state field moves only through its verbs: a generic write changing it is a break.
+    for f in state_fields {
+        out.push_str(&format!(
+            "        // `{f}` belongs to a state machine: only its verbs move it\n\
+             \x20       if update && ctx.transition.is_none() && r::changed(old.as_ref(), row, &[{f:?}]) {{\n\
+             \x20           shadow.push(Violation::new({f:?}, \"state_field_verbs_only\", \"the state field moves only through its verbs\"));\n\
+             \x20       }}\n"
+        ));
+    }
     for rule in rules {
         // A rule about the time of the write checks an update only when it changes what it reads.
         let update = if rule.time_fields.is_empty() {
@@ -947,6 +1029,38 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_write_moving_a_state_field_is_reported_and_a_verb_is_not() {
+        let guard = render_guard(&bucket(), &[], &[], &["status".to_string()]);
+        assert!(guard.contains("let old = ctx.before.and_then(|b| serde_json::to_value(b).ok());"), "{guard}");
+        assert!(
+            guard.contains("if update && ctx.transition.is_none() && r::changed(old.as_ref(), row, &[\"status\"]) {"),
+            "{guard}"
+        );
+        assert!(guard.contains("\"state_field_verbs_only\""), "{guard}");
+        assert!(!guard.contains("let old_row"), "nothing reads the row before the write: {guard}");
+    }
+
+    #[test]
+    fn a_verbs_guards_are_kept_apart_by_the_state_they_leave() {
+        let mut journal = Model::new("Journal");
+        for (n, t) in [("status", PrimitiveType::String), ("total_debit", PrimitiveType::Decimal), ("total_credit", PrimitiveType::Decimal), ("requires_approval", PrimitiveType::Bool)] {
+            journal.fields.push(crate::ast::Field::new(n, TypeRef::Primitive(t)));
+        }
+        let mut schema = crate::ast::ModuleSchema::new("accounting");
+        schema.models = vec![journal.clone()];
+        let hook = "module: accounting\nstate_machines:\n  - entity: Journal\n    field: status\n    states: [draft, approved, posted]\n    transitions:\n      - { from: approved, to: posted, on: post, guard: balanced }\n      - { from: draft, to: posted, on: post, guard: \"balanced && !requires_approval\" }\n    guards:\n      balanced: \"total_debit == total_credit\"\n";
+        schema.rule_register.read_file("journal.hook.yaml", hook);
+        schema.rule_register.bind(&schema.models.clone());
+        let guards = transition_guards(&schema, &journal, "post");
+        assert_eq!(guards.len(), 2, "{:?}", schema.rule_register.warnings);
+        assert_eq!(guards[0].from, vec!["approved".to_string()]);
+        assert_eq!(guards[0].rust.as_deref().unwrap(), "r::eq(r::field(row, \"total_debit\"), r::field(row, \"total_credit\"))");
+        assert_eq!(guards[1].from, vec!["draft".to_string()]);
+        assert!(guards[1].rust.as_deref().unwrap().contains("r::not(r::field(row, \"requires_approval\"))"), "{:?}", guards[1]);
+        assert!(transition_guards(&schema, &journal, "void").is_empty());
+    }
+
+    #[test]
     fn a_role_check_asks_the_roles_source() {
         let c = compile("$actor.has_role('admin') || name != null").unwrap();
         assert_eq!(c.rust, "r::or(r::has_role(ctx.actor.as_deref(), \"admin\").await, r::is_not_null(r::field(row, \"name\")))");
@@ -978,7 +1092,7 @@ mod tests {
             assert!(err.contains(says), "{text}: {err}");
         }
         // A guard with only delete rules ends after the delete branch: nothing else is bound.
-        let guard = render_guard(&bucket(), &[], &[d]);
+        let guard = render_guard(&bucket(), &[], &[d], &[]);
         assert!(guard.contains("if matches!(ctx.kind, WriteKind::Delete | WriteKind::HardDelete) {"), "{guard}");
         assert!(guard.contains("r::referencing(\"SELECT count(*) FROM bucket.file_locks"), "{guard}");
         assert!(guard.contains("        GuardOutcome::allow()\n    }\n}\n") && !guard.contains("let row"), "{guard}");
@@ -988,18 +1102,18 @@ mod tests {
     fn the_guard_checks_a_time_rule_on_update_only_when_its_fields_change() {
         let mut rules = vec![compile("risk_score > now()").unwrap(), compile("risk_score >= $old.risk_score").unwrap()];
         rules[1].on_create = false;
-        let guard = render_guard(&bucket(), &rules, &[]);
+        let guard = render_guard(&bucket(), &rules, &[], &[]);
         assert!(guard.contains("let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);"));
         assert!(guard.contains("if (create || (update && r::changed(old.as_ref(), row, &[\"risk_score\"]))) && !r::holds("), "{guard}");
         assert!(guard.contains("if (update) && !r::holds(&r::ge("), "{guard}");
         // A guard with only row rules binds no `old`; one with only time rules binds no `old_row`.
-        assert!(!render_guard(&bucket(), &[compile("name.length > 0").unwrap()], &[]).contains("let old"));
-        let time_only = render_guard(&bucket(), &[compile("risk_score > now()").unwrap()], &[]);
+        assert!(!render_guard(&bucket(), &[compile("name.length > 0").unwrap()], &[], &[]).contains("let old"));
+        let time_only = render_guard(&bucket(), &[compile("risk_score > now()").unwrap()], &[], &[]);
         assert!(time_only.contains("let old =") && !time_only.contains("let old_row"), "{time_only}");
         // A time rule checked on create alone never asks whether an update changed anything.
         let mut on_create = compile("risk_score > now()").unwrap();
         on_create.on_update = false;
-        assert!(!render_guard(&bucket(), &[on_create], &[]).contains("let old"));
+        assert!(!render_guard(&bucket(), &[on_create], &[], &[]).contains("let old"));
     }
 
     #[test]

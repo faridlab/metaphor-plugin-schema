@@ -31,7 +31,7 @@ const RULE_KEYS: &[&str] = &[
 ];
 const MACHINE_KEYS: &[&str] = &[
     "entity", "field", "initial", "states", "values", "transitions", "guards", "effects", "lifecycle",
-    "description", "shape", "note", "notes",
+    "description", "shape", "note", "notes", "verbs",
 ];
 const TRANSITION_KEYS: &[&str] = &[
     "from", "to", "on", "name", "event", "guard", "condition", "roles", "message", "id", "write", "note",
@@ -280,6 +280,18 @@ fn read_machine(
 
     let guards = pairs(get(m, "guards"));
     let effects = pairs(get(m, "effects"));
+    // Who owns the verbs: the generated transition routes, or hand-written code.
+    let verbs = match str_at(m, "verbs") {
+        Some(v) if v == "generated" || v == "hand" => Some(v),
+        Some(other) => {
+            out.warnings.push(RegisterWarning {
+                source: source.clone(),
+                message: format!("{path}: `verbs: {other}` is not `generated` or `hand`"),
+            });
+            None
+        }
+        None => None,
+    };
 
     let mut transitions = Vec::new();
     let entries: Vec<(Option<String>, &Mapping)> = match get(m, "transitions") {
@@ -349,6 +361,7 @@ fn read_machine(
         transitions,
         guards,
         effects,
+        verbs,
     });
 }
 

@@ -143,6 +143,11 @@ pub struct DeclaredMachine {
     pub guards: Vec<(String, String)>,
     /// What a verb sets besides the state (`effects: { post: "set posted_at = now()" }`).
     pub effects: Vec<(String, String)>,
+    /// Who owns the verbs: `generated` mounts the generated transition routes, `hand` means
+    /// hand-written code moves the state and nothing generated is mounted. `None` until
+    /// someone decides, which mounts nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbs: Option<String>,
 }
 
 /// One transition of a declared machine.
@@ -162,6 +167,20 @@ pub struct DeclaredTransition {
 }
 
 impl DeclaredMachine {
+    /// A transition's guard as one expression: a named guard resolved to its expression, and a
+    /// guard composed of named guards (`balanced && !requires_approval`) with each name
+    /// replaced by its expression.
+    pub fn composed_guard(&self, guard: &str) -> String {
+        let text = self.guard_expression(guard);
+        let mut composed = text.to_string();
+        for (name, e) in &self.guards {
+            if composed != *e {
+                composed = replace_word(&composed, name, &format!("({e})"));
+            }
+        }
+        composed
+    }
+
     /// The expression a transition's guard stands for: the named guard's
     /// expression when the guard is a name in `guards:`, else the guard itself.
     pub fn guard_expression<'a>(&'a self, guard: &'a str) -> &'a str {
@@ -247,21 +266,11 @@ impl RuleRegister {
         }
         for machine in &mut self.machines {
             let model = model_of(&machine.bound_model);
-            let guards = machine.guards.clone();
-            for t in &mut machine.transitions {
-                t.guard_check = match &t.guard {
-                    Some(g) => {
-                        let text = guards.iter().find(|(n, _)| n == g).map(|(_, e)| e.as_str()).unwrap_or(g);
-                        // A guard composed of named guards (`balanced && !requires_approval`)
-                        // is checked with the names replaced by their expressions.
-                        let mut composed = text.to_string();
-                        for (name, e) in &guards {
-                            if composed != *e {
-                                composed = replace_word(&composed, name, &format!("({e})"));
-                            }
-                        }
-                        expr::check(&composed, model)
-                    }
+            let composed: Vec<Option<String>> =
+                machine.transitions.iter().map(|t| t.guard.as_deref().map(|g| machine.composed_guard(g))).collect();
+            for (t, text) in machine.transitions.iter_mut().zip(composed) {
+                t.guard_check = match text {
+                    Some(text) => expr::check(&text, model),
                     None => expr::ExpressionCheck::NotAnExpression,
                 };
             }
