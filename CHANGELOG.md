@@ -7,6 +7,29 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-10-11
+
+### Added
+
+- **State fields are kept for their verbs, in shadow.** A generated guard reports a generic
+  write that moves a machine's state field (`state_field_verbs_only`); a verb's own write runs
+  inside `backbone_core::write_guard::as_transition` and passes. Needs **backbone-core 3.7**.
+- **A shadow trigger per state machine** (`add_state_transition_check_<table>` migrations): a
+  move along a transition the machine does not declare raises a WARNING, for every writer,
+  hand-written SQL included.
+- **`verbs: generated | hand` on a machine.** Generated transition routes mount, through the
+  module's `transition_routes()`, only for machines declaring `verbs: generated`; a machine whose
+  states are moved by hand-written code declares `hand` and gets nothing generated mounted.
+
+### Fixed
+
+- **Transition handlers** write the target state as the enum serializes (snake_case; PascalCase
+  values failed to deserialize), refuse a stored state they cannot read (it used to read as the
+  initial state), check the guard of the state the record leaves, and log a transition granted
+  only by `{model}:update` (in shadow; the verb permission or a listed role is what grants it).
+- **A machine whose state field is not an enum** gets no transition routes. The generator used
+  to fall back to the model's first enum field and write into the wrong column.
+
 ## [0.22.0] — 2026-10-11
 
 ### Added
