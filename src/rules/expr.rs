@@ -264,9 +264,16 @@ fn lex(source: &str) -> Result<Vec<Tok>, String> {
             loop {
                 match chars.get(i) {
                     None => return Err("a string is not closed".to_string()),
+                    // A backslash escapes only a quote or itself; any other `\x` stays as written,
+                    // so a pattern keeps its regex escapes (`\d`, `\.`, `\+`).
                     Some('\\') => {
-                        if let Some(&n) = chars.get(i + 1) {
-                            s.push(n);
+                        match chars.get(i + 1) {
+                            Some(&n) if n == '\'' || n == '"' || n == '\\' => s.push(n),
+                            Some(&n) => {
+                                s.push('\\');
+                                s.push(n);
+                            }
+                            None => s.push('\\'),
                         }
                         i += 2;
                     }
@@ -579,6 +586,24 @@ mod tests {
         ] {
             assert_eq!(check(src, Some(&m)), ExpressionCheck::Ready, "{src}");
         }
+    }
+
+    #[test]
+    fn a_backslash_in_a_string_stays_unless_it_escapes_a_quote_or_itself() {
+        // The string on the right of `a == '…'` / `a matches '…'`, as the lexer read it.
+        fn string_of(src: &str) -> String {
+            match parse(src).unwrap() {
+                Expression::Binary { right, .. } => match *right {
+                    Expression::Literal(Literal::String(s)) => s,
+                    other => panic!("{src}: expected a string, got {other:?}"),
+                },
+                other => panic!("{src}: expected a comparison, got {other:?}"),
+            }
+        }
+        // A pattern keeps its regex escapes: `\d` is a digit class, not the letter d.
+        assert_eq!(string_of(r"phone matches '^\+?[1-9]\d{1,14}$'"), r"^\+?[1-9]\d{1,14}$");
+        assert_eq!(string_of(r"a == 'it\'s'"), "it's");
+        assert_eq!(string_of(r"a == 'back\\slash'"), r"back\slash");
     }
 
     #[test]
