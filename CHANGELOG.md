@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.23.5] — 2026-10-12
+
+### Fixed
+
+- **A transition's permission matches with wildcards.** `resource:action` grants with `*`
+  segments (`*:*`, `<model>:*`, `<model>:transition:*`) allow the verb, as the rest of the
+  permission model does; the exact-name comparison refused a `*:*` superuser every transition.
+
 ## [0.23.4] — 2026-10-12
 
 ### Fixed
