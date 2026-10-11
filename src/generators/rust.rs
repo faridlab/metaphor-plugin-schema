@@ -2108,9 +2108,16 @@ impl RustGenerator {
 
         // Generate entity methods implementation block (including DDD methods if entity exists)
         // Note: entity was already found at the beginning of this function for error type extraction
+        // An entity with its own extension file (`<entity>.ext.rs`, ADR-0031) implements its
+        // declared domain methods there, so no default stubs are emitted for it.
+        let entity_ext = super::uses_extensions(schema)
+            && schema
+                .schema
+                .extension_files
+                .contains(&format!("src/domain/entity/{}.ext.rs", to_snake_case(&model.name)));
         self.generate_entity_methods(
             model,
-            entity,
+            if entity_ext { None } else { entity },
             state_machine,
             self.find_state_machine_hook(model, schema)
                 .map(|h| h.type_prefix())
