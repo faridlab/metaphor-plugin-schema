@@ -346,6 +346,12 @@ impl ModuleGenerator {
             writeln!(output, "    }}").unwrap();
             writeln!(output, "}}").unwrap();
             writeln!(output).unwrap();
+            writeln!(output, "impl std::ops::DerefMut for {}Module {{", pascal_name).unwrap();
+            writeln!(output, "    fn deref_mut(&mut self) -> &mut Self::Target {{").unwrap();
+            writeln!(output, "        &mut self.ext").unwrap();
+            writeln!(output, "    }}").unwrap();
+            writeln!(output, "}}").unwrap();
+            writeln!(output).unwrap();
             // What the extension's build hook receives: the pool and every generated service.
             writeln!(output, "/// What the extension's `build` hook receives from the generated build (ADR-0031).").unwrap();
             writeln!(output, "#[allow(dead_code)]").unwrap();
@@ -355,6 +361,7 @@ impl ModuleGenerator {
                 let service_name = format!("{}Service", model.name);
                 let service_type = if model_names.contains(service_name.as_str()) { format!("{}AppService", model.name) } else { service_name };
                 writeln!(output, "    pub(crate) {}_service: &'a Arc<{}>,", to_snake_case(&model.name), service_type).unwrap();
+                writeln!(output, "    pub(crate) {}_repository: &'a Arc<{}Repository>,", to_snake_case(&model.name), model.name).unwrap();
             }
             writeln!(output, "}}").unwrap();
             writeln!(output).unwrap();
@@ -647,6 +654,7 @@ impl ModuleGenerator {
             for model in &schema.schema.models {
                 let sn = to_snake_case(&model.name);
                 writeln!(output, "            {sn}_service: &{sn}_service,").unwrap();
+                writeln!(output, "            {sn}_repository: &{sn}_repository,").unwrap();
             }
             writeln!(output, "        }})?;").unwrap();
             writeln!(output).unwrap();
@@ -1545,6 +1553,8 @@ mod tests {
             "ext: Default::default(),",
             "let ext = self.ext.build(&ModuleParts {",
             "user_service: &user_service,",
+            "user_repository: &user_repository,",
+            "impl std::ops::DerefMut for OrdersModule {",
             "            ext,\n",
         ] {
             assert!(out.contains(needle), "missing `{needle}` in:\n{out}");

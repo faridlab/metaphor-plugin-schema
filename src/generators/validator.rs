@@ -248,6 +248,7 @@ impl ValidatorGenerator {
         &self,
         model: &Model,
         hook: Option<&Hook>,
+        ext_module: Option<&str>,
     ) -> Result<String, GenerateError> {
         let mut output = String::new();
         let name = &model.name;
@@ -314,7 +315,13 @@ impl ValidatorGenerator {
             snake_name, name
         )
         .unwrap();
-        writeln!(output, "    EntityValidator::new()").unwrap();
+        // With an extension (`<file>.ext.rs`, ADR-0031) the validator passes through its
+        // `extend`, which adds the rules the schema cannot express.
+        if ext_module.is_some() {
+            writeln!(output, "    let validator = EntityValidator::new()").unwrap();
+        } else {
+            writeln!(output, "    EntityValidator::new()").unwrap();
+        }
 
         // Emit field rules
         let mut any_rules = false;
@@ -345,6 +352,10 @@ impl ValidatorGenerator {
                 "        // No schema-derived rules — add custom rules above."
             )
             .unwrap();
+        }
+        if let Some(ext) = ext_module {
+            writeln!(output, "    ;").unwrap();
+            writeln!(output, "    {ext}::extend(validator)").unwrap();
         }
 
         writeln!(output, "}}").unwrap();
@@ -421,16 +432,24 @@ impl Generator for ValidatorGenerator {
             let hook = schema.schema.hooks.iter().find(|h| {
                 (h.model_ref == model.name || h.name == model.name) && !h.rules.is_empty()
             });
-            let content = self.generate_validator(model, hook)?;
-
-            if self.group_by_domain {
-                let path = build_generated_path(
+            let file_path = if self.group_by_domain {
+                build_generated_path(
                     "src/application/validator",
                     &model.name,
                     &format!("{}_validator.rs", snake_name),
                     true,
-                );
-                output.add_file(path, content);
+                )
+            } else {
+                PathBuf::from(format!("src/application/validator/{}_validator.rs", snake_name))
+            };
+            // An extension beside the validator file extends its rules (ADR-0031).
+            let ext_rel = file_path.to_string_lossy().replace(".rs", ".ext.rs");
+            let ext_module = (super::uses_extensions(schema) && schema.schema.extension_files.contains(&ext_rel))
+                .then(|| format!("{}_validator_ext", snake_name));
+            let content = self.generate_validator(model, hook, ext_module.as_deref())?;
+
+            if self.group_by_domain {
+                output.add_file(file_path, content);
 
                 let sub_mod_path =
                     PathBuf::from(format!("src/application/validator/{}/mod.rs", snake_name));
@@ -438,11 +457,7 @@ impl Generator for ValidatorGenerator {
                     build_subdirectory_mod(&model.name, &format!("{}_validator", snake_name));
                 output.add_file(sub_mod_path, sub_mod);
             } else {
-                let path = PathBuf::from(format!(
-                    "src/application/validator/{}_validator.rs",
-                    snake_name
-                ));
-                output.add_file(path, content);
+                output.add_file(file_path, content);
             }
         }
 
@@ -526,6 +541,20 @@ mod tests {
         let mut schema = ModuleSchema::new("test");
         schema.models.push(create_test_model());
         ResolvedSchema { schema }
+    }
+
+    #[test]
+    fn a_validator_extension_extends_the_generated_rules() {
+        let mut schema = create_test_schema();
+        let file = |s: &ResolvedSchema| {
+            ValidatorGenerator::new().generate(s).unwrap().files[&PathBuf::from("src/application/validator/order_validator.rs")].clone()
+        };
+        schema.schema.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { extensions: Some(true), ..Default::default() });
+        assert!(!file(&schema).contains("::extend(validator)"), "no extension file, no hook");
+        schema.schema.extension_files.insert("src/application/validator/order_validator.ext.rs".into());
+        let out = file(&schema);
+        assert!(out.contains("    let validator = EntityValidator::new()"), "{out}");
+        assert!(out.contains("    ;\n    order_validator_ext::extend(validator)\n}"), "{out}");
     }
 
     #[test]
