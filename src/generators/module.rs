@@ -635,7 +635,7 @@ impl ModuleGenerator {
             )
             .unwrap();
             // An entity whose schema declares row rules gets its generated guard.
-            let guard = if crate::rules::compile::model_row_rules(&schema.schema, model).is_empty() {
+            let guard = if !crate::rules::compile::model_has_guard(&schema.schema, model) {
                 String::new()
             } else {
                 format!(".with_guard(Arc::new(crate::application::service::{}RowRules))", name)

@@ -300,6 +300,109 @@ pub fn uniqueness_audit_query(model: &Model, rule: &CompiledUnique) -> String {
     )
 }
 
+/// A rule refusing the delete of a row others still reference, compiled:
+/// `count(RolePermission, permission_id == $this.id) == 0` on delete. The guard counts the
+/// referencing rows on the request's own connection (deletes are soft, so a foreign key's
+/// `ON DELETE` never fires).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledDeleteGuard {
+    pub name: String,
+    pub code: String,
+    pub message: String,
+    /// `SELECT count(*) …` with the deleted row's id as `$1`.
+    pub sql: String,
+    pub source: String,
+}
+
+/// Compile a delete-guard rule, or say why not.
+pub fn compile_delete_guard(
+    rule: &DeclaredRule,
+    model: &Model,
+    schema: &crate::ast::ModuleSchema,
+    enums: &HashSet<String>,
+) -> Result<CompiledDeleteGuard, String> {
+    let text = match &rule.body {
+        RuleBody::Condition(t) | RuleBody::Assertion(t) => t,
+        _ => return Err("not an expression".into()),
+    };
+    if rule.when.is_empty() || rule.when.iter().any(|w| w != "delete" && w != "soft_delete") {
+        return Err(format!("applies on {:?}, not only on delete", rule.when));
+    }
+    let ast = expr::parse(text)?;
+    let Expression::Binary { left, op: BinaryOp::Eq, right } = &ast else {
+        return Err("not `count(..) == 0`".into());
+    };
+    let (Expression::FunctionCall { name, args }, Expression::Literal(Literal::Int(0))) = (left.as_ref(), right.as_ref()) else {
+        return Err("not `count(..) == 0`".into());
+    };
+    let [Expression::FieldRef(FieldRef::Simple(entity)), predicate] = (name == "count").then_some(args.as_slice()).unwrap_or(&[]) else {
+        return Err("not `count(<entity>, <predicate>) == 0`".into());
+    };
+    let other = schema
+        .models
+        .iter()
+        .find(|m| &m.name == entity)
+        .ok_or_else(|| format!("counts `{entity}`, which is not a model of this module"))?;
+    let mut terms = Vec::new();
+    conjuncts(predicate, &mut terms);
+    let mut reference = None;
+    let mut filters = Vec::new();
+    for term in terms {
+        let is_this_id = |e: &Expression| {
+            matches!(e, Expression::MemberAccess { object, member }
+                if member == "id" && matches!(object.as_ref(), Expression::Context(c) if c == "this"))
+        };
+        match term {
+            Expression::Binary { left, op: BinaryOp::Eq, right } if is_this_id(right) || is_this_id(left) => {
+                let fk = if is_this_id(right) { left } else { right };
+                let Expression::FieldRef(FieldRef::Simple(f)) = fk.as_ref() else {
+                    return Err("the referencing side is not a field".into());
+                };
+                if other.find_field(f).is_none() {
+                    return Err(format!("`{f}` is not a field of {entity}"));
+                }
+                reference = Some(f.clone());
+            }
+            other_term => filters.push(other_term),
+        }
+    }
+    let fk = reference.ok_or("names no field referencing the row (`fk == $this.id`)")?;
+    let mut c = Compiler { model: other, enums, fields: Vec::new(), row_var: "row", reads_old: false, reads_actor: false, reads_time: false };
+    let mut wheres = vec![format!("\"{fk}\" = $1::uuid")];
+    for f in filters {
+        let (_, sql, _) = c.emit(f)?;
+        if c.reads_old || c.reads_actor || c.reads_time {
+            return Err("its filter reads the writer, the time or the row being deleted".into());
+        }
+        wheres.push(sql);
+    }
+    let _ = model;
+    Ok(CompiledDeleteGuard {
+        name: rule.name.clone(),
+        code: code_of(rule.code.as_deref().unwrap_or(&rule.name)),
+        message: rule.message.clone().unwrap_or_else(|| format!("breaks the rule `{}`: {}", rule.name, text)),
+        sql: format!("SELECT count(*) FROM {} WHERE {}", other.qualified_table_name(), wheres.join(" AND ")),
+        source: rule.source.to_string(),
+    })
+}
+
+/// Every delete-guard rule of `model` that compiles, in declaration order.
+pub fn model_delete_guards(schema: &crate::ast::ModuleSchema, model: &Model) -> Vec<CompiledDeleteGuard> {
+    let enums: HashSet<String> = schema.enums.iter().map(|e| e.name.clone()).collect();
+    schema
+        .rule_register
+        .rules
+        .iter()
+        .filter(|r| r.bound_model.as_deref() == Some(model.name.as_str()))
+        .filter_map(|r| compile_delete_guard(r, model, schema, &enums).ok())
+        .collect()
+}
+
+/// Whether the generator emits a write guard for `model`.
+pub fn model_has_guard(schema: &crate::ast::ModuleSchema, model: &Model) -> bool {
+    !model_row_rules(schema, model).is_empty() || !model_delete_guards(schema, model).is_empty()
+}
+
 /// A foreign key a field declares (`@foreign_key(Entity.column)`, quoted or bare) on another
 /// entity of the same module: the reference an existence rule rests on.
 #[derive(Debug, Clone, PartialEq)]
@@ -354,7 +457,7 @@ pub fn foreign_key_audit_query(schema: &crate::ast::ModuleSchema, model: &Model,
 
 /// The Rust items of `model`'s write guard: `<Model>RowRules`, checking each compiled row rule
 /// against the row a create or update would store. Every rule runs in shadow.
-pub fn render_guard(model: &Model, rules: &[CompiledRowRule]) -> String {
+pub fn render_guard(model: &Model, rules: &[CompiledRowRule], deletes: &[CompiledDeleteGuard]) -> String {
     let name = &model.name;
     let mut out = String::new();
     out.push_str(&format!(
@@ -370,8 +473,31 @@ pub fn render_guard(model: &Model, rules: &[CompiledRowRule]) -> String {
          \x20   ) -> backbone_core::write_guard::GuardOutcome {{\n\
          \x20       use backbone_core::row_rule as r;\n\
          \x20       use backbone_core::violation::Violation;\n\
-         \x20       use backbone_core::write_guard::{{GuardOutcome, WriteKind}};\n\
-         \x20       let (create, update) = (ctx.kind == WriteKind::Create, ctx.kind == WriteKind::Update);\n\
+         \x20       use backbone_core::write_guard::{{GuardOutcome, WriteKind}};\n"
+    ));
+    if !deletes.is_empty() {
+        // A delete: count the rows still referencing the row, on the request's own connection.
+        out.push_str(
+            "        if matches!(ctx.kind, WriteKind::Delete | WriteKind::HardDelete) {\n\
+             \x20           let Some(Ok(old)) = ctx.before.map(serde_json::to_value) else {\n\
+             \x20               return GuardOutcome::allow();\n\
+             \x20           };\n\
+             \x20           let mut shadow = Vec::new();\n",
+        );
+        for d in deletes {
+            out.push_str(&format!(
+                "            // `{}` ({})\n            if !r::holds(&r::eq(r::referencing({:?}, r::field(&old, \"id\")).await, r::Val::Num(0.0_f64))) {{\n                shadow.push(Violation::new(\"\", {:?}, {:?}));\n            }}\n",
+                d.name, d.source, d.sql, d.code, d.message
+            ));
+        }
+        out.push_str("            return GuardOutcome { refuse: Vec::new(), shadow };\n        }\n");
+    }
+    if rules.is_empty() {
+        out.push_str("        GuardOutcome::allow()\n    }\n}\n");
+        return out;
+    }
+    out.push_str(&format!(
+        "\x20       let (create, update) = (ctx.kind == WriteKind::Create, ctx.kind == WriteKind::Update);\n\
          \x20       let Some(after) = ctx.after.filter(|_| create || update) else {{\n\
          \x20           return GuardOutcome::allow();\n\
          \x20       }};\n\
@@ -636,7 +762,12 @@ impl Compiler<'_> {
 
     fn method(&mut self, object: &Expression, method: &str, args: &[Expression]) -> Result<(String, String, Ty), String> {
         if matches!(object, Expression::Context(c) if c == "actor") {
-            return Err(format!("`$actor.{method}(..)` needs a lookup into authorization data (graph rules)"));
+            // `$actor.has_role('admin')`: asks the roles source the composing service installed.
+            if let ("has_role", [Expression::Literal(Literal::String(role))]) = (method, args) {
+                self.reads_actor = true;
+                return Ok((format!("r::has_role(ctx.actor.as_deref(), {}).await", rust_str(role)), "NULL".into(), Ty::Bool));
+            }
+            return Err(format!("`$actor.{method}(..)` is not a writer check a rule can make"));
         }
         let (or, os, ot) = self.emit(object)?;
         if ot == Ty::JsonKey {
@@ -779,7 +910,7 @@ mod tests {
     #[test]
     fn what_a_row_rule_cannot_read_is_refused_with_a_reason() {
         for (text, says) in [
-            ("$actor.has_role('admin') || name != null", "lookup into authorization data"),
+            ("$actor.can('admin')", "unresolved"),
             ("$actor.email == name", "`$actor.email`"),
             ("metadata != null", "cannot read"),
             ("risk_score > metadata.created_at", "only test it for null"),
@@ -815,21 +946,59 @@ mod tests {
     }
 
     #[test]
+    fn a_role_check_asks_the_roles_source() {
+        let c = compile("$actor.has_role('admin') || name != null").unwrap();
+        assert_eq!(c.rust, "r::or(r::has_role(ctx.actor.as_deref(), \"admin\").await, r::is_not_null(r::field(row, \"name\")))");
+        assert_eq!((c.layer, c.sql.is_none()), ("context", true));
+    }
+
+    #[test]
+    fn a_delete_guard_counts_the_rows_still_referencing_the_row() {
+        let mut lock = Model::new("FileLock");
+        lock.schema = Some("bucket".into());
+        lock.fields.push(crate::ast::Field::new("bucket_id", TypeRef::Primitive(PrimitiveType::Uuid)));
+        lock.fields.push(crate::ast::Field::new("active", TypeRef::Primitive(PrimitiveType::Bool)));
+        let mut schema = crate::ast::ModuleSchema::new("bucket");
+        schema.models = vec![bucket(), lock];
+        let d = compile_delete_guard(
+            &rule("count(FileLock, bucket_id == $this.id && active == true) == 0", &["delete"]),
+            &bucket(),
+            &schema,
+            &enums(),
+        )
+        .unwrap();
+        assert_eq!(d.sql, "SELECT count(*) FROM bucket.file_locks WHERE \"bucket_id\" = $1::uuid AND (\"active\" = TRUE)");
+        for (text, when, says) in [
+            ("count(FileLock, bucket_id == $this.id) == 0", "create", "not only on delete"),
+            ("count(Other, x == $this.id) == 0", "delete", "not a model of this module"),
+            ("count(FileLock, active == true) == 0", "delete", "names no field referencing"),
+        ] {
+            let err = compile_delete_guard(&rule(text, &[when]), &bucket(), &schema, &enums()).unwrap_err();
+            assert!(err.contains(says), "{text}: {err}");
+        }
+        // A guard with only delete rules ends after the delete branch: nothing else is bound.
+        let guard = render_guard(&bucket(), &[], &[d]);
+        assert!(guard.contains("if matches!(ctx.kind, WriteKind::Delete | WriteKind::HardDelete) {"), "{guard}");
+        assert!(guard.contains("r::referencing(\"SELECT count(*) FROM bucket.file_locks"), "{guard}");
+        assert!(guard.contains("        GuardOutcome::allow()\n    }\n}\n") && !guard.contains("let row"), "{guard}");
+    }
+
+    #[test]
     fn the_guard_checks_a_time_rule_on_update_only_when_its_fields_change() {
         let mut rules = vec![compile("risk_score > now()").unwrap(), compile("risk_score >= $old.risk_score").unwrap()];
         rules[1].on_create = false;
-        let guard = render_guard(&bucket(), &rules);
+        let guard = render_guard(&bucket(), &rules, &[]);
         assert!(guard.contains("let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);"));
         assert!(guard.contains("if (create || (update && r::changed(old.as_ref(), row, &[\"risk_score\"]))) && !r::holds("), "{guard}");
         assert!(guard.contains("if (update) && !r::holds(&r::ge("), "{guard}");
         // A guard with only row rules binds no `old`; one with only time rules binds no `old_row`.
-        assert!(!render_guard(&bucket(), &[compile("name.length > 0").unwrap()]).contains("let old"));
-        let time_only = render_guard(&bucket(), &[compile("risk_score > now()").unwrap()]);
+        assert!(!render_guard(&bucket(), &[compile("name.length > 0").unwrap()], &[]).contains("let old"));
+        let time_only = render_guard(&bucket(), &[compile("risk_score > now()").unwrap()], &[]);
         assert!(time_only.contains("let old =") && !time_only.contains("let old_row"), "{time_only}");
         // A time rule checked on create alone never asks whether an update changed anything.
         let mut on_create = compile("risk_score > now()").unwrap();
         on_create.on_update = false;
-        assert!(!render_guard(&bucket(), &[on_create]).contains("let old"));
+        assert!(!render_guard(&bucket(), &[on_create], &[]).contains("let old"));
     }
 
     #[test]

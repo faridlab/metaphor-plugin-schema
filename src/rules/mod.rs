@@ -282,11 +282,16 @@ impl RuleRegister {
     /// Mark every rule the row-rule compiler takes as compiled into its
     /// entity's write guard, the same set the generator emits.
     pub fn mark_compiled(&mut self, models: &[Model], enums: &std::collections::HashSet<String>) {
+        // A delete guard counts rows of another model of the module, so it sees them all.
+        let mut module = crate::ast::ModuleSchema::new("");
+        module.models = models.to_vec();
         for rule in &mut self.rules {
             let Some(model) = rule.bound_model.as_ref().and_then(|n| models.iter().find(|m| &m.name == n)) else {
                 continue;
             };
-            if compile::compile_row_rule(rule, model, enums).is_ok() {
+            if compile::compile_row_rule(rule, model, enums).is_ok()
+                || compile::compile_delete_guard(rule, model, &module, enums).is_ok()
+            {
                 rule.status = EnforcementStatus::Shadow;
             }
         }

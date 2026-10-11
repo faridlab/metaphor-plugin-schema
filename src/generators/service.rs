@@ -125,9 +125,10 @@ impl ServiceGenerator {
         writeln!(output, "    Update{}Dto,", name).unwrap();
         writeln!(output, "    {}Repository,", name).unwrap();
         writeln!(output, ">;").unwrap();
-        let rules = crate::rules::compile::model_row_rules(schema, model);
-        if !rules.is_empty() {
-            output.push_str(&crate::rules::compile::render_guard(model, &rules));
+        if crate::rules::compile::model_has_guard(schema, model) {
+            let rules = crate::rules::compile::model_row_rules(schema, model);
+            let deletes = crate::rules::compile::model_delete_guards(schema, model);
+            output.push_str(&crate::rules::compile::render_guard(model, &rules, &deletes));
         }
         writeln!(output).unwrap();
         writeln!(output, "// <<< CUSTOM").unwrap();
@@ -250,7 +251,7 @@ impl Generator for ServiceGenerator {
                     writeln!(mod_content, "pub use {}::{}Service;", model_snake, model).unwrap();
                 }
                 for model in &schema.schema.models {
-                    if !crate::rules::compile::model_row_rules(&schema.schema, model).is_empty() {
+                    if crate::rules::compile::model_has_guard(&schema.schema, model) {
                         writeln!(mod_content, "pub use {}::{}RowRules;", to_snake_case(&model.name), model.name).unwrap();
                     }
                 }
@@ -277,7 +278,7 @@ impl Generator for ServiceGenerator {
                     .unwrap();
                 }
                 for model in &schema.schema.models {
-                    if !crate::rules::compile::model_row_rules(&schema.schema, model).is_empty() {
+                    if crate::rules::compile::model_has_guard(&schema.schema, model) {
                         writeln!(mod_content, "pub use {}_service::{}RowRules;", to_snake_case(&model.name), model.name).unwrap();
                     }
                 }
@@ -331,7 +332,7 @@ mod tests {
     /// The test schema with one row rule on `Order` and one rule the compiler does not take.
     fn schema_with_rules() -> ResolvedSchema {
         let mut resolved = create_test_schema();
-        let hook = "name: OrderRules\nmodel: Order\nrules:\n  name_length:\n    when: [create, update]\n    condition: \"name.length <= 80\"\n    code: NAME_TOO_LONG\n  only_owner:\n    when: [update]\n    condition: \"$actor.has_role('admin')\"\n";
+        let hook = "name: OrderRules\nmodel: Order\nrules:\n  name_length:\n    when: [create, update]\n    condition: \"name.length <= 80\"\n    code: NAME_TOO_LONG\n  only_owner:\n    when: [update]\n    condition: \"$actor.can('admin')\"\n";
         let models = resolved.schema.models.clone();
         let register = &mut resolved.schema.rule_register;
         register.read_file("order.hook.yaml", hook);
@@ -351,7 +352,7 @@ mod tests {
         assert!(service.contains("r::le(r::length(r::field(row, \"name\")), r::Val::Num(80.0_f64))"));
         assert!(service.contains("Violation::new(\"name\", \"name_too_long\""));
         assert!(service.contains("GuardOutcome { refuse: Vec::new(), shadow }"));
-        // A role check needs a lookup: no check for it, and it stays unenforced.
+        // A writer check a rule cannot make: no check for it, and it stays unenforced.
         assert!(!service.contains("only_owner"));
         let statuses: Vec<_> = resolved.schema.rule_register.rules.iter().map(|r| (r.name.as_str(), r.status)).collect();
         assert_eq!(
