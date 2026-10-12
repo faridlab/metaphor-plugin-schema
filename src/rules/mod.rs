@@ -316,7 +316,8 @@ impl RuleRegister {
     }
 
     /// Check every `enforced_by:` against the module's sources under `root`: the file must
-    /// exist and define the function. A rule whose claim holds reads `verb`; one whose claim
+    /// exist and define the function, or, for a migration (`.sql`), the index, constraint,
+    /// trigger or function. A rule whose claim holds reads `verb`; one whose claim
     /// does not is warned about, so the declaration cannot outlive the code it names.
     pub fn verify_enforced_by(&mut self, root: &std::path::Path) {
         for rule in &mut self.rules {
@@ -324,6 +325,11 @@ impl RuleRegister {
             // One function, or several separated by commas when the rule holds on several paths.
             let found = claim.split(',').map(str::trim).try_for_each(|one| one.rsplit_once("::").and_then(|(file, func)| {
                 let text = std::fs::read_to_string(root.join(file)).ok()?;
+                // A migration names the database object that carries the rule: an index, a
+                // constraint, a trigger or a function it defines.
+                if file.ends_with(".sql") {
+                    return defines_sql_object(&text, func).then_some(());
+                }
                 let defines = text.lines().any(|l| {
                     let l = l.trim_start();
                     let l = l.strip_prefix("pub(crate) ").or_else(|| l.strip_prefix("pub(super) ")).or_else(|| l.strip_prefix("pub ")).unwrap_or(l);
@@ -361,6 +367,33 @@ pub struct Readiness {
 }
 
 /// Replace `word` where it stands as a whole identifier.
+/// Whether `sql` defines the database object `name`: `CREATE [UNIQUE] INDEX [IF NOT EXISTS] name`,
+/// `CONSTRAINT name`, `CREATE [CONSTRAINT] TRIGGER name` or `CREATE [OR REPLACE] FUNCTION
+/// [schema.]name`, ignoring case and quotes.
+fn defines_sql_object(sql: &str, name: &str) -> bool {
+    let words: Vec<String> = sql
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ';')
+        .filter(|w| !w.is_empty())
+        .map(|w| w.trim_matches('"').to_ascii_lowercase())
+        .collect();
+    let name = name.to_ascii_lowercase();
+    let is_name = |w: &str| w == name || w.rsplit('.').next() == Some(name.as_str());
+    words.iter().enumerate().any(|(i, w)| {
+        let next = |k: usize| words.get(i + k).map(String::as_str).unwrap_or("");
+        match w.as_str() {
+            "index" | "trigger" | "function" => {
+                let mut k = 1;
+                if next(1) == "if" && next(2) == "not" && next(3) == "exists" {
+                    k = 4;
+                }
+                is_name(next(k)) && words[..i].iter().rev().take(4).any(|p| p == "create")
+            }
+            "constraint" => is_name(next(1)),
+            _ => false,
+        }
+    })
+}
+
 fn replace_word(text: &str, word: &str, with: &str) -> String {
     let mut out = String::new();
     let bytes: Vec<char> = text.chars().collect();
@@ -474,5 +507,19 @@ mod enforced_by_tests {
             "`sub` is not `submit_all`, and a missing file proves nothing"
         );
         assert_eq!(register.warnings.iter().filter(|w| w.message.contains("no such function")).count(), 2);
+    }
+
+    #[test]
+    fn a_migration_claim_holds_when_the_migration_defines_the_object() {
+        let sql = "CREATE UNIQUE INDEX IF NOT EXISTS uq_transfers_name ON inventory.transfers (name);\n\
+                   ALTER TABLE inventory.moves ADD CONSTRAINT \"moves_src_ne_dest\" CHECK (location_id <> location_dest_id);\n\
+                   CREATE OR REPLACE FUNCTION inventory.done_move_guard() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$;\n\
+                   CREATE TRIGGER done_move_immutable BEFORE UPDATE ON inventory.moves FOR EACH ROW EXECUTE FUNCTION inventory.done_move_guard();";
+        for name in ["uq_transfers_name", "moves_src_ne_dest", "done_move_guard", "done_move_immutable"] {
+            assert!(defines_sql_object(sql, name), "{name}");
+        }
+        // Named only as the target of EXECUTE FUNCTION in a trigger, or not at all: not defined here.
+        assert!(!defines_sql_object("CREATE TRIGGER t BEFORE UPDATE ON x EXECUTE FUNCTION other_fn();", "other_fn"));
+        assert!(!defines_sql_object(sql, "uq_missing"));
     }
 }
