@@ -7,6 +7,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-10-12
+
+### Added
+
+- **The rule ratchet.** Each module commits `schema/rules.baseline.yaml`: its unenforced rules
+  (counted and listed), register warnings, state machines without a `verbs` declaration, and rule
+  ids no test mentions. `schema doctor` fails when a count rises, when an unenforced rule appears
+  that the baseline does not list, or when a module with rules has no baseline.
+  `schema rules . --check-baseline` runs that check alone (for CI);
+  `schema rules . --update-baseline` writes the module's current numbers after a fix.
+
 ## [0.23.5] — 2026-10-12
 
 ### Fixed
