@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.24.1] — 2026-10-12
+
+### Added
+
+- **`enforced_by:` can name a database object:** `migrations/<file>.up.sql::<name>` holds when that
+  migration defines the index, constraint, trigger or function, so a rule carried by the database
+  counts as enforced.
+
 ## [0.24.0] — 2026-10-12
 
 ### Added
