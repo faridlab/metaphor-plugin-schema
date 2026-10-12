@@ -11,6 +11,7 @@
 //! than dropped. Generators do not read the register yet; adding it changes no
 //! generated file.
 
+pub mod baseline;
 pub mod catalog;
 pub mod compile;
 pub mod expr;

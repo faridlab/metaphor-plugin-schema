@@ -189,6 +189,18 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
 
     println!("  audited {} .rs file(s)", audited_files);
 
+    // The rule ratchet: what the hook files leave unenforced may only go down.
+    let ratchet = rule_ratchet(&module_schema.rule_register, &consumer_root)?;
+    for r in &ratchet {
+        println!("  {} {r}", "✗".red().bold());
+    }
+    if !ratchet.is_empty() && findings.is_empty() {
+        anyhow::bail!(
+            "the rule ratchet failed ({} problem(s)); enforce the rule, or accept the numbers with `metaphor schema rules . --update-baseline`",
+            ratchet.len()
+        );
+    }
+
     // A module on the extension layout keeps no hand code in a generated file (ADR-0031):
     // every generated `src/**/*.rs` file must equal what a generation writes now.
     let (edited, unattached) = generated_file_drift(module)?;
@@ -269,6 +281,22 @@ struct Finding {
 /// Compile the `user_owned:` glob list from a `metaphor.codegen.yaml` into a
 /// matchable set. Shared with `schema undeclared`, which tests hand-written
 /// files against the very same globs.
+/// What breaks the module's rule ratchet: a count above its committed baseline, a new unenforced
+/// rule, or no baseline at all for a module whose hooks declare rules or machines.
+pub(super) fn rule_ratchet(register: &crate::rules::RuleRegister, root: &Path) -> Result<Vec<String>> {
+    if register.rules.is_empty() && register.machines.is_empty() {
+        return Ok(Vec::new());
+    }
+    let now = crate::rules::baseline::measure(register, root);
+    Ok(match crate::rules::baseline::read(root)? {
+        Some(was) => crate::rules::baseline::regressions(&was, &now),
+        None => vec![format!(
+            "no rule ratchet: {} is missing; write it with `metaphor schema rules . --update-baseline`",
+            crate::rules::baseline::FILE
+        )],
+    })
+}
+
 /// The generated `src/**/*.rs` files of a layout module whose content on disk differs from what
 /// a generation writes now, as paths relative to the module root. Empty for a module that is
 /// not on the extension layout.

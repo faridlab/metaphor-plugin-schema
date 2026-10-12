@@ -15,10 +15,49 @@ use super::discovery::{find_module_schema_path, find_schema_files};
 use super::module_loader::build_module_schema;
 use super::OutputFormat;
 
-pub(super) fn execute_rules(module: &str, format: OutputFormat, suggest: bool, audit: bool) -> Result<()> {
+pub(super) fn execute_rules(
+    module: &str,
+    format: OutputFormat,
+    suggest: bool,
+    audit: bool,
+    update_baseline: bool,
+    check_baseline: bool,
+) -> Result<()> {
     let schema_path = find_module_schema_path(module)?;
     let schema_files = find_schema_files(&schema_path)?;
     let (module_schema, _parse_errors) = build_module_schema(module, &schema_files)?;
+    if check_baseline {
+        let root = super::doctor::locate_consumer_root(&schema_path).unwrap_or_else(|| schema_path.clone());
+        let problems = super::doctor::rule_ratchet(&module_schema.rule_register, &root)?;
+        for p in &problems {
+            println!("  {} {p}", "✗".red().bold());
+        }
+        if !problems.is_empty() {
+            anyhow::bail!("the rule ratchet failed ({} problem(s))", problems.len());
+        }
+        println!("  {} rule ratchet holds", "✓".green());
+        return Ok(());
+    }
+    if update_baseline {
+        let root = super::doctor::locate_consumer_root(&schema_path).unwrap_or_else(|| schema_path.clone());
+        let now = crate::rules::baseline::measure(&module_schema.rule_register, &root);
+        if let Some(was) = crate::rules::baseline::read(&root)? {
+            for r in crate::rules::baseline::regressions(&was, &now) {
+                println!("  {} {r}: the baseline now accepts it", "!".yellow().bold());
+            }
+        }
+        crate::rules::baseline::write(&root, &now)?;
+        println!(
+            "  {} {} written: {} unenforced, {} warnings, {} machines without verbs, {} untested rule ids",
+            "✓".green(),
+            crate::rules::baseline::FILE,
+            now.unenforced,
+            now.warnings,
+            now.machines_without_verbs,
+            now.untested_rule_ids
+        );
+        return Ok(());
+    }
     if audit {
         for model in &module_schema.models {
             for rule in crate::rules::compile::model_row_rules(&module_schema, model) {

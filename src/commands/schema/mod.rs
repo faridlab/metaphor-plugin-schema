@@ -101,6 +101,16 @@ pub enum SchemaAction {
         /// stored rows that break it; run it before the rule is enforced
         #[arg(long)]
         audit: bool,
+
+        /// Write the module's rule ratchet (`schema/rules.baseline.yaml`) from its current
+        /// counts, after enforcing a rule; `schema doctor` fails when a count rises above it
+        #[arg(long)]
+        update_baseline: bool,
+
+        /// Check the module against its committed rule ratchet and fail on a regression: the
+        /// ratchet half of `schema doctor`, for CI
+        #[arg(long, conflicts_with = "update_baseline")]
+        check_baseline: bool,
     },
 
     /// Validate cross-module foreign keys across the whole workspace
@@ -350,7 +360,9 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         SchemaAction::Parse { path, format } => execute_parse(&path, format),
         SchemaAction::Validate { module, warnings } => execute_validate(&module, warnings),
         SchemaAction::ValidateWorkspace => execute_validate_workspace(),
-        SchemaAction::Rules { module, format, suggest, audit } => execute_rules(&module, format, suggest, audit),
+        SchemaAction::Rules { module, format, suggest, audit, update_baseline, check_baseline } => {
+            execute_rules(&module, format, suggest, audit, update_baseline, check_baseline)
+        }
         SchemaAction::Generate {
             module,
             target,
