@@ -16,7 +16,8 @@ pub use flow_resolver::FlowResolver;
 pub use reference_resolver::ReferenceResolver;
 pub use type_resolver::TypeResolver;
 pub use validator::{
-    declaration_warnings, naming_warnings, secret_warnings, trigger_warnings, workflow_warnings,
+    declaration_warnings, naming_warnings, retired_generator_warnings, secret_warnings, trigger_warnings,
+    workflow_warnings,
     SchemaValidator,
 };
 

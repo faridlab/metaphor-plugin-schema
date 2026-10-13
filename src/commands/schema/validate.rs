@@ -6,7 +6,7 @@ use colored::Colorize;
 
 use crate::resolver::{
     declaration_warnings, naming_warnings, resolve_schema, secret_warnings, trigger_warnings,
-    workflow_warnings,
+    workflow_warnings, retired_generator_warnings,
 };
 
 use super::discovery::{find_module_schema_path, find_schema_files};
@@ -55,6 +55,9 @@ pub(super) fn execute_validate(module: &str, warnings: bool) -> Result<()> {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             for warning in workflow_warnings(&module_schema) {
+                println!("  {} {}", "Warning:".yellow().bold(), warning);
+            }
+            for warning in retired_generator_warnings(&module_schema) {
                 println!("  {} {}", "Warning:".yellow().bold(), warning);
             }
             // The rule register: what the hook files declare and the generator

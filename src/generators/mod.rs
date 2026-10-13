@@ -13,7 +13,6 @@ pub mod data_change_audit;
 pub mod state_transition_check;
 pub mod domain_service;
 pub mod events;
-pub mod flow;
 pub mod graphql;
 pub mod grpc;
 pub mod handler;
@@ -33,7 +32,6 @@ pub mod seeder;
 pub mod service;
 pub mod sql;
 pub mod state_machine;
-pub mod trigger;
 pub mod value_object;
 pub mod versioning;
 
@@ -52,7 +50,6 @@ pub use data_change_audit::DataChangeAuditGenerator;
 pub use state_transition_check::StateTransitionCheckGenerator;
 pub use domain_service::DomainServiceGenerator;
 pub use events::EventsGenerator;
-pub use flow::FlowGenerator;
 pub use graphql::GraphqlGenerator;
 pub use grpc::GrpcGenerator;
 pub use handler::HandlerGenerator;
@@ -72,7 +69,6 @@ pub use seeder::SeederGenerator;
 pub use service::ServiceGenerator;
 pub use sql::SqlGenerator;
 pub use state_machine::StateMachineGenerator;
-pub use trigger::TriggerGenerator;
 pub use value_object::ValueObjectGenerator;
 pub use versioning::VersioningGenerator;
 
@@ -611,8 +607,6 @@ pub fn generate_all_with_options(
                     GenerationTarget::OpenApi => OpenApiGenerator::new()
                         .with_split(options.split)
                         .generate(s)?,
-                    GenerationTarget::Trigger => TriggerGenerator::new().generate(s)?,
-                    GenerationTarget::Flow => FlowGenerator::new().generate(s)?,
                     GenerationTarget::Module => ModuleGenerator::new().generate(s)?,
                     GenerationTarget::Config => ConfigGenerator::new().generate(s)?,
                     GenerationTarget::ValueObject => ValueObjectGenerator::new().generate(s)?,
@@ -621,6 +615,10 @@ pub fn generate_all_with_options(
                     GenerationTarget::UseCase
                     | GenerationTarget::Validator
                     | GenerationTarget::Specification => GeneratedOutput::new(),
+                    // Retired: no write path ran a hook's trigger registry or a workflow's
+                    // executor. A hook's behaviour lives in hand services and lifecycle hooks,
+                    // and a workflow YAML documents the hand service that runs the saga.
+                    GenerationTarget::Trigger | GenerationTarget::Flow => GeneratedOutput::new(),
                     GenerationTarget::Cqrs => CqrsGenerator::new().generate(s)?,
                     GenerationTarget::Computed => ComputedGenerator::new().generate(s)?,
                     GenerationTarget::Projection => ProjectionGenerator::new().generate(s)?,
@@ -849,13 +847,11 @@ pub(crate) fn model_skips_target(model: &crate::ast::Model, target: GenerationTa
 /// - If `enabled` is set, only those targets pass through (whitelist).
 /// - If `disabled` is set, those targets are removed (blacklist).
 /// - If neither is set, all targets pass through unchanged.
-/// Targets nothing in a generated module or its host uses: trigger registries no write
-/// path runs, specifications and API versioning nothing calls, and the gRPC, GraphQL and
+/// Targets nothing in a generated module or its host uses: specifications and API versioning nothing calls, and the gRPC, GraphQL and
 /// protobuf layers no module serves. They are generated only for a module that names them
 /// in `generators: opt_in:` (or lists them in `enabled:`). The seeder target is half of
 /// this: see [`rust_seeders_opted_in`].
 const OPT_IN_TARGETS: &[GenerationTarget] = &[
-    GenerationTarget::Trigger,
     GenerationTarget::Specification,
     GenerationTarget::Versioning,
     GenerationTarget::Graphql,
@@ -942,15 +938,8 @@ fn filter_targets_by_config(
     // Opt-in targets: skipped unless the module names them in `opt_in:`.
     filtered.retain(|t| !is_off_by_default(config, *t));
 
-    // Workflow opt-in: skip the Flow target unless `workflows = true`. Nothing runs
-    // the generated executors, so by default they are not generated.
-    let workflows_enabled = config.as_ref().and_then(|c| c.workflows) == Some(true);
-    if !workflows_enabled {
-        filtered.retain(|t| !matches!(t, GenerationTarget::Flow));
-    }
-
     // Layers opt-in: skip Auth/BulkOperations/UseCase/RoutesComposer/HandlersModule
-    // unless `layers = true`. Most modules wire only service/validator/workflows +
+    // unless `layers = true`. Most modules wire only the service +
     // inline route composition (all_crud_routes), so emitting these by default
     // produces uncompiled orphan dirs. Modules that wire them set `layers: true`.
     let layers_enabled = config.as_ref().and_then(|c| c.layers) == Some(true);
@@ -1033,17 +1022,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_executors_are_generated_only_for_a_module_that_opts_in() {
-        let all = all_targets();
-        let plain = filter_targets_by_config(&all, &make_config(None, None, None));
-        assert!(!plain.contains(&GenerationTarget::Flow), "workflows are opt-in");
-        let mut opted = make_config(None, None, None);
-        opted.as_mut().unwrap().workflows = Some(true);
-        assert!(filter_targets_by_config(&all, &opted).contains(&GenerationTarget::Flow));
-        assert!(!filter_targets_by_config(&all, &None).contains(&GenerationTarget::Flow), "no config: not generated");
-    }
-
-    #[test]
     fn test_disabled_blacklist_still_applies_cqrs_opt_in() {
         // disabled: [handler] + no cqrs: true → handler gone, Cqrs/Projection also skipped
         let result = filter_targets_by_config(
@@ -1085,7 +1063,6 @@ mod tests {
     #[test]
     fn targets_nothing_uses_are_generated_only_when_a_module_opts_in() {
         let off = [
-            GenerationTarget::Trigger,
             GenerationTarget::Specification,
             GenerationTarget::Versioning,
             GenerationTarget::Graphql,
@@ -1106,9 +1083,9 @@ mod tests {
         let result = filter_targets_by_config(&all_targets(), &config);
         assert!(rust_seeders_opted_in(&config), "an alias opts in");
         assert!(result.contains(&GenerationTarget::Specification));
-        assert!(!result.contains(&GenerationTarget::Trigger), "only what is named");
-        let whitelist = make_config(Some(vec!["rust", "trigger"]), None, None);
-        assert!(filter_targets_by_config(&all_targets(), &whitelist).contains(&GenerationTarget::Trigger));
+        assert!(!result.contains(&GenerationTarget::Versioning), "only what is named");
+        let whitelist = make_config(Some(vec!["rust", "versioning"]), None, None);
+        assert!(filter_targets_by_config(&all_targets(), &whitelist).contains(&GenerationTarget::Versioning));
     }
 
     #[test]
