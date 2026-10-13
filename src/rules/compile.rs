@@ -526,7 +526,9 @@ pub fn declared_foreign_keys(schema: &crate::ast::ModuleSchema, model: &Model) -
             let [entity, column] = s.split('.').collect::<Vec<_>>()[..] else { return None };
             let target = schema.models.iter().find(|m| m.name == entity)?;
             let names_table = target.find_field(column).is_none() && column == target.collection_name();
-            let target_column = if names_table {
+            // A name that is no column of the target (its table, or the far side's relation such
+            // as `MailActivityType.activities`) points at the target's primary key.
+            let target_column = if target.find_field(column).is_none() {
                 target.primary_key().map(|p| p.name.clone()).unwrap_or_else(|| "id".into())
             } else {
                 column.to_string()
