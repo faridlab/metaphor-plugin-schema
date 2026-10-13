@@ -978,12 +978,12 @@ impl Compiler<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ast::Field;
     use crate::rules::{EnforcementStatus, SourceRef};
 
-    fn bucket() -> Model {
+    pub(crate) fn bucket() -> Model {
         let mut m = Model::new("Bucket");
         m.schema = Some("bucket".into());
         m.fields.push(Field::new("name", TypeRef::Primitive(PrimitiveType::String)));
@@ -995,7 +995,7 @@ mod tests {
         m
     }
 
-    fn rule(text: &str, when: &[&str]) -> DeclaredRule {
+    pub(crate) fn rule(text: &str, when: &[&str]) -> DeclaredRule {
         let m = bucket();
         DeclaredRule {
             source: SourceRef { file: "bucket.hook.yaml".into(), line: Some(3) },

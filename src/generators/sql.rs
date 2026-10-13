@@ -2421,9 +2421,19 @@ impl SqlGenerator {
                 // literal as itself, not through its `::text` cast.
                 let filter = unique.filter_sql.as_ref().map(|f| format!(" WHERE {}", f.replace("::text", ""))).unwrap_or_default();
                 let schema_name = table.split('.').next().unwrap_or("public");
+                let table_name = table.rsplit('.').next().unwrap_or(&table);
+                // A table the host scopes per org unit (ADR-0029) holds each unit's rows side by
+                // side, so a declared uniqueness holds within one unit: its keys lead with the unit.
+                let create = if unique.keys.iter().any(|k| k == "org_unit_id") {
+                    format!("            CREATE UNIQUE INDEX {name} ON {table} ({}){filter};", keys.join(", "))
+                } else {
+                    format!(
+                        "            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '{schema_name}' AND table_name = '{table_name}' AND column_name = 'org_unit_id') THEN\n                CREATE UNIQUE INDEX {name} ON {table} (\"org_unit_id\", {keys}){filter};\n            ELSE\n                CREATE UNIQUE INDEX {name} ON {table} ({keys}){filter};\n            END IF;",
+                        keys = keys.join(", ")
+                    )
+                };
                 checks.push(format!(
-                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{schema_name}.{name}') IS NULL THEN\n        BEGIN\n            CREATE UNIQUE INDEX {name} ON {table} ({}){filter};\n        EXCEPTION WHEN unique_violation THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} repeat its keys';\n        WHEN undefined_column THEN\n            RAISE NOTICE '{name} not added: {table} lacks a column it reads';\n        END;\n    END IF;\nEND $$;\n",
-                    keys.join(", ")
+                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{schema_name}.{name}') IS NULL THEN\n        BEGIN\n{create}\n        EXCEPTION WHEN unique_violation THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} repeat its keys';\n        WHEN undefined_column THEN\n            RAISE NOTICE '{name} not added: {table} lacks a column it reads';\n        END;\n    END IF;\nEND $$;\n"
                 ));
                 check_drops.push(format!("DROP INDEX IF EXISTS {schema_name}.{name};"));
             }
@@ -4037,6 +4047,28 @@ mod tests {
         let escalation = up.lines().find(|l| l.contains("fk_tickets_escalation_queue_id FOREIGN KEY")).expect("the reverse-named key");
         assert!(escalation.contains("(id)") && !escalation.contains("(tickets)"), "a relation name resolves to the primary key: {escalation}");
         assert!(!up.contains("owner_id"), "no key into another module: {up}");
+    }
+
+    /// A declared uniqueness holds within one org unit on a table the host scopes per unit:
+    /// the index leads with `org_unit_id` where the table has it, decided when it migrates.
+    #[test]
+    fn a_unique_index_leads_with_the_org_unit_where_the_host_scopes_the_table() {
+        use crate::rules::compile::tests::{bucket, rule};
+        let mut schema = ModuleSchema::new("bucket");
+        schema.models = vec![bucket()];
+        schema.rule_register.rules.push(rule(
+            "count(Bucket, name == $this.name && id != $this.id && metadata.deleted_at == null) == 0",
+            &["create", "update"],
+        ));
+        let output = SqlGenerator::new().with_split(true).generate(&ResolvedSchema { schema }).unwrap();
+        let (_, up) = output
+            .files
+            .iter()
+            .find(|(k, _)| k.to_string_lossy().contains("add_declared_checks_") && k.to_string_lossy().ends_with(".up.sql"))
+            .expect("a declared checks migration");
+        assert!(up.contains("table_schema = 'bucket' AND table_name = 'buckets' AND column_name = 'org_unit_id'"), "{up}");
+        assert!(up.contains("ON bucket.buckets (\"org_unit_id\", \"name\") WHERE"), "scoped where the host scopes: {up}");
+        assert!(up.contains("ON bucket.buckets (\"name\") WHERE"), "unscoped elsewhere: {up}");
     }
 
     /// The rules the guard refuses land as database constraints in a guarded forward
