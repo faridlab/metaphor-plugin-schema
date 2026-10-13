@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-13
+
 ### Added
 
 - **Field attributes are checked by the write guard.** A model's field attributes compile into
