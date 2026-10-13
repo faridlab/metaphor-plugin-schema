@@ -7,6 +7,26 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-10-13
+
+### Added
+
+- **Declared foreign keys reach the database.** A field's `@foreign_key(Entity.column)` written
+  bare (unquoted) now becomes its relation, as the quoted form did; 222 declared same-module keys
+  had been dropped. Each module gets a forward migration, `add_declared_foreign_keys_<digest>`,
+  adding every same-module key its database lacks: only when the column carries no foreign key
+  yet, `NOT VALID` so stored rows cannot block it, then validated; where stored rows still
+  reference missing parents the key stays `NOT VALID` with a notice and still refuses new
+  orphans. A newly emitted deferred (cycle) foreign key migration is guarded the same way.
+
+### Fixed
+
+- A declared key naming the far side's relation (`MailActivityType.activities`) points at the
+  target's primary key, in the migration and in `schema rules --audit`.
+- No database key reaches into another module's tables.
+- The relation of a key field with no `_id` suffix (`generated_by`) is named after its target
+  (`generated_by_user`), so it no longer collides with the field.
+
 ## [0.26.0] — 2026-10-13
 
 ### Changed
