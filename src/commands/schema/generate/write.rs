@@ -219,16 +219,8 @@ fn is_retired_generated(output_dir: &Path, rel: &str) -> bool {
     if !header {
         return false;
     }
-    let mut in_custom = false;
-    for line in text.lines() {
-        let t = line.trim();
-        if t.contains("<<< CUSTOM") && !t.contains("END") {
-            in_custom = true;
-        } else if t.contains("END CUSTOM") || (t.contains("<<< CUSTOM") && t.contains("END")) {
-            in_custom = false;
-        } else if in_custom && !t.is_empty() && !t.starts_with("//") {
-            return false;
-        }
+    if holds_custom_code(&text) {
+        return false;
     }
     let git = |args: &[&str]| {
         std::process::Command::new("git")
@@ -240,6 +232,24 @@ fn is_retired_generated(output_dir: &Path, rel: &str) -> bool {
             .unwrap_or(false)
     };
     git(&["ls-files", "--error-unmatch", "--", rel]) && git(&["diff", "--quiet", "HEAD", "--", rel])
+}
+
+/// Whether a CUSTOM zone of `text` holds code. Only a marker line opens or closes a zone: a
+/// doc comment that names the marker ("extend in the `// <<< CUSTOM` zone") is prose.
+fn holds_custom_code(text: &str) -> bool {
+    let mut in_custom = false;
+    for line in text.lines() {
+        let t = line.trim();
+        let marker = t.starts_with("// <<< CUSTOM") || t.starts_with("// END CUSTOM");
+        if marker && t.starts_with("// <<< CUSTOM") && !t.contains("END") {
+            in_custom = true;
+        } else if marker {
+            in_custom = false;
+        } else if in_custom && !t.is_empty() && !t.starts_with("//") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Walk `src/` and `tests/` for `.rs` files that no generator emits and the
@@ -503,4 +513,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+}
+
+#[cfg(test)]
+mod custom_code_tests {
+    use super::holds_custom_code;
+
+    #[test]
+    fn a_doc_comment_naming_the_marker_opens_no_zone() {
+        let text = "//! Extend in the `// <<< CUSTOM` zone.\n\nuse a::b;\npub fn f() {}\n// <<< CUSTOM\n// END CUSTOM\n";
+        assert!(!holds_custom_code(text));
+    }
+
+    #[test]
+    fn code_inside_a_zone_is_hand_code() {
+        assert!(holds_custom_code("// <<< CUSTOM\nfn mine() {}\n// END CUSTOM\n"));
+        assert!(!holds_custom_code("// <<< CUSTOM\n// a note\n// END CUSTOM\n"));
+    }
 }
