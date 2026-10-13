@@ -252,8 +252,18 @@ impl YamlModel {
                                 None
                             };
 
-                            // Create relation name from field name (strip _id suffix if present)
-                            let rel_name = field.name.strip_suffix("_id").unwrap_or(&field.name);
+                            // Create relation name from field name (strip _id suffix if present).
+                            // A key field with no `_id` suffix (`generated_by`) would name its
+                            // relation after itself; the relation then takes the target's name
+                            // (`generated_by_user`) so the two never collide.
+                            let fallback;
+                            let rel_name = match field.name.strip_suffix("_id") {
+                                Some(stem) => stem,
+                                None => {
+                                    fallback = format!("{}_{}", field.name, crate::utils::to_snake_case(entity_name));
+                                    fallback.as_str()
+                                }
+                            };
 
                             // Skip if relation already exists
                             if existing_relation_names.contains(rel_name) {

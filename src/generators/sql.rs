@@ -2848,8 +2848,14 @@ fn extract_custom_type_name(type_ref: &TypeRef) -> Option<&str> {
 /// skipped with a notice, and the key refuses new orphans all the same.
 fn guarded_foreign_key(table: &str, column: &str, constraint_name: &str, alter_sql: &str) -> String {
     let add = alter_sql.trim_end_matches(';');
+    // The table the key points at, so a module whose tables are not all installed skips it.
+    let parent = add
+        .split(" REFERENCES ")
+        .nth(1)
+        .and_then(|r| r.split_whitespace().next())
+        .unwrap_or(table);
     format!(
-        "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND NOT EXISTS (\n        SELECT 1 FROM pg_constraint c\n        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)\n        WHERE c.conrelid = '{table}'::regclass AND c.contype = 'f' AND a.attname = '{column}'\n    ) THEN\n        {add} NOT VALID;\n        BEGIN\n            ALTER TABLE {table} VALIDATE CONSTRAINT {constraint_name};\n        EXCEPTION WHEN foreign_key_violation THEN\n            RAISE NOTICE '{constraint_name} left NOT VALID: stored rows of {table} reference missing rows';\n        END;\n    END IF;\nEND $$;\n"
+        "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{parent}') IS NOT NULL AND NOT EXISTS (\n        SELECT 1 FROM pg_constraint c\n        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)\n        WHERE c.conrelid = to_regclass('{table}') AND c.contype = 'f' AND a.attname = '{column}'\n    ) THEN\n        {add} NOT VALID;\n        BEGIN\n            ALTER TABLE {table} VALIDATE CONSTRAINT {constraint_name};\n        EXCEPTION WHEN foreign_key_violation THEN\n            RAISE NOTICE '{constraint_name} left NOT VALID: stored rows of {table} reference missing rows';\n        END;\n    END IF;\nEND $$;\n"
     )
 }
 
