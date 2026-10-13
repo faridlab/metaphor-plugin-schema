@@ -7,6 +7,41 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-10-14
+
+### Added
+
+- **Declared rules reach the database.** Each module gets a forward migration,
+  `add_declared_checks_<digest>`: a `CHECK` per refusing row rule and field check that has a
+  SQL form, and a partial unique index per uniqueness rule. Each is added only where no stored
+  row breaks it (otherwise a notice), and named `ck_`/`uq_<table>_<rule>__<code>` so a refusal
+  from the database maps back to the rule's code. With backbone-core 3.8 that refusal answers 422 with the
+  rule's code, as the service's own refusal does.
+- **`schema doctor` names declared events nothing publishes.** An event under a schema file's
+  `events:` that no hand-written source names is reported, and an `…Event` name whose hand code
+  publishes it without the suffix is reported as a mismatch. Advisory; never a gate.
+- `schema validate` warns about a `generators: workflows:` flag and about an `opt_in:` or
+  `enabled:` entry naming a retired target, since both generate nothing.
+
+### Removed
+
+- **Hook trigger registries are no longer generated.** No write path ever ran them, and
+  most declared actions could not compile. A `triggers:` block or a state's `on_enter` /
+  `on_exit` actions now fail validation, except in a module that sets `legacy_triggers`, where
+  they are warnings. What a trigger described belongs in the service, with the events it
+  publishes declared under `events:`.
+- **Workflow executors are no longer generated**, and `generators: workflows:` does nothing.
+  A workflow YAML documents the saga a hand service runs.
+- A full generation removes the old trigger and workflow files, including ones an older
+  generator wrote with a looser header, when git holds them unchanged. A module whose
+  hand-owned `lib.rs` or `application/mod.rs` declares `triggers` or `workflows` must drop
+  those lines. This changes a module's public API.
+
+### Fixed
+
+- The domain-service integration test expects only the services module, as the generator
+  has emitted since 0.25.0.
+
 ## [0.27.0] — 2026-10-13
 
 ### Added
