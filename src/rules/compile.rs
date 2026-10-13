@@ -50,9 +50,17 @@ pub struct CompiledRowRule {
     pub layer: &'static str,
     /// Whether the rule reads the row before the write.
     pub reads_old: bool,
-    /// For a rule about the time of the write, the fields it reads: an update is checked
-    /// only when it changes one of them. Empty for every other rule.
-    pub time_fields: Vec<String>,
+    /// The fields whose change brings an update under the rule: an update that changes none of
+    /// them is not checked. Set for a rule about the time of the write (every later edit of an
+    /// expired row would otherwise read as a break) and for a field's own checks (an edit is
+    /// not refused for a field it did not touch). Empty: every update is checked.
+    pub changed_fields: Vec<String>,
+    /// Whether a break refuses the write. Otherwise it runs in shadow: logged, and the write
+    /// goes ahead.
+    pub refuse: bool,
+    /// The parameters a violation carries for a client to render (`max`, `min`, …), each as a
+    /// Rust expression.
+    pub params: Vec<(String, String)>,
     /// Where the rule is declared, for the generated comment.
     pub source: String,
 }
@@ -114,7 +122,7 @@ pub fn compile_row_rule(rule: &DeclaredRule, model: &Model, enums: &HashSet<Stri
         "row"
     };
     let sql = (layer == "row").then_some(sql);
-    let time_fields = if c.reads_time { c.fields.clone() } else { Vec::new() };
+    let changed_fields = if c.reads_time { c.fields.clone() } else { Vec::new() };
     let path = c.fields.first().cloned().unwrap_or_default();
     let code = code_of(rule.code.as_deref().unwrap_or(&rule.name));
     let message = rule.message.clone().unwrap_or_else(|| format!("breaks the rule `{}`: {}", rule.name, text));
@@ -129,7 +137,9 @@ pub fn compile_row_rule(rule: &DeclaredRule, model: &Model, enums: &HashSet<Stri
         sql,
         layer,
         reads_old: c.reads_old,
-        time_fields,
+        changed_fields,
+        refuse: false,
+        params: Vec::new(),
         source: rule.source.to_string(),
     })
 }
@@ -481,6 +491,7 @@ pub fn model_state_fields(schema: &crate::ast::ModuleSchema, model: &Model) -> V
 /// Whether the generator emits a write guard for `model`.
 pub fn model_has_guard(schema: &crate::ast::ModuleSchema, model: &Model) -> bool {
     !model_row_rules(schema, model).is_empty()
+        || !super::fields::model_field_rules(schema, model).is_empty()
         || !model_delete_guards(schema, model).is_empty()
         || !model_state_fields(schema, model).is_empty()
 }
@@ -537,8 +548,9 @@ pub fn foreign_key_audit_query(schema: &crate::ast::ModuleSchema, model: &Model,
     ))
 }
 
-/// The Rust items of `model`'s write guard: `<Model>RowRules`, checking each compiled row rule
-/// against the row a create or update would store. Every rule runs in shadow.
+/// The Rust items of `model`'s write guard: `<Model>RowRules`, checking each compiled rule
+/// against the row a create or update would store. A rule marked `refuse` refuses the write;
+/// every other one runs in shadow.
 pub fn render_guard(
     model: &Model,
     rules: &[CompiledRowRule],
@@ -548,9 +560,10 @@ pub fn render_guard(
     let name = &model.name;
     let mut out = String::new();
     out.push_str(&format!(
-        "\n/// The row rules the schema declares for {name}, checked against the row a create or\n\
-         /// update would store. The generated build attaches it to [`{name}Service`]. Every rule\n\
-         /// runs in shadow: a break is logged under `backbone::write_guard` and the write goes ahead.\n\
+        "\n/// The rules the schema declares for {name}, checked against the row a create or update\n\
+         /// would store. The generated build attaches it to [`{name}Service`]. A refusing rule's\n\
+         /// break answers 422; a rule in shadow is logged under `backbone::write_guard` and the\n\
+         /// write goes ahead.\n\
          pub struct {name}RowRules;\n\n\
          #[async_trait::async_trait]\n\
          impl backbone_core::write_guard::WriteGuard<{name}> for {name}RowRules {{\n\
@@ -595,13 +608,23 @@ pub fn render_guard(
     ));
     // `old` serves the change test of a time rule and the reads of a transition rule; bind
     // only what the rules use, so the generated module stays warning-free.
-    if !state_fields.is_empty() || rules.iter().any(|r| r.reads_old || (!r.time_fields.is_empty() && r.on_update)) {
+    if !state_fields.is_empty() || rules.iter().any(|r| r.reads_old || (!r.changed_fields.is_empty() && r.on_update)) {
         out.push_str("        let old = ctx.before.and_then(|b| serde_json::to_value(b).ok());\n");
     }
     if rules.iter().any(|r| r.reads_old) {
         out.push_str("        let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);\n");
     }
-    out.push_str("        let mut shadow = Vec::new();\n");
+    let refusing = rules.iter().any(|r| r.refuse);
+    // Bind each list mutably only when something pushes onto it, so the module stays
+    // warning-free.
+    if !state_fields.is_empty() || rules.iter().any(|r| !r.refuse) {
+        out.push_str("        let mut shadow = Vec::new();\n");
+    } else {
+        out.push_str("        let shadow = Vec::new();\n");
+    }
+    if refusing {
+        out.push_str("        let mut refuse = Vec::new();\n");
+    }
     // A state field moves only through its verbs: a generic write changing it is a break.
     for f in state_fields {
         out.push_str(&format!(
@@ -612,11 +635,11 @@ pub fn render_guard(
         ));
     }
     for rule in rules {
-        // A rule about the time of the write checks an update only when it changes what it reads.
-        let update = if rule.time_fields.is_empty() {
+        // A rule gated on its fields checks an update only when it changes one of them.
+        let update = if rule.changed_fields.is_empty() {
             "update".to_string()
         } else {
-            let fields: Vec<String> = rule.time_fields.iter().map(|f| format!("{f:?}")).collect();
+            let fields: Vec<String> = rule.changed_fields.iter().map(|f| format!("{f:?}")).collect();
             format!("(update && r::changed(old.as_ref(), row, &[{}]))", fields.join(", "))
         };
         let on = match (rule.on_create, rule.on_update) {
@@ -624,12 +647,22 @@ pub fn render_guard(
             (true, false) => "create".to_string(),
             _ => update,
         };
+        let params: String = rule
+            .params
+            .iter()
+            .map(|(k, v)| format!(".with_param({k:?}, {v})"))
+            .collect();
+        let list = if rule.refuse { "refuse" } else { "shadow" };
         out.push_str(&format!(
-            "        // `{}` ({})\n        if ({on}) && !r::holds(&{}) {{\n            shadow.push(Violation::new({:?}, {:?}, {:?}));\n        }}\n",
+            "        // `{}` ({})\n        if ({on}) && !r::holds(&{}) {{\n            {list}.push(Violation::new({:?}, {:?}, {:?}){params});\n        }}\n",
             rule.name, rule.source, rule.rust, rule.path, rule.code, rule.message
         ));
     }
-    out.push_str("        GuardOutcome { refuse: Vec::new(), shadow }\n    }\n}\n");
+    if refusing {
+        out.push_str("        GuardOutcome { refuse, shadow }\n    }\n}\n");
+    } else {
+        out.push_str("        GuardOutcome { refuse: Vec::new(), shadow }\n    }\n}\n");
+    }
     out
 }
 
@@ -671,15 +704,15 @@ enum Ty {
     JsonKey,
 }
 
-fn rust_str(s: &str) -> String {
+pub(crate) fn rust_str(s: &str) -> String {
     format!("{s:?}")
 }
 
-fn sql_str(s: &str) -> String {
+pub(crate) fn sql_str(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn rust_num(n: f64) -> String {
+pub(crate) fn rust_num(n: f64) -> String {
     format!("r::Val::Num({n:?}_f64)")
 }
 
@@ -1027,7 +1060,7 @@ mod tests {
         let c = compile("risk_score >= $old.risk_score").unwrap();
         assert_eq!(c.rust, "r::ge(r::field(row, \"risk_score\"), r::field(old_row, \"risk_score\"))");
         assert_eq!((c.layer, c.reads_old, c.sql.is_none()), ("transition", true, true));
-        assert!(c.time_fields.is_empty());
+        assert!(c.changed_fields.is_empty());
     }
 
     #[test]
@@ -1035,11 +1068,11 @@ mod tests {
         let owner = compile("$actor.id == name").unwrap();
         assert_eq!(owner.rust, "r::eq(r::actor(ctx.actor.as_deref()), r::field(row, \"name\"))");
         assert_eq!((owner.layer, owner.sql.is_none()), ("context", true));
-        assert!(owner.time_fields.is_empty(), "only a time rule waits for a change");
+        assert!(owner.changed_fields.is_empty(), "only a time rule waits for a change");
 
         let expiry = compile("root_path == null || $this.risk_score > now()").unwrap();
         assert!(expiry.rust.ends_with("r::gt(r::field(row, \"risk_score\"), r::at(ctx.at)))"), "{}", expiry.rust);
-        assert_eq!(expiry.time_fields, vec!["root_path".to_string(), "risk_score".to_string()]);
+        assert_eq!(expiry.changed_fields, vec!["root_path".to_string(), "risk_score".to_string()]);
     }
 
     #[test]

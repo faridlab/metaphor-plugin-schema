@@ -186,6 +186,13 @@ pub(crate) fn parse_attribute_string(s: &str) -> Option<Attribute> {
         let args_str = &s[paren_pos + 1..s.len() - 1]; // Remove ( and )
         let mut attr = Attribute::new(name);
 
+        // A pattern is one argument, whatever it holds: a regex can carry commas and colons,
+        // and splitting it there mangles it.
+        if matches!(name, "pattern" | "regex") {
+            attr.args.push((None, parse_attr_value(args_str)));
+            return Some(attr);
+        }
+
         // Parse arguments - handle quoted strings with commas inside
         let args = split_attr_args(args_str);
         for arg in args {
@@ -202,6 +209,9 @@ pub(crate) fn parse_attribute_string(s: &str) -> Option<Attribute> {
                 let val = arg[eq_pos + 1..].trim();
                 attr.args
                     .push((Some(key.to_string()), parse_attr_value(val)));
+            } else if let Some((key, val)) = identifier_assignment(arg) {
+                // `max=200`: the `name=value` spelling of a named argument.
+                attr.args.push((Some(key.to_string()), parse_attr_value(val)));
             } else {
                 attr.args.push((None, parse_attr_value(arg)));
             }
@@ -211,6 +221,19 @@ pub(crate) fn parse_attribute_string(s: &str) -> Option<Attribute> {
     } else {
         Some(Attribute::new(s))
     }
+}
+
+/// `key=value` where `key` is a plain identifier and the `=` stands outside quotes; anything
+/// else (a quoted string holding `=`, an expression) is not a named argument.
+fn identifier_assignment(arg: &str) -> Option<(&str, &str)> {
+    let (key, val) = arg.split_once('=')?;
+    let key = key.trim();
+    let mut chars = key.chars();
+    let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !first_ok || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') || val.starts_with('=') {
+        return None;
+    }
+    Some((key, val.trim()))
 }
 
 /// Split attribute arguments, respecting quoted strings

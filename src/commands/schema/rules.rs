@@ -60,7 +60,10 @@ pub(super) fn execute_rules(
     }
     if audit {
         for model in &module_schema.models {
-            for rule in crate::rules::compile::model_row_rules(&module_schema, model) {
+            // The field attributes' checks, then the hook rules: everything the guard checks.
+            let mut rules = crate::rules::fields::model_field_rules(&module_schema, model);
+            rules.extend(crate::rules::compile::model_row_rules(&module_schema, model));
+            for rule in rules {
                 // A transition or context rule cannot be checked against stored rows.
                 let Some(query) = crate::rules::compile::audit_query(model, &rule) else { continue };
                 println!("-- {} `{}` ({})", model.name, rule.name, rule.source);

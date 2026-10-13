@@ -15,6 +15,7 @@ pub mod baseline;
 pub mod catalog;
 pub mod compile;
 pub mod expr;
+pub mod fields;
 pub mod reader;
 pub mod rewrite;
 

@@ -137,7 +137,9 @@ impl ServiceGenerator {
     }
 
     fn guard_items(schema: &crate::ast::ModuleSchema, model: &Model) -> String {
-        let rules = crate::rules::compile::model_row_rules(schema, model);
+        // The field attributes' checks first, then the hook rules: one guard holds both.
+        let mut rules = crate::rules::fields::model_field_rules(schema, model);
+        rules.extend(crate::rules::compile::model_row_rules(schema, model));
         let deletes = crate::rules::compile::model_delete_guards(schema, model);
         let state_fields = crate::rules::compile::model_state_fields(schema, model);
         crate::rules::compile::render_guard(model, &rules, &deletes, &state_fields)
