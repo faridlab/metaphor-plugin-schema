@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.28.1] — 2026-10-14
+
+### Fixed
+
+- A declared-checks migration skips a constraint, with a notice, where the table lacks a column
+  it reads, instead of failing the whole migration. A database that drifted from its schema
+  still takes every other constraint.
+
 ## [0.28.0] — 2026-10-14
 
 ### Added
