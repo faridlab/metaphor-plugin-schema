@@ -201,6 +201,11 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         );
     }
 
+    // Declared events no hand-written source names: advisory, never a gate.
+    for warning in super::events_check::unpublished_events(&consumer_root) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
+
     // A module on the extension layout keeps no hand code in a generated file (ADR-0031):
     // every generated `src/**/*.rs` file must equal what a generation writes now.
     let (edited, unattached) = generated_file_drift(module)?;

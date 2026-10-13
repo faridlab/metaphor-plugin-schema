@@ -4,6 +4,7 @@ mod changed;
 mod diff;
 mod discovery;
 mod doctor;
+mod events_check;
 mod generate;
 mod manifest;
 mod merge;
