@@ -255,12 +255,13 @@ fn test_domain_service_generator_from_ast() {
         .generate(&resolved)
         .expect("DomainServiceGenerator should succeed");
 
-    // Generator should produce a per-model domain policy file (plus mod.rs)
-    assert!(
-        output
-            .files
-            .contains_key(&PathBuf::from("src/domain/services/user_domain_policy.rs")),
-        "DomainServiceGenerator should produce a domain policy file for the User model"
+    // Per-model domain policies are retired: the generator emits only the services
+    // module, which the hand-written domain services sit beside.
+    let paths: Vec<_> = output.files.keys().collect();
+    assert_eq!(
+        paths,
+        vec![&PathBuf::from("src/domain/services/mod.rs")],
+        "DomainServiceGenerator emits only the services module"
     );
 }
 
