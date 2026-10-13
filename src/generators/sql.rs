@@ -2410,7 +2410,7 @@ impl SqlGenerator {
                 let Some(sql) = rule.sql.as_ref() else { continue };
                 let name = constraint_name("ck", &bare, &rule.name, &rule.code);
                 checks.push(format!(
-                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL\n       AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('{table}') AND conname = '{name}') THEN\n        IF EXISTS (SELECT 1 FROM {table} WHERE NOT ({sql})) THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} break it';\n        ELSE\n            ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({sql});\n        END IF;\n    END IF;\nEND $$;\n"
+                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL\n       AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('{table}') AND conname = '{name}') THEN\n        IF EXISTS (SELECT 1 FROM {table} WHERE NOT ({sql})) THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} break it';\n        ELSE\n            ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({sql});\n        END IF;\n    END IF;\nEXCEPTION WHEN undefined_column THEN\n    RAISE NOTICE '{name} not added: {table} lacks a column it reads';\nEND $$;\n"
                 ));
                 check_drops.push(format!("ALTER TABLE IF EXISTS {table} DROP CONSTRAINT IF EXISTS {name};"));
             }
@@ -2422,7 +2422,7 @@ impl SqlGenerator {
                 let filter = unique.filter_sql.as_ref().map(|f| format!(" WHERE {}", f.replace("::text", ""))).unwrap_or_default();
                 let schema_name = table.split('.').next().unwrap_or("public");
                 checks.push(format!(
-                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{schema_name}.{name}') IS NULL THEN\n        BEGIN\n            CREATE UNIQUE INDEX {name} ON {table} ({}){filter};\n        EXCEPTION WHEN unique_violation THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} repeat its keys';\n        END;\n    END IF;\nEND $$;\n",
+                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{schema_name}.{name}') IS NULL THEN\n        BEGIN\n            CREATE UNIQUE INDEX {name} ON {table} ({}){filter};\n        EXCEPTION WHEN unique_violation THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} repeat its keys';\n        WHEN undefined_column THEN\n            RAISE NOTICE '{name} not added: {table} lacks a column it reads';\n        END;\n    END IF;\nEND $$;\n",
                     keys.join(", ")
                 ));
                 check_drops.push(format!("DROP INDEX IF EXISTS {schema_name}.{name};"));
@@ -4057,6 +4057,7 @@ mod tests {
         assert!(up.contains("ADD CONSTRAINT ck_tickets_title_required__required CHECK"), "{up}");
         assert!(up.contains("ADD CONSTRAINT ck_tickets_title_max_length__max_length CHECK ((char_length(title) <= 80))"), "{up}");
         assert!(up.contains("IF EXISTS (SELECT 1 FROM") && up.contains("RAISE NOTICE"), "skipped while stored rows break it: {up}");
+        assert!(up.contains("EXCEPTION WHEN undefined_column THEN"), "skipped where the table lacks a column it reads: {up}");
         assert!(!up.contains("note_max_length"), "a check kept in shadow is no constraint: {up}");
         assert_eq!(constraint_name("ck", "t", &"r".repeat(80), "code").len(), 63);
         assert!(constraint_name("ck", "t", &"r".repeat(80), "code").ends_with("__code"));
