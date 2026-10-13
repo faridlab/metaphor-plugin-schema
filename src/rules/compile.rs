@@ -138,7 +138,8 @@ pub fn compile_row_rule(rule: &DeclaredRule, model: &Model, enums: &HashSet<Stri
         layer,
         reads_old: c.reads_old,
         changed_fields,
-        refuse: false,
+        // A rule refuses unless its declaration keeps it in shadow (`shadow: "<why>"`).
+        refuse: rule.shadow.is_none(),
         params: Vec::new(),
         source: rule.source.to_string(),
     })
@@ -322,6 +323,9 @@ pub struct CompiledDeleteGuard {
     /// `SELECT count(*) …` with the deleted row's id as `$1`.
     pub sql: String,
     pub source: String,
+    /// Whether a delete that leaves referencing rows is refused, or only reported (the rule's
+    /// declaration keeps it in shadow).
+    pub refuse: bool,
 }
 
 /// Compile a delete-guard rule, or say why not.
@@ -393,6 +397,7 @@ pub fn compile_delete_guard(
         message: rule.message.clone().unwrap_or_else(|| format!("breaks the rule `{}`: {}", rule.name, text)),
         sql: format!("SELECT count(*) FROM {} WHERE {}", other.qualified_table_name(), wheres.join(" AND ")),
         source: rule.source.to_string(),
+        refuse: rule.shadow.is_none(),
     })
 }
 
@@ -582,15 +587,24 @@ pub fn render_guard(
              \x20           let Some(Ok(old)) = ctx.before.map(serde_json::to_value) else {\n\
              \x20               return GuardOutcome::allow();\n\
              \x20           };\n\
+             \x20           let mut refuse = Vec::new();\n\
              \x20           let mut shadow = Vec::new();\n",
         );
         for d in deletes {
+            let list = if d.refuse { "refuse" } else { "shadow" };
             out.push_str(&format!(
-                "            // `{}` ({})\n            if !r::holds(&r::eq(r::referencing({:?}, r::field(&old, \"id\")).await, r::Val::Num(0.0_f64))) {{\n                shadow.push(Violation::new(\"\", {:?}, {:?}));\n            }}\n",
+                "            // `{}` ({})\n            if !r::holds(&r::eq(r::referencing({:?}, r::field(&old, \"id\")).await, r::Val::Num(0.0_f64))) {{\n                {list}.push(Violation::new(\"\", {:?}, {:?}));\n            }}\n",
                 d.name, d.source, d.sql, d.code, d.message
             ));
         }
-        out.push_str("            return GuardOutcome { refuse: Vec::new(), shadow };\n        }\n");
+        // Bind only the lists the delete guards push onto, so the module stays warning-free.
+        if !deletes.iter().any(|d| d.refuse) {
+            out = out.replacen("            let mut refuse = Vec::new();\n", "            let refuse = Vec::new();\n", 1);
+        }
+        if deletes.iter().all(|d| d.refuse) {
+            out = out.replacen("            let mut shadow = Vec::new();\n", "            let shadow = Vec::new();\n", 1);
+        }
+        out.push_str("            return GuardOutcome { refuse, shadow };\n        }\n");
     }
     if rules.is_empty() && state_fields.is_empty() {
         out.push_str("        GuardOutcome::allow()\n    }\n}\n");
@@ -996,6 +1010,7 @@ mod tests {
             enforcement: None,
             justification: None,
             enforced_by: None,
+            shadow: None,
             status: EnforcementStatus::Unenforced,
             expression: expr::check(text, Some(&m)),
         }

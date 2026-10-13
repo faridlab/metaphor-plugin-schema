@@ -27,7 +27,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 const RULE_KEYS: &[&str] = &[
     "name", "id", "when", "condition", "assert", "message", "code", "error_code", "severity", "enforcement",
     "justification", "entity", "unique_on", "on_conflict", "check", "note", "notes", "description",
-    "enforced_by",
+    "enforced_by", "shadow",
 ];
 const MACHINE_KEYS: &[&str] = &[
     "entity", "field", "initial", "states", "values", "transitions", "guards", "effects", "lifecycle",
@@ -202,6 +202,7 @@ fn read_rules(
             severity: str_at(rule, "severity"),
             enforcement: str_at(rule, "enforcement"),
             justification: str_at(rule, "justification"),
+            shadow: str_at(rule, "shadow"),
             enforced_by: str_at(rule, "enforced_by"),
             status: EnforcementStatus::Unenforced,
             expression: super::expr::ExpressionCheck::NotAnExpression,

@@ -380,22 +380,22 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_row_rule_compiles_into_the_service_guard_in_shadow() {
+    fn a_declared_row_rule_compiles_into_the_service_guard_and_refuses() {
         let resolved = schema_with_rules();
         let output = ServiceGenerator::new().generate(&resolved).unwrap();
         let service = &output.files[&PathBuf::from("src/application/service/order_service.rs")];
         assert!(service.contains("pub struct OrderRowRules;"), "{service}");
         assert!(service.contains("impl backbone_core::write_guard::WriteGuard<Order> for OrderRowRules"));
         assert!(service.contains("r::le(r::length(r::field(row, \"name\")), r::Val::Num(80.0_f64))"));
-        assert!(service.contains("Violation::new(\"name\", \"name_too_long\""));
-        assert!(service.contains("GuardOutcome { refuse: Vec::new(), shadow }"));
+        assert!(service.contains("refuse.push(Violation::new(\"name\", \"name_too_long\""));
+        assert!(service.contains("GuardOutcome { refuse, shadow }"));
         // A writer check a rule cannot make: no check for it, and it stays unenforced.
         assert!(!service.contains("only_owner"));
         let statuses: Vec<_> = resolved.schema.rule_register.rules.iter().map(|r| (r.name.as_str(), r.status)).collect();
         assert_eq!(
             statuses,
             vec![
-                ("name_length", crate::rules::EnforcementStatus::Shadow),
+                ("name_length", crate::rules::EnforcementStatus::Guard),
                 ("only_owner", crate::rules::EnforcementStatus::Unenforced)
             ]
         );
@@ -404,6 +404,24 @@ mod tests {
         let lib = crate::generators::module::ModuleGenerator::new().generate(&resolved).unwrap();
         let lib = &lib.files[&PathBuf::from("src/lib.rs")];
         assert!(lib.contains(".with_guard(Arc::new(crate::application::service::OrderRowRules))"), "{lib}");
+    }
+
+    #[test]
+    fn shadow_keeps_a_rule_reporting_with_its_reason() {
+        let mut resolved = create_test_schema();
+        let hook = "name: OrderRules\nmodel: Order\nrules:\n  name_length:\n    when: [create, update]\n    condition: \"name.length <= 80\"\n    code: NAME_TOO_LONG\n    shadow: \"stored names run longer until the import is cleaned\"\n";
+        let models = resolved.schema.models.clone();
+        let register = &mut resolved.schema.rule_register;
+        register.read_file("order.hook.yaml", hook);
+        register.bind(&models);
+        register.check(&models);
+        register.mark_compiled(&models, &Default::default());
+        assert_eq!(resolved.schema.rule_register.rules[0].status, crate::rules::EnforcementStatus::Shadow);
+        assert!(resolved.schema.rule_register.warnings.is_empty(), "shadow is a rule key: {:?}", resolved.schema.rule_register.warnings);
+        let output = ServiceGenerator::new().generate(&resolved).unwrap();
+        let service = &output.files[&PathBuf::from("src/application/service/order_service.rs")];
+        assert!(service.contains("shadow.push(Violation::new(\"name\", \"name_too_long\""), "{service}");
+        assert!(service.contains("GuardOutcome { refuse: Vec::new(), shadow }"), "{service}");
     }
 
     #[test]

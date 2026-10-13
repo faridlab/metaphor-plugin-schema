@@ -5,12 +5,12 @@
 //! and the `email` / `url` types — become checks in the same `<Model>RowRules` guard the hook
 //! rules compile into, so the generic write path checks them on every create and update.
 //!
-//! - **Required refuses.** A field marked `@required` must hold a value: not null, and for text
-//!   not blank. A field with a `@default`, an input-excluded or server-filled field, the id and
-//!   audit columns, a tenant column and a state-machine field are exempt: the write does not
-//!   supply them, so the client cannot be held to them.
-//! - **Every other check runs in shadow** until the stored-data audit clears it (the
-//!   enforcement plan's shadow-first rule).
+//! - **Every check refuses.** A field marked `@required` must hold a value: not null, and for
+//!   text not blank. A field with a `@default`, an input-excluded or server-filled field, the id
+//!   and audit columns, a tenant column and a state-machine field carry no checks: the write
+//!   does not supply them, so the client cannot be held to them.
+//! - **`@shadow(<why>)` keeps a field's checks in shadow**: a break is logged and the write goes
+//!   ahead, with the reason beside the field.
 //! - **An update is checked only for the fields it changes**, so an edit is never refused for a
 //!   field it did not touch. A create checks every field.
 //!
@@ -138,8 +138,7 @@ impl Builder<'_> {
         format!("r::field(row, {})", rust_str(&self.field.name))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn push(&mut self, code: &str, message: String, rust: String, sql: String, refuse: bool, params: Vec<(String, String)>, source: String) {
+    fn push(&mut self, code: &str, message: String, rust: String, sql: String, params: Vec<(String, String)>, source: String) {
         let name = &self.field.name;
         self.out.push(CompiledRowRule {
             name: format!("{name}_{code}"),
@@ -153,7 +152,8 @@ impl Builder<'_> {
             layer: "row",
             reads_old: false,
             changed_fields: vec![name.clone()],
-            refuse,
+            // Every check refuses unless the field keeps its checks in shadow (`@shadow(<why>)`).
+            refuse: !self.field.has_attribute("shadow"),
             params,
             source: format!("{source} on {}.{name}", self.model.name),
         });
@@ -182,20 +182,16 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
                     format!("{col} is required"),
                     format!("r::and(r::is_not_null({v}), r::not(r::is_empty(r::trim({v}))))"),
                     format!("({col} IS NOT NULL AND btrim({col}::text) <> '')"),
-                    true,
                     Vec::new(),
-                    "@required".into(),
-                );
+                    "@required".into());
             } else if field.type_ref.is_optional() {
                 b.push(
                     "required",
                     format!("{col} is required"),
                     format!("r::is_not_null({v})"),
                     format!("({col} IS NOT NULL)"),
-                    true,
                     Vec::new(),
-                    "@required".into(),
-                );
+                    "@required".into());
             }
         }
 
@@ -206,32 +202,28 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
                     if let Some(n) = first {
                         b.push("max_length", format!("{col} must be at most {} characters", show(n)),
                             format!("r::le(r::length({v}), {})", rust_num(n)),
-                            format!("(char_length({col}) <= {})", show(n)),
-                            false, vec![("max".into(), param(n))], format!("@max({})", show(n)));
+                            format!("(char_length({col}) <= {})", show(n)), vec![("max".into(), param(n))], format!("@max({})", show(n)));
                     }
                 }
                 ("min", true, _) => {
                     if let Some(n) = first {
                         b.push("min_length", format!("{col} must be at least {} characters", show(n)),
                             format!("r::ge(r::length({v}), {})", rust_num(n)),
-                            format!("(char_length({col}) >= {})", show(n)),
-                            false, vec![("min".into(), param(n))], format!("@min({})", show(n)));
+                            format!("(char_length({col}) >= {})", show(n)), vec![("min".into(), param(n))], format!("@min({})", show(n)));
                     }
                 }
                 ("max", _, true) => {
                     if let Some(n) = first {
                         b.push("max", format!("{col} must be at most {}", show(n)),
                             format!("r::le({v}, {})", rust_num(n)),
-                            format!("({col} <= {})", show(n)),
-                            false, vec![("max".into(), param(n))], format!("@max({})", show(n)));
+                            format!("({col} <= {})", show(n)), vec![("max".into(), param(n))], format!("@max({})", show(n)));
                     }
                 }
                 ("min", _, true) => {
                     if let Some(n) = first {
                         b.push("min", format!("{col} must be at least {}", show(n)),
                             format!("r::ge({v}, {})", rust_num(n)),
-                            format!("({col} >= {})", show(n)),
-                            false, vec![("min".into(), param(n))], format!("@min({})", show(n)));
+                            format!("({col} >= {})", show(n)), vec![("min".into(), param(n))], format!("@min({})", show(n)));
                     }
                 }
                 ("length", true, _) => {
@@ -241,21 +233,18 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
                         if let Some(n) = attr.args.iter().find(|(k, _)| k.is_none()).and_then(|(_, a)| number(a)) {
                             b.push("length", format!("{col} must be exactly {} characters", show(n)),
                                 format!("r::eq(r::length({v}), {})", rust_num(n)),
-                                format!("(char_length({col}) = {})", show(n)),
-                                false, vec![("length".into(), param(n))], format!("@length({})", show(n)));
+                                format!("(char_length({col}) = {})", show(n)), vec![("length".into(), param(n))], format!("@length({})", show(n)));
                         }
                     }
                     if let Some(n) = max {
                         b.push("max_length", format!("{col} must be at most {} characters", show(n)),
                             format!("r::le(r::length({v}), {})", rust_num(n)),
-                            format!("(char_length({col}) <= {})", show(n)),
-                            false, vec![("max".into(), param(n))], format!("@length(max={})", show(n)));
+                            format!("(char_length({col}) <= {})", show(n)), vec![("max".into(), param(n))], format!("@length(max={})", show(n)));
                     }
                     if let Some(n) = min {
                         b.push("min_length", format!("{col} must be at least {} characters", show(n)),
                             format!("r::ge(r::length({v}), {})", rust_num(n)),
-                            format!("(char_length({col}) >= {})", show(n)),
-                            false, vec![("min".into(), param(n))], format!("@length(min={})", show(n)));
+                            format!("(char_length({col}) >= {})", show(n)), vec![("min".into(), param(n))], format!("@length(min={})", show(n)));
                     }
                 }
                 ("range", _, true) => {
@@ -263,37 +252,31 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
                     if let [lo, hi] = nums[..] {
                         b.push("range", format!("{col} must be between {} and {}", show(lo), show(hi)),
                             format!("r::and(r::ge({v}, {}), r::le({v}, {}))", rust_num(lo), rust_num(hi)),
-                            format!("({col} BETWEEN {} AND {})", show(lo), show(hi)),
-                            false, vec![("min".into(), param(lo)), ("max".into(), param(hi))], format!("@range({}, {})", show(lo), show(hi)));
+                            format!("({col} BETWEEN {} AND {})", show(lo), show(hi)), vec![("min".into(), param(lo)), ("max".into(), param(hi))], format!("@range({}, {})", show(lo), show(hi)));
                     }
                 }
                 ("positive", _, true) => b.push("positive", format!("{col} must be positive"),
-                    format!("r::gt({v}, {})", rust_num(0.0)), format!("({col} > 0)"),
-                    false, Vec::new(), "@positive".into()),
+                    format!("r::gt({v}, {})", rust_num(0.0)), format!("({col} > 0)"), Vec::new(), "@positive".into()),
                 ("non_negative" | "nonnegative", _, true) => b.push("non_negative", format!("{col} must not be negative"),
-                    format!("r::ge({v}, {})", rust_num(0.0)), format!("({col} >= 0)"),
-                    false, Vec::new(), "@non_negative".into()),
+                    format!("r::ge({v}, {})", rust_num(0.0)), format!("({col} >= 0)"), Vec::new(), "@non_negative".into()),
                 ("pattern" | "regex", true, _) => {
                     if let Some(p) = attr.first_arg().and_then(|a| a.as_str()) {
                         if regex::Regex::new(p).is_ok() {
                             b.push("pattern", format!("{col} does not have the expected form"),
                                 format!("r::matches({v}, {})", rust_str(p)),
-                                format!("({col} ~ {})", sql_str(p)),
-                                false, vec![("pattern".into(), rust_str(p))], format!("@{}", attr.name));
+                                format!("({col} ~ {})", sql_str(p)), vec![("pattern".into(), rust_str(p))], format!("@{}", attr.name));
                         }
                     }
                 }
                 ("alpha_dash", true, _) => {
                     let p = "^[a-zA-Z0-9_-]+$";
                     b.push("alpha_dash", format!("{col} may hold only letters, digits, '_' and '-'"),
-                        format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)),
-                        false, Vec::new(), "@alpha_dash".into());
+                        format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), "@alpha_dash".into());
                 }
                 ("alpha_num", true, _) => {
                     let p = "^[a-zA-Z0-9]+$";
                     b.push("alpha_num", format!("{col} may hold only letters and digits"),
-                        format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)),
-                        false, Vec::new(), "@alpha_num".into());
+                        format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), "@alpha_num".into());
                 }
                 ("values", _, _) => {
                     let values: Vec<String> = attr
@@ -308,8 +291,7 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
                         let ss: Vec<String> = values.iter().map(|s| sql_str(s)).collect();
                         b.push("values", format!("{col} must be one of {}", values.join(", ")),
                             format!("r::in_list({v}, r::Val::List(vec![{}]))", rs.join(", ")),
-                            format!("({col}::text IN ({}))", ss.join(", ")),
-                            false, Vec::new(), "@values".into());
+                            format!("({col}::text IN ({}))", ss.join(", ")), Vec::new(), "@values".into());
                     }
                 }
                 _ => {}
@@ -321,14 +303,12 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
             Kind::Email => {
                 let p = r"^[^@\s]+@[^@\s]+\.[^@\s]+$";
                 b.push("email", format!("{col} must be an email address"),
-                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)),
-                    false, Vec::new(), "type email".into());
+                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), "type email".into());
             }
             Kind::Url => {
                 let p = r"^[a-zA-Z][a-zA-Z0-9+.-]*://\S+$";
                 b.push("url", format!("{col} must be an absolute URL"),
-                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)),
-                    false, Vec::new(), "type url".into());
+                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), "type url".into());
             }
             _ => {}
         }
@@ -359,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn required_text_refuses_a_blank_and_the_rest_runs_in_shadow() {
+    fn every_field_check_refuses_and_shadow_keeps_them_reporting() {
         let m = model("      title:\n        type: string\n        attributes: [\"@required\", \"@max(80)\"]\n");
         let rules = field_rules(&m, &[]);
         let required = rule(&rules, "title_required");
@@ -367,7 +347,7 @@ mod tests {
         assert_eq!(required.rust, "r::and(r::is_not_null(r::field(row, \"title\")), r::not(r::is_empty(r::trim(r::field(row, \"title\")))))");
         assert_eq!(required.changed_fields, vec!["title".to_string()], "an update is checked only when it changes the field");
         let max = rule(&rules, "title_max_length");
-        assert!(!max.refuse, "length runs in shadow");
+        assert!(max.refuse, "a length limit refuses too");
         assert_eq!(max.params, vec![("max".to_string(), "80_i64".to_string())]);
         assert_eq!(max.sql.as_deref(), Some("(char_length(title) <= 80)"));
         assert!(rules.iter().all(|r| r.path != "id" && r.path != "metadata"), "server-filled fields carry no checks");
@@ -409,13 +389,14 @@ mod tests {
     }
 
     #[test]
-    fn the_rendered_guard_refuses_required_and_shadows_the_rest() {
-        let m = model("      title:\n        type: string\n        attributes: [\"@required\", \"@max(80)\"]\n");
+    fn the_rendered_guard_refuses_and_a_shadowed_field_only_reports() {
+        let m = model("      title:\n        type: string\n        attributes: [\"@required\", \"@max(80)\"]\n      note:\n        type: string\n        attributes: [\"@max(10)\", \"@shadow(stored notes run longer; widen after the cleanup)\"]\n");
         let rules = field_rules(&m, &[]);
         let guard = super::super::compile::render_guard(&m, &rules, &[], &[]);
         assert!(guard.contains("let mut refuse = Vec::new();"), "{guard}");
         assert!(guard.contains("refuse.push(Violation::new(\"title\", \"required\", \"title is required\"));"), "{guard}");
-        assert!(guard.contains("shadow.push(Violation::new(\"title\", \"max_length\", \"title must be at most 80 characters\").with_param(\"max\", 80_i64));"), "{guard}");
+        assert!(guard.contains("refuse.push(Violation::new(\"title\", \"max_length\", \"title must be at most 80 characters\").with_param(\"max\", 80_i64));"), "{guard}");
+        assert!(guard.contains("shadow.push(Violation::new(\"note\", \"max_length\""), "{guard}");
         assert!(guard.contains("(create || (update && r::changed(old.as_ref(), row, &[\"title\"])))"), "{guard}");
         assert!(guard.contains("GuardOutcome { refuse, shadow }"), "{guard}");
     }

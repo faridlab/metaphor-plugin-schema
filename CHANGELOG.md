@@ -7,6 +7,16 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Changed
+
+- **Compiled rules refuse.** Every rule the generator compiles into an entity's write guard
+  (a hook row rule, an old-value, writer or time rule, a delete guard, and every field
+  attribute check) now refuses a write that breaks it, answering 422 with the violation. The
+  register reports it as `guard`.
+- **`shadow:` keeps one rule reporting.** A hook rule whose declaration carries
+  `shadow: "<why>"`, or a field carrying `@shadow(<why>)`, stays in shadow: a break is logged
+  under `backbone::write_guard` and the write goes ahead, with the reason beside the declaration.
+
 ## [0.25.0] — 2026-10-13
 
 ### Added

@@ -79,6 +79,10 @@ pub struct DeclaredRule {
     /// in a generated guard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforced_by: Option<String>,
+    /// Why the rule still only reports a break instead of refusing it (`shadow: "<why>"`),
+    /// when its declaration keeps it in shadow; a compiled rule without one refuses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<String>,
     pub status: EnforcementStatus,
     /// Whether its condition or assertion parses in the rule grammar and
     /// resolves against its model; set by [`RuleRegister::check`].
@@ -122,8 +126,10 @@ impl RuleBody {
 #[serde(rename_all = "snake_case")]
 pub enum EnforcementStatus {
     Unenforced,
-    /// Compiled into the entity's write guard, which reports a break without
-    /// refusing the write yet.
+    /// Compiled into the entity's write guard, which refuses a write that breaks it.
+    Guard,
+    /// Compiled into the entity's write guard but kept in shadow by its declaration
+    /// (`shadow: "<why>"`): a break is reported and the write goes ahead.
     Shadow,
     /// Enforced by the hand-written function its `enforced_by:` names, which exists.
     Verb,
@@ -311,7 +317,7 @@ impl RuleRegister {
             if compile::compile_row_rule(rule, model, enums).is_ok()
                 || compile::compile_delete_guard(rule, model, &module, enums).is_ok()
             {
-                rule.status = EnforcementStatus::Shadow;
+                rule.status = if rule.shadow.is_some() { EnforcementStatus::Shadow } else { EnforcementStatus::Guard };
             }
         }
     }
