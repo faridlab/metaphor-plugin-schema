@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-10-13
+
 ### Changed
 
 - **Compiled rules refuse.** Every rule the generator compiles into an entity's write guard
