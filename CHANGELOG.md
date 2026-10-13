@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.28.2] — 2026-10-14
+
+### Fixed
+
+- A declared uniqueness on a table the host scopes per org unit holds within one unit: its
+  unique index leads with `org_unit_id` where the table has that column when it migrates. It
+  had been unique across every company, so a second company's record could be refused.
+
 ## [0.28.1] — 2026-10-14
 
 ### Fixed
