@@ -31,12 +31,9 @@ pub mod repository_trait;
 pub mod rust;
 pub mod seeder;
 pub mod service;
-pub mod specification;
 pub mod sql;
 pub mod state_machine;
 pub mod trigger;
-pub mod usecase;
-pub mod validator;
 pub mod value_object;
 pub mod versioning;
 
@@ -73,12 +70,9 @@ pub use repository_trait::RepositoryTraitGenerator;
 pub use rust::RustGenerator;
 pub use seeder::SeederGenerator;
 pub use service::ServiceGenerator;
-pub use specification::SpecificationGenerator;
 pub use sql::SqlGenerator;
 pub use state_machine::StateMachineGenerator;
 pub use trigger::TriggerGenerator;
-pub use usecase::UseCaseGenerator;
-pub use validator::ValidatorGenerator;
 pub use value_object::ValueObjectGenerator;
 pub use versioning::VersioningGenerator;
 
@@ -553,13 +547,10 @@ pub fn generate_all_with_options(
         vec![
             GenerationTarget::Service,
             GenerationTarget::DomainService,
-            GenerationTarget::UseCase,
             GenerationTarget::Auth,
             GenerationTarget::Events,
             GenerationTarget::StateMachine,
-            GenerationTarget::Validator,
             // TODO: GenerationTarget::Permission,
-            GenerationTarget::Specification,
             GenerationTarget::Cqrs,
             GenerationTarget::Computed,
             GenerationTarget::BulkOperations,
@@ -610,11 +601,9 @@ pub fn generate_all_with_options(
                     }
                     GenerationTarget::Service => ServiceGenerator::new().generate(s)?,
                     GenerationTarget::DomainService => DomainServiceGenerator::new().generate(s)?,
-                    GenerationTarget::UseCase => UseCaseGenerator::new().generate(s)?,
                     GenerationTarget::Auth => AuthGenerator::new().generate(s)?,
                     GenerationTarget::Events => EventsGenerator::new().generate(s)?,
                     GenerationTarget::StateMachine => StateMachineGenerator::new().generate(s)?,
-                    GenerationTarget::Validator => ValidatorGenerator::new().generate(s)?,
                     // TODO: GenerationTarget::Permission => PermissionGenerator::new().generate(s)?,
                     GenerationTarget::Handler => HandlerGenerator::new().generate(s)?,
                     GenerationTarget::Grpc => GrpcGenerator::new().generate(s)?,
@@ -627,7 +616,11 @@ pub fn generate_all_with_options(
                     GenerationTarget::Module => ModuleGenerator::new().generate(s)?,
                     GenerationTarget::Config => ConfigGenerator::new().generate(s)?,
                     GenerationTarget::ValueObject => ValueObjectGenerator::new().generate(s)?,
-                    GenerationTarget::Specification => SpecificationGenerator::new().generate(s)?,
+                    // Retired layers nothing called: a model's declared rules compile into its
+                    // service's write guard. Their files retire on the next full generation.
+                    GenerationTarget::UseCase
+                    | GenerationTarget::Validator
+                    | GenerationTarget::Specification => GeneratedOutput::new(),
                     GenerationTarget::Cqrs => CqrsGenerator::new().generate(s)?,
                     GenerationTarget::Computed => ComputedGenerator::new().generate(s)?,
                     GenerationTarget::Projection => ProjectionGenerator::new().generate(s)?,

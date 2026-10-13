@@ -57,7 +57,7 @@ impl DtoGenerator {
         .unwrap();
         writeln!(
             output,
-            "//! representations, with validation and OpenAPI documentation support."
+            "//! representations, with OpenAPI documentation support."
         )
         .unwrap();
         writeln!(output).unwrap();
@@ -126,11 +126,6 @@ impl DtoGenerator {
         writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(output, "#[cfg(feature = \"openapi\")]").unwrap();
         writeln!(output, "use utoipa::ToSchema;").unwrap();
-        writeln!(output).unwrap();
-
-        // Validation support (feature-gated)
-        writeln!(output, "#[cfg(feature = \"validation\")]").unwrap();
-        writeln!(output, "use validator::Validate;").unwrap();
         writeln!(output).unwrap();
 
         // Domain entity import
@@ -211,11 +206,6 @@ impl DtoGenerator {
             "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]"
         )
         .unwrap();
-        writeln!(
-            output,
-            "#[cfg_attr(feature = \"validation\", derive(Validate))]"
-        )
-        .unwrap();
         writeln!(output, "#[serde(rename_all = \"camelCase\")]").unwrap();
         writeln!(output, "pub struct Create{}Dto {{", model.name).unwrap();
 
@@ -224,9 +214,6 @@ impl DtoGenerator {
             if self.is_auto_field(&field.name) || self.is_excluded_from_dto(field) {
                 continue;
             }
-
-            // Add validation annotations
-            self.write_field_validation_attrs(output, field)?;
 
             // Add OpenAPI annotations
             self.write_field_schema_attrs(output, field)?;
@@ -285,11 +272,6 @@ impl DtoGenerator {
             "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]"
         )
         .unwrap();
-        writeln!(
-            output,
-            "#[cfg_attr(feature = \"validation\", derive(Validate))]"
-        )
-        .unwrap();
         writeln!(output, "#[serde(rename_all = \"camelCase\")]").unwrap();
         writeln!(output, "pub struct Update{}Dto {{", model.name).unwrap();
 
@@ -301,7 +283,6 @@ impl DtoGenerator {
                 continue;
             }
 
-            self.write_field_validation_attrs(output, field)?;
             self.write_field_schema_attrs(output, field)?;
 
             let rust_type = self.field_to_dto_type(field);
@@ -354,11 +335,6 @@ impl DtoGenerator {
             "#[cfg_attr(feature = \"openapi\", derive(ToSchema))]"
         )
         .unwrap();
-        writeln!(
-            output,
-            "#[cfg_attr(feature = \"validation\", derive(Validate))]"
-        )
-        .unwrap();
         writeln!(output, "#[serde(rename_all = \"camelCase\")]").unwrap();
         writeln!(output, "pub struct Patch{}Dto {{", model.name).unwrap();
 
@@ -371,7 +347,6 @@ impl DtoGenerator {
             }
 
             // For patch, all fields are optional
-            self.write_field_validation_attrs_optional(output, field)?;
             self.write_field_schema_attrs(output, field)?;
 
             let inner_type = self.field_to_dto_type(field);
@@ -932,135 +907,6 @@ impl DtoGenerator {
         }
     }
 
-    /// Unwrap `Option<T>` / `Vec<T>` to reach the inner type, so validator
-    /// selection (`length` vs `range`) sees the effective primitive type.
-    fn effective_type_ref<'a>(ty: &'a TypeRef) -> &'a TypeRef {
-        match ty {
-            TypeRef::Optional(inner) | TypeRef::Array(inner) => Self::effective_type_ref(inner),
-            _ => ty,
-        }
-    }
-
-    fn is_string_like(ty: &TypeRef) -> bool {
-        matches!(
-            Self::effective_type_ref(ty),
-            TypeRef::Primitive(PrimitiveType::String)
-                | TypeRef::Primitive(PrimitiveType::Markdown)
-                | TypeRef::Primitive(PrimitiveType::Html)
-                | TypeRef::Primitive(PrimitiveType::Url)
-                | TypeRef::Primitive(PrimitiveType::Email)
-                | TypeRef::Primitive(PrimitiveType::Phone)
-                | TypeRef::Primitive(PrimitiveType::Slug)
-                | TypeRef::Primitive(PrimitiveType::Ip)
-                | TypeRef::Primitive(PrimitiveType::IpV4)
-                | TypeRef::Primitive(PrimitiveType::IpV6)
-                | TypeRef::Primitive(PrimitiveType::Mac)
-        )
-    }
-
-    fn write_field_validation_attrs(
-        &self,
-        output: &mut String,
-        field: &Field,
-    ) -> Result<(), GenerateError> {
-        let mut validations = Vec::new();
-
-        for attr in &field.attributes {
-            match attr.name.as_str() {
-                "required" => {
-                    // Note: required is handled by not being Option
-                }
-                "email" => validations.push("email".to_string()),
-                "url" => validations.push("url".to_string()),
-                "min_length" | "min" => {
-                    if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if Self::is_string_like(&field.type_ref) {
-                            validations.push(format!("length(min = {})", val));
-                        } else {
-                            validations.push(format!("range(min = {})", val));
-                        }
-                    }
-                }
-                "max_length" | "max" => {
-                    if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if Self::is_string_like(&field.type_ref) {
-                            validations.push(format!("length(max = {})", val));
-                        } else {
-                            validations.push(format!("range(max = {})", val));
-                        }
-                    }
-                }
-                "pattern" | "regex" => {
-                    // Skipped: `validator` 0.16 requires `regex = path::to::LAZY_REGEX`,
-                    // not an inline string. Regex checks are emitted by the entity
-                    // validator generator instead (via backbone_core::Regex).
-                    let _ = attr;
-                }
-                _ => {}
-            }
-        }
-
-        if !validations.is_empty() {
-            writeln!(
-                output,
-                "    #[cfg_attr(feature = \"validation\", validate({}))]",
-                validations.join(", ")
-            )
-            .unwrap();
-        }
-
-        Ok(())
-    }
-
-    fn write_field_validation_attrs_optional(
-        &self,
-        output: &mut String,
-        field: &Field,
-    ) -> Result<(), GenerateError> {
-        // For optional fields in PatchDto, emit the validators directly —
-        // `validator` handles `Option<T>` by validating only when `Some`.
-        // (Earlier versions emitted `validate(nested)`, which requires
-        // validator 0.18+ and applies to sub-structs, not length/range.)
-        let mut validations = Vec::new();
-
-        for attr in &field.attributes {
-            match attr.name.as_str() {
-                "email" => validations.push("email".to_string()),
-                "url" => validations.push("url".to_string()),
-                "min_length" | "min" => {
-                    if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if Self::is_string_like(&field.type_ref) {
-                            validations.push(format!("length(min = {})", val));
-                        } else {
-                            validations.push(format!("range(min = {})", val));
-                        }
-                    }
-                }
-                "max_length" | "max" => {
-                    if let Some(val) = attr.first_arg().and_then(|v| v.as_int()) {
-                        if Self::is_string_like(&field.type_ref) {
-                            validations.push(format!("length(max = {})", val));
-                        } else {
-                            validations.push(format!("range(max = {})", val));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if !validations.is_empty() {
-            writeln!(
-                output,
-                "    #[cfg_attr(feature = \"validation\", validate({}))]",
-                validations.join(", ")
-            )
-            .unwrap();
-        }
-
-        Ok(())
-    }
-
     fn write_field_schema_attrs(
         &self,
         output: &mut String,
@@ -1166,7 +1012,7 @@ impl DtoGenerator {
             "//! This module provides DTOs for the presentation layer,"
         )
         .unwrap();
-        writeln!(output, "//! with validation and OpenAPI schema support.").unwrap();
+        writeln!(output, "//! with OpenAPI schema support.").unwrap();
         writeln!(output).unwrap();
 
         // Module declarations
@@ -1666,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dto_has_validation_attributes() {
+    fn test_dto_carries_no_validator_layer() {
         let schema = create_test_schema();
         let generator = DtoGenerator::new();
         let output = generator.generate(&schema).unwrap();
@@ -1676,10 +1522,9 @@ mod tests {
             .get(&PathBuf::from("src/presentation/dto/user_dto.rs"))
             .unwrap();
 
-        // Should have validation annotations
-        assert!(dto_file.contains("#[cfg_attr(feature = \"validation\", derive(Validate))]"));
-        assert!(dto_file.contains("email"));
-        assert!(dto_file.contains("length"));
+        // The declared rules live in the service's write guard: a DTO carries no validator derive.
+        assert!(!dto_file.contains("Validate"));
+        assert!(!dto_file.contains("feature = \"validation\""));
     }
 
     #[test]

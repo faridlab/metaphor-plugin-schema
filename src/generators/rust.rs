@@ -1039,27 +1039,8 @@ impl RustGenerator {
                 }
             }
 
-            // Generate invariant check methods
-            if !entity.invariants.is_empty() {
-                writeln!(output).unwrap();
-                writeln!(output, "    /// Check all business invariants").unwrap();
-                writeln!(
-                    output,
-                    "    pub fn check_invariants(&self) -> Result<(), Vec<&'static str>> {{"
-                )
-                .unwrap();
-                writeln!(output, "        let mut errors = Vec::new();").unwrap();
-                for (i, invariant) in entity.invariants.iter().enumerate() {
-                    writeln!(output, "        // Invariant {}: {}", i + 1, invariant).unwrap();
-                    writeln!(output, "        // TODO: Implement invariant check").unwrap();
-                }
-                writeln!(
-                    output,
-                    "        if errors.is_empty() {{ Ok(()) }} else {{ Err(errors) }}"
-                )
-                .unwrap();
-                writeln!(output, "    }}").unwrap();
-            }
+            // A declared invariant is prose: a hook rule or hand-written code enforces it. No
+            // unchecked stub is emitted for it.
         }
 
         writeln!(output, "    // <<< CUSTOM METHODS END >>>").unwrap();

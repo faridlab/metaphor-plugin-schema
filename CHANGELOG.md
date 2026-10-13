@@ -7,6 +7,39 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- **Field attributes are checked by the write guard.** A model's field attributes compile into
+  its `<Model>RowRules` guard beside its hook rules, so every generic create and update checks
+  them and a break answers 422 with the field, a stable code and its parameters
+  (`{"path": "name", "code": "max_length", "params": {"max": 80}}`).
+  - `@required` **refuses**: the value must be present, and text must not be blank. A field with
+    a `@default`, an input-excluded or server-filled field (`@exclude_from_dto`, `@readonly`,
+    `@computed`, `@hashed`, …), the id, audit and tenant columns and a state-machine field are
+    exempt.
+  - `@max` / `@min` (a length on text, a bound on numbers), `@length(N)` (exact) and
+    `@length(max=N, min=N)`, `@range`, `@positive`, `@non_negative`, `@pattern`, `@alpha_dash`,
+    `@alpha_num`, `@values` and the `email` / `url` types run **in shadow**: a break is logged and
+    the write goes ahead, until the stored-data audit clears the check.
+  - An update checks only the fields it changes; a create checks every field.
+  - `schema rules --audit` lists the stored rows each field check would refuse.
+
+### Changed
+
+- **The dead validation layers are no longer generated.** No write path called them: the
+  per-model validator builders (`application/validator/`), the domain policies
+  (`domain/services/*_domain_policy.rs`), the use-case aliases (`application/usecases/`), the
+  specifications (`domain/specifications/`, even when opted in), the DTOs' `validator` derives
+  behind the `validation` feature, and the `check_invariants` stub of a DDD entity. A full
+  generation removes the files they left, when they are untouched generated code.
+  `domain/services/mod.rs` is still generated, for the hand-written domain services beside it.
+
+### Fixed
+
+- **Attribute arguments.** `@length(max=200)` reads `max` as a named argument (it read as one
+  identifier and was ignored); `@pattern(...)` / `@regex(...)` keep their whole argument (a colon
+  or comma inside the regex split it).
+
 ## [0.24.1] — 2026-10-12
 
 ### Added
