@@ -7,6 +7,24 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-10-15
+
+### Added
+
+- **One constructor per service.** `application/service/mod.rs` exports
+  `build_<entity>_service(repository)`, which attaches the entity's write guard when its schema
+  declares rules. The module's own build goes through it, and a host should too: `schema doctor`
+  reports a generated service built with `with_repository` in hand-written code.
+- `schema doctor` reports a declared field that no migration of its table names, the drift that
+  leaves every generic read or write naming a column the database lacks.
+
+### Fixed
+
+- A uniqueness rule the generated unique index holds reads as enforced in the register, not
+  unenforced.
+- `schema rules --audit` counts a uniqueness rule's stored duplicates within one org unit, as the
+  generated index holds it.
+
 ## [0.30.0] — 2026-10-15
 
 ### Changed
