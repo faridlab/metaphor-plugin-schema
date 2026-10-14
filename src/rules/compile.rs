@@ -630,10 +630,11 @@ pub fn render_guard(
     if rules.iter().any(|r| r.reads_old) {
         out.push_str("        let old_row = old.as_ref().unwrap_or(&serde_json::Value::Null);\n");
     }
-    let refusing = rules.iter().any(|r| r.refuse);
+    // A state field moves only through its verbs: a generic write changing it is refused.
+    let refusing = !state_fields.is_empty() || rules.iter().any(|r| r.refuse);
     // Bind each list mutably only when something pushes onto it, so the module stays
     // warning-free.
-    if !state_fields.is_empty() || rules.iter().any(|r| !r.refuse) {
+    if rules.iter().any(|r| !r.refuse) {
         out.push_str("        let mut shadow = Vec::new();\n");
     } else {
         out.push_str("        let shadow = Vec::new();\n");
@@ -641,12 +642,11 @@ pub fn render_guard(
     if refusing {
         out.push_str("        let mut refuse = Vec::new();\n");
     }
-    // A state field moves only through its verbs: a generic write changing it is a break.
     for f in state_fields {
         out.push_str(&format!(
             "        // `{f}` belongs to a state machine: only its verbs move it\n\
              \x20       if update && ctx.transition.is_none() && r::changed(old.as_ref(), row, &[{f:?}]) {{\n\
-             \x20           shadow.push(Violation::new({f:?}, \"state_field_verbs_only\", \"the state field moves only through its verbs\"));\n\
+             \x20           refuse.push(Violation::new({f:?}, \"state_field_verbs_only\", \"the state field moves only through its verbs\"));\n\
              \x20       }}\n"
         ));
     }

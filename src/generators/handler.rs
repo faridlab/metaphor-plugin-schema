@@ -1038,9 +1038,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             writeln!(output, "                && (have.len() == want.len() || (have.len() < want.len() && have.last() == Some(&\"*\")))").unwrap();
             writeln!(output, "        }});").unwrap();
             writeln!(output, "        let has_specific_perm = granted(\"{}:transition:{}\");", model_snake, transition_snake).unwrap();
-            writeln!(output, "        let has_update_perm = granted(\"{}:update\");", model_snake).unwrap();
-            // The verb's own permission or a listed role grants it. `{model}:update` alone still
-            // does, while it runs in shadow, and is logged so the permission seeds can catch up.
+            // The verb's own permission or a listed role grants it; `{model}:update` does not.
             if !transition.allowed_roles.is_empty() {
                 writeln!(output, "        let has_role = auth.roles.iter().any(|r| allowed_roles.contains(&r.as_str()));").unwrap();
                 writeln!(output, "        if !has_specific_perm && !has_role {{").unwrap();
@@ -1048,15 +1046,11 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 writeln!(output, "        let _ = &allowed_roles;").unwrap();
                 writeln!(output, "        if !has_specific_perm {{").unwrap();
             }
-            writeln!(output, "            if !has_update_perm {{").unwrap();
-            writeln!(output, "                return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}>::error(\"Insufficient permissions for {} transition\")));", body_type, transition.name).unwrap();
-            writeln!(output, "            }}").unwrap();
             writeln!(
                 output,
-                "            tracing::warn!(target: \"backbone::write_guard\", entity = \"{}\", verb = \"{}\", code = \"transition_by_update_permission\", \"a transition granted only by {}:update, running in shadow; it needs {}:transition:{}{}\");",
-                model.name,
+                "            return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}>::error(\"{} needs {}:transition:{}{}\")));",
+                body_type,
                 transition.name,
-                model_snake,
                 model_snake,
                 transition_snake,
                 // Plain names: the message is a string literal in the generated code.
