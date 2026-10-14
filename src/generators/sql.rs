@@ -2420,7 +2420,12 @@ impl SqlGenerator {
                 // An index predicate takes only immutable expressions: an enum compared to a
                 // literal as itself, not through its `::text` cast.
                 let filter = unique.filter_sql.as_ref().map(|f| format!(" WHERE {}", f.replace("::text", ""))).unwrap_or_default();
-                let schema_name = table.split('.').next().unwrap_or("public");
+                // A table named without its schema lives in the connection's current schema, and
+                // so does its index.
+                let (schema_sql, index_ref) = match table.split_once('.') {
+                    Some((schema, _)) => (format!("'{schema}'"), format!("{schema}.{name}")),
+                    None => ("current_schema()".to_string(), name.clone()),
+                };
                 let table_name = table.rsplit('.').next().unwrap_or(&table);
                 // A table the host scopes per org unit (ADR-0029) holds each unit's rows side by
                 // side, so a declared uniqueness holds within one unit: its keys lead with the unit.
@@ -2428,14 +2433,14 @@ impl SqlGenerator {
                     format!("            CREATE UNIQUE INDEX {name} ON {table} ({}){filter};", keys.join(", "))
                 } else {
                     format!(
-                        "            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '{schema_name}' AND table_name = '{table_name}' AND column_name = 'org_unit_id') THEN\n                CREATE UNIQUE INDEX {name} ON {table} (\"org_unit_id\", {keys}){filter};\n            ELSE\n                CREATE UNIQUE INDEX {name} ON {table} ({keys}){filter};\n            END IF;",
+                        "            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = {schema_sql} AND table_name = '{table_name}' AND column_name = 'org_unit_id') THEN\n                CREATE UNIQUE INDEX {name} ON {table} (\"org_unit_id\", {keys}){filter};\n            ELSE\n                CREATE UNIQUE INDEX {name} ON {table} ({keys}){filter};\n            END IF;",
                         keys = keys.join(", ")
                     )
                 };
                 checks.push(format!(
-                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{schema_name}.{name}') IS NULL THEN\n        BEGIN\n{create}\n        EXCEPTION WHEN unique_violation THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} repeat its keys';\n        WHEN undefined_column THEN\n            RAISE NOTICE '{name} not added: {table} lacks a column it reads';\n        END;\n    END IF;\nEND $$;\n"
+                    "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL AND to_regclass('{index_ref}') IS NULL THEN\n        BEGIN\n{create}\n        EXCEPTION WHEN unique_violation THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} repeat its keys';\n        WHEN undefined_column THEN\n            RAISE NOTICE '{name} not added: {table} lacks a column it reads';\n        END;\n    END IF;\nEND $$;\n"
                 ));
-                check_drops.push(format!("DROP INDEX IF EXISTS {schema_name}.{name};"));
+                check_drops.push(format!("DROP INDEX IF EXISTS {index_ref};"));
             }
         }
         if !checks.is_empty() {
@@ -2922,6 +2927,10 @@ fn extract_custom_type_name(type_ref: &TypeRef) -> Option<&str> {
 /// Postgres keeps 63 bytes of a name, so a longer one shortens its middle to a digest, keeping
 /// the code whole.
 fn constraint_name(prefix: &str, table: &str, rule: &str, code: &str) -> String {
+    // An identifier holds letters, digits and `_`: a rule named `G-MAIL-3` reads `g_mail_3`.
+    let ident = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' }).collect::<String>();
+    let (rule, code) = (ident(rule), ident(code));
+    let (rule, code) = (rule.as_str(), code.as_str());
     let full = format!("{prefix}_{table}_{rule}__{code}");
     if full.len() <= 63 {
         return full;
@@ -4092,6 +4101,7 @@ mod tests {
         assert!(up.contains("EXCEPTION WHEN undefined_column THEN"), "skipped where the table lacks a column it reads: {up}");
         assert!(!up.contains("note_max_length"), "a check kept in shadow is no constraint: {up}");
         assert_eq!(constraint_name("ck", "t", &"r".repeat(80), "code").len(), 63);
+        assert_eq!(constraint_name("ck", "mail_activities", "G-MAIL-3", "res_id_required"), "ck_mail_activities_g_mail_3__res_id_required");
         assert!(constraint_name("ck", "t", &"r".repeat(80), "code").ends_with("__code"));
     }
 
