@@ -205,6 +205,14 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     for warning in super::events_check::unpublished_events(&consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());
     }
+    // Declared fields no migration gives a column: advisory, never a gate.
+    for warning in super::events_check::fields_without_columns(&module_schema, &consumer_root) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
+    // Generated services built around their constructor: advisory, never a gate.
+    for warning in super::events_check::services_built_by_hand(&consumer_root) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
 
     // A module on the extension layout keeps no hand code in a generated file (ADR-0031):
     // every generated `src/**/*.rs` file must equal what a generation writes now.
