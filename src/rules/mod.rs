@@ -283,6 +283,27 @@ impl RuleRegister {
                 };
             }
         }
+        // A transition naming a state its machine does not list is a misspelling the database
+        // trigger would turn into a refusal of every real move to or from that state.
+        let mut unknown = Vec::new();
+        for machine in self.machines.iter().filter(|m| !m.states.is_empty()) {
+            for t in &machine.transitions {
+                for state in t.from.iter().chain(std::iter::once(&t.to)) {
+                    if state != "*" && state != crate::ast::NULL_STATE && !machine.states.contains(state) {
+                        let message = format!(
+                            "the {}.{} transition {} names state '{state}', which the machine does not list",
+                            machine.target,
+                            machine.field,
+                            t.verb.as_deref().map(|v| format!("'{v}'")).unwrap_or_else(|| "without a verb".into()),
+                        );
+                        if !unknown.iter().any(|w: &RegisterWarning| w.message == message) {
+                            unknown.push(RegisterWarning { source: machine.source.clone(), message });
+                        }
+                    }
+                }
+            }
+        }
+        self.warnings.extend(unknown);
     }
 
     /// How many declared expressions are in each check state.
@@ -462,6 +483,19 @@ pub fn bind_target(target: &str, models: &[Model]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_transition_naming_a_state_the_machine_does_not_list_is_warned_about() {
+        let mut r = super::RuleRegister::default();
+        r.read_file(
+            "orders.hook.yaml",
+            "module: shop\nstate_machines:\n  - entity: Order\n    field: status\n    states: [draft, paid]\n    transitions:\n      - { from: draft, to: paid, on: pay }\n      - { from: paid, to: refundd, on: refund }\n      - { from: \"*\", to: draft, on: reset }\n",
+        );
+        r.check(&[]);
+        let w: Vec<String> = r.warnings.iter().map(|w| w.message.clone()).collect();
+        assert_eq!(w.iter().filter(|m| m.contains("does not list")).count(), 1, "{w:?}");
+        assert!(w.iter().any(|m| m.contains("'refund' names state 'refundd'")), "{w:?}");
+    }
+
     use super::*;
 
     fn models(names: &[&str]) -> Vec<Model> {
