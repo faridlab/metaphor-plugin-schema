@@ -322,9 +322,120 @@ pub fn model_field_rules(schema: &crate::ast::ModuleSchema, model: &Model) -> Ve
     field_rules(model, &super::compile::model_state_fields(schema, model))
 }
 
+/// A field check as the browser runs it: the same code, message and values the write guard
+/// answers with, and a TypeScript test over the field's value `v`. The browser runs it only on
+/// a value that is there; a null passes, as it does on the service, unless the check is
+/// `required`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrowserCheck {
+    pub field: String,
+    pub code: String,
+    /// The service's message said under the field: "This field must be at most 80 characters".
+    pub message: String,
+    pub params: Vec<(String, serde_json::Value)>,
+    /// A TypeScript boolean expression over `v` that holds when the value passes.
+    pub test: String,
+}
+
+/// The field checks of `model` the browser can run, from the same compiled rules the write guard
+/// refuses with. A check kept in shadow is left out: the service lets that write through.
+pub fn browser_checks(schema: &crate::ast::ModuleSchema, model: &Model) -> Vec<BrowserCheck> {
+    model_field_rules(schema, model)
+        .into_iter()
+        .filter(|r| r.refuse)
+        .filter_map(|r| {
+            let field = model.fields.iter().find(|f| f.name == r.path)?;
+            let test = browser_test(&r.code, field, &r.params)?;
+            let message = r
+                .message
+                .strip_prefix(&format!("{} ", r.path))
+                .map(|rest| format!("This field {rest}"))
+                .unwrap_or_else(|| r.message.clone());
+            let params = r
+                .params
+                .iter()
+                .filter(|(k, _)| k != "pattern")
+                .map(|(k, v)| (k.clone(), param_value(v)))
+                .collect();
+            Some(BrowserCheck { field: r.path.clone(), code: r.code.clone(), message, params, test })
+        })
+        .collect()
+}
+
+/// A guard param (`80_i64`, `1.5_f64`) as the value it names.
+fn param_value(v: &str) -> serde_json::Value {
+    let bare = v.trim_end_matches("_i64").trim_end_matches("_f64");
+    bare.parse::<i64>()
+        .map(serde_json::Value::from)
+        .or_else(|_| bare.parse::<f64>().map(serde_json::Value::from))
+        .unwrap_or_else(|_| serde_json::Value::from(v))
+}
+
+/// The TypeScript test for one check code over the value `v`, or `None` for a code the browser
+/// cannot run. Lengths count characters, as the service does, not UTF-16 units.
+fn browser_test(code: &str, field: &Field, params: &[(String, String)]) -> Option<String> {
+    let num = |name: &str| params.iter().find(|(k, _)| k == name).map(|(_, v)| param_value(v).to_string());
+    let regex = |p: &str| format!("new RegExp({}).test(String(v))", serde_json::Value::from(p));
+    let attr_pattern = || {
+        field
+            .attributes
+            .iter()
+            .find(|a| a.name == "pattern" || a.name == "regex")
+            .and_then(|a| a.first_arg())
+            .and_then(|a| a.as_str())
+            .map(str::to_string)
+    };
+    Some(match code {
+        "required" if field.type_ref.is_optional() && !matches!(kind_of(&field.type_ref), Some(Kind::Text | Kind::Email | Kind::Url)) => {
+            "v != null".to_string()
+        }
+        "required" => "v != null && String(v).trim() !== \"\"".to_string(),
+        "max_length" => format!("[...String(v)].length <= {}", num("max")?),
+        "min_length" => format!("[...String(v)].length >= {}", num("min")?),
+        "length" => format!("[...String(v)].length === {}", num("length")?),
+        "max" => format!("Number(v) <= {}", num("max")?),
+        "min" => format!("Number(v) >= {}", num("min")?),
+        "range" => format!("Number(v) >= {} && Number(v) <= {}", num("min")?, num("max")?),
+        "positive" => "Number(v) > 0".to_string(),
+        "non_negative" => "Number(v) >= 0".to_string(),
+        "pattern" => regex(&attr_pattern()?),
+        "alpha_dash" => regex("^[a-zA-Z0-9_-]+$"),
+        "alpha_num" => regex("^[a-zA-Z0-9]+$"),
+        "email" => regex(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+        "url" => regex(r"^[a-zA-Z][a-zA-Z0-9+.-]*://\S+$"),
+        "values" => {
+            let values: Vec<serde_json::Value> = field
+                .attributes
+                .iter()
+                .filter(|a| a.name == "values")
+                .flat_map(|a| a.args.iter().filter_map(|(_, v)| v.as_str().map(str::to_string)).collect::<Vec<_>>())
+                .flat_map(|s| s.split('|').map(|p| p.trim().to_string()).collect::<Vec<_>>())
+                .filter(|s| !s.is_empty())
+                .map(serde_json::Value::from)
+                .collect();
+            format!("{}.includes(String(v))", serde_json::Value::from(values))
+        }
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_browser_gets_each_check_with_the_guards_code_and_message() {
+        let m = model("      name:\n        type: string\n        attributes: [\"@required\", \"@max(80)\"]\n      score:\n        type: int?\n        attributes: [\"@range(1, 12)\"]\n      email:\n        type: email?\n");
+        let schema = crate::ast::ModuleSchema::new("helpdesk");
+        let checks = browser_checks(&schema, &m);
+        let of = |code: &str| checks.iter().find(|c| c.code == code).unwrap_or_else(|| panic!("{code} in {checks:?}"));
+        assert_eq!(of("required").test, "v != null && String(v).trim() !== \"\"");
+        assert_eq!(of("max_length").message, "This field must be at most 80 characters");
+        assert_eq!(of("max_length").test, "[...String(v)].length <= 80");
+        assert_eq!(of("max_length").params, vec![("max".to_string(), serde_json::Value::from(80))]);
+        assert_eq!(of("range").test, "Number(v) >= 1 && Number(v) <= 12");
+        assert!(of("email").test.starts_with("new RegExp(\"^[^@\\\\s]+@"), "{}", of("email").test);
+    }
 
     fn model(fields_yaml: &str) -> Model {
         let yaml = format!(
