@@ -285,6 +285,11 @@ impl Generator for ServiceGenerator {
                         writeln!(mod_content, "pub use {}::{}RowRules;", to_snake_case(&model.name), model.name).unwrap();
                     }
                 }
+                for model in &schema.schema.models {
+                    if model_names.contains(&model.name) {
+                        mod_content.push_str(&guarded_constructor(&schema.schema, model));
+                    }
+                }
             } else {
                 for model in &schema.schema.models {
                     writeln!(
@@ -319,6 +324,9 @@ impl Generator for ServiceGenerator {
                         writeln!(mod_content, "pub use {snake}_service::{}RowRules;", model.name).unwrap();
                     }
                 }
+                for model in &schema.schema.models {
+                    mod_content.push_str(&guarded_constructor(&schema.schema, model));
+                }
                 writeln!(mod_content, "// <<< CUSTOM").unwrap();
                 writeln!(mod_content, "// END CUSTOM").unwrap();
             }
@@ -335,6 +343,23 @@ impl Generator for ServiceGenerator {
 }
 
 use crate::utils::to_snake_case;
+
+/// The one constructor of `model`'s generated service: over a repository, with the entity's write
+/// guard attached when its schema declares rules. A host builds the service through it, so its
+/// writes cannot be served without the rules (`schema doctor` reports a service built by hand).
+fn guarded_constructor(schema: &crate::ast::ModuleSchema, model: &crate::ast::Model) -> String {
+    let name = &model.name;
+    let snake = to_snake_case(name);
+    let guard = if crate::rules::compile::model_has_guard(schema, model) {
+        format!(".with_guard(std::sync::Arc::new({name}RowRules))")
+    } else {
+        String::new()
+    };
+    let attached = if guard.is_empty() { "" } else { " with its write guard attached" };
+    format!(
+        "\n/// A `{name}Service` over `repository`{attached}: the way to build it, so its writes are\n/// served only with the rules the schema declares.\npub fn build_{snake}_service(\n    repository: std::sync::Arc<crate::infrastructure::persistence::{name}Repository>,\n) -> {name}Service {{\n    {name}Service::with_repository(repository){guard}\n}}\n"
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -401,9 +426,15 @@ mod tests {
         );
         let module = &output.files[&PathBuf::from("src/application/service/mod.rs")];
         assert!(module.contains("pub use order_service::OrderRowRules;"));
+        // The one constructor attaches the guard, and the module's own build goes through it.
+        assert!(
+            module.contains("pub fn build_order_service(\n    repository: std::sync::Arc<crate::infrastructure::persistence::OrderRepository>,\n) -> OrderService {\n    OrderService::with_repository(repository).with_guard(std::sync::Arc::new(OrderRowRules))\n}"),
+            "{module}"
+        );
         let lib = crate::generators::module::ModuleGenerator::new().generate(&resolved).unwrap();
         let lib = &lib.files[&PathBuf::from("src/lib.rs")];
-        assert!(lib.contains(".with_guard(Arc::new(crate::application::service::OrderRowRules))"), "{lib}");
+        assert!(lib.contains("crate::application::service::build_order_service(order_repository.clone())"), "{lib}");
+        assert!(!lib.contains("with_repository"), "no service is built around its constructor: {lib}");
     }
 
     #[test]
@@ -435,6 +466,7 @@ mod tests {
         assert!(!service.contains("OrderRowRules"), "the hand-owned file is not where the guard goes");
         let module = &output.files[&PathBuf::from("src/application/service/mod.rs")];
         assert!(module.contains("pub mod order_row_rules;") && module.contains("pub use order_row_rules::OrderRowRules;"), "{module}");
+        assert!(module.contains(".with_guard(std::sync::Arc::new(OrderRowRules))"), "the constructor lives in the generated module file: {module}");
     }
 
     #[test]
@@ -442,6 +474,8 @@ mod tests {
         let output = ServiceGenerator::new().generate(&create_test_schema()).unwrap();
         let service = &output.files[&PathBuf::from("src/application/service/order_service.rs")];
         assert!(!service.contains("RowRules"));
+        let module = &output.files[&PathBuf::from("src/application/service/mod.rs")];
+        assert!(module.contains("    OrderService::with_repository(repository)\n}"), "a plain constructor: {module}");
         let lib = crate::generators::module::ModuleGenerator::new().generate(&create_test_schema()).unwrap();
         assert!(!lib.files[&PathBuf::from("src/lib.rs")].contains("with_guard"));
     }

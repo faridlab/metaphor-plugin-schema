@@ -607,12 +607,6 @@ impl ModuleGenerator {
         for model in &schema.schema.models {
             let name = &model.name;
             let snake_name = to_snake_case(name);
-            let service_name = format!("{}Service", name);
-            let service_type = if model_names.contains(service_name.as_str()) {
-                format!("{}AppService", name)
-            } else {
-                service_name
-            };
             writeln!(output, "        // {} service", name).unwrap();
             writeln!(
                 output,
@@ -620,16 +614,11 @@ impl ModuleGenerator {
                 snake_name, name
             )
             .unwrap();
-            // An entity whose schema declares row rules gets its generated guard.
-            let guard = if !crate::rules::compile::model_has_guard(&schema.schema, model) {
-                String::new()
-            } else {
-                format!(".with_guard(Arc::new(crate::application::service::{}RowRules))", name)
-            };
+            // Built through its generated constructor, which attaches the entity's write guard.
             writeln!(
                 output,
-                "        let {}_service = Arc::new({}::with_repository({}_repository.clone()){});",
-                snake_name, service_type, snake_name, guard
+                "        let {}_service = Arc::new(crate::application::service::build_{}_service({}_repository.clone()));",
+                snake_name, snake_name, snake_name
             )
             .unwrap();
             writeln!(output).unwrap();
