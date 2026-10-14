@@ -121,10 +121,28 @@ impl TypeMapper {
     /// Convert a schema field type to Zod schema
     pub fn to_zod_schema(&self, field: &FieldDefinition, enums: &[EnumDefinition]) -> String {
         let base_schema = Self::base_zod_schema(&field.type_name, enums);
-        let validations = self.zod_validations(field);
+        let validations = self.zod_validations(field, &[]);
+        self.finish(field, format!("{}{}", base_schema, validations))
+    }
 
-        let mut schema = format!("{}{}", base_schema, validations);
+    /// The attribute checks the service's write guard owns: with the guard's own checks in
+    /// place, Zod's versions of them would only say the same thing in other words.
+    const GUARD_OWNED: &'static [&'static str] = &[
+        "min", "max", "length", "range", "positive", "non_negative", "nonnegative", "pattern", "regex", "alpha_dash",
+        "alpha_num", "values",
+    ];
 
+    /// [`Self::to_zod_schema`] with the service's checks in place of the attributes' own:
+    /// `refine` is a `.superRefine(..)` built from the rule register, and the attribute checks
+    /// it covers, Zod's email and url checks among them, are left out.
+    pub fn to_zod_schema_checked(&self, field: &FieldDefinition, enums: &[EnumDefinition], refine: &str) -> String {
+        let base_schema = Self::base_zod_schema(&field.type_name, enums).replace(".email()", "").replace(".url()", "");
+        let validations = self.zod_validations(field, Self::GUARD_OWNED);
+        self.finish(field, format!("{}{}{}", base_schema, validations, refine))
+    }
+
+    /// Optionality and the default, after the checks.
+    fn finish(&self, field: &FieldDefinition, mut schema: String) -> String {
         // Handle optionality
         if field.optional {
             schema = format!("{}.nullable().optional()", schema);
@@ -200,10 +218,10 @@ impl TypeMapper {
     }
 
     /// Generate Zod validation chains from field attributes
-    fn zod_validations(&self, field: &FieldDefinition) -> String {
+    fn zod_validations(&self, field: &FieldDefinition, skip: &[&str]) -> String {
         let mut validations = Vec::new();
 
-        for attr in &field.attributes {
+        for attr in field.attributes.iter().filter(|a| !skip.contains(&a.name.as_str())) {
             if let Some(validation) = self.attribute_to_zod_validation(attr, &field.type_name) {
                 validations.push(validation);
             }

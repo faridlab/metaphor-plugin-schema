@@ -18,6 +18,9 @@ use crate::webgen::parser::{to_camel_case, to_pascal_case, to_snake_case};
 pub struct EntitySchemaGenerator {
     config: Config,
     type_mapper: TypeMapper,
+    /// The module schema the Rust generators read, loaded once: its rule register is where a
+    /// field's checks come from, so the browser refuses what the write guard refuses.
+    module: std::sync::OnceLock<Option<crate::ast::ModuleSchema>>,
 }
 
 impl EntitySchemaGenerator {
@@ -26,6 +29,35 @@ impl EntitySchemaGenerator {
         Self {
             config,
             type_mapper,
+            module: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The write guard's field checks for `entity`, by field.
+    fn guard_checks(&self, entity: &EntityDefinition) -> std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>> {
+        let module = self
+            .module
+            .get_or_init(|| crate::commands::schema::load_module_schema(&self.config.module, &self.config.schema_dir()));
+        let mut by_field: std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>> = Default::default();
+        let Some(schema) = module else { return by_field };
+        let Some(model) = schema.models.iter().find(|m| m.name == entity.name) else { return by_field };
+        for check in crate::rules::fields::browser_checks(schema, model) {
+            by_field.entry(check.field.clone()).or_default().push(check);
+        }
+        by_field
+    }
+
+    /// A field's Zod schema: the write guard's checks where it has them, with its codes and
+    /// messages; the field attributes' own checks otherwise.
+    fn field_zod(
+        &self,
+        field: &FieldDefinition,
+        enums: &[EnumDefinition],
+        checks: &std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>>,
+    ) -> String {
+        match checks.get(&field.name) {
+            Some(list) if !list.is_empty() => self.type_mapper.to_zod_schema_checked(field, enums, &refinement(list)),
+            _ => self.type_mapper.to_zod_schema(field, enums),
         }
     }
 
@@ -368,9 +400,10 @@ const {name_camel}Schema = z.enum({name}Values);
         enums: &[EnumDefinition],
     ) -> String {
         let mut fields = Vec::new();
+        let checks = self.guard_checks(entity);
 
         for field in &entity.fields {
-            let schema = describing(field, self.type_mapper.to_zod_schema(field, enums));
+            let schema = describing(field, self.field_zod(field, enums, &checks));
 
             // Add comment if description exists
             if let Some(desc) = &field.description {
@@ -390,6 +423,7 @@ const {name_camel}Schema = z.enum({name}Values);
         enums: &[EnumDefinition],
     ) -> String {
         let mut fields = Vec::new();
+        let checks = self.guard_checks(entity);
 
         for field in &entity.fields {
             // Skip auto-generated fields
@@ -397,7 +431,7 @@ const {name_camel}Schema = z.enum({name}Values);
                 continue;
             }
 
-            let schema = describing(field, self.type_mapper.to_zod_schema(field, enums));
+            let schema = describing(field, self.field_zod(field, enums, &checks));
             fields.push(format!("  {}: {},", field.name, schema));
         }
 
@@ -411,6 +445,7 @@ const {name_camel}Schema = z.enum({name}Values);
         enums: &[EnumDefinition],
     ) -> String {
         let mut fields = Vec::new();
+        let checks = self.guard_checks(entity);
 
         for field in &entity.fields {
             // Skip id (handled separately) and auto-generated timestamp fields
@@ -418,7 +453,7 @@ const {name_camel}Schema = z.enum({name}Values);
                 continue;
             }
 
-            let base_schema = self.type_mapper.to_zod_schema(field, enums);
+            let base_schema = self.field_zod(field, enums, &checks);
             // Make all update fields optional
             let optional_schema = describing(field, format!("{}.optional()", base_schema));
             fields.push(format!("  {}: {},", field.name, optional_schema));
@@ -921,6 +956,38 @@ fn describing(field: &FieldDefinition, schema: String) -> String {
 /// barrel merges. The domain generator refuses to emit a module where two
 /// entities claim the same symbol; this list is what that check reads, and the
 /// invariant test below pins it to the template so the two cannot drift.
+/// One `.superRefine` running the write guard's checks of a field, each refusal carrying the
+/// guard's code and values in `params` and its message. A value that is not there skips it, as
+/// the guard passes a null, so the checks sit before `.nullable()`.
+fn refinement(checks: &[crate::rules::fields::BrowserCheck]) -> String {
+    // A text field's maximum stays Zod's own `.max`, with the guard's message: the screens read
+    // it to choose between a line and a text area.
+    let mut out = String::new();
+    for c in checks.iter().filter(|c| c.code == "max_length") {
+        if let Some((_, max)) = c.params.iter().find(|(k, _)| k == "max") {
+            out.push_str(&format!(".max({max}, {{ message: {} }})", serde_json::Value::from(c.message.as_str())));
+        }
+    }
+    let mut body = String::new();
+    for c in checks.iter().filter(|c| c.test != "v != null" && c.code != "max_length") {
+        let mut params = serde_json::Map::new();
+        params.insert("code".into(), serde_json::Value::from(c.code.as_str()));
+        for (k, v) in &c.params {
+            params.insert(k.clone(), v.clone());
+        }
+        body.push_str(&format!(
+            "    if (!({})) ctx.addIssue({{ code: z.ZodIssueCode.custom, message: {}, params: {} }});\n",
+            c.test,
+            serde_json::Value::from(c.message.as_str()),
+            serde_json::Value::Object(params)
+        ));
+    }
+    if !body.is_empty() {
+        out.push_str(&format!(".superRefine((v, ctx) => {{\n{body}  }})"));
+    }
+    out
+}
+
 /// The fields of `entity` a state machine moves, as the rule register reads the module's hook
 /// files under `schema_dir`: every hook format, the same reading the service's write guard uses.
 pub fn state_fields(schema_dir: &std::path::Path, entity: &str) -> Vec<String> {

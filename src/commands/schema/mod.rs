@@ -444,3 +444,14 @@ pub fn execute(action: SchemaAction) -> Result<()> {
         } => execute_tenancy(&output, preview, check, database_url),
     }
 }
+
+/// The module schema under `schema_dir` as the Rust generators read it, for a caller outside
+/// the schema commands: the webapp generator reads the rule register from it. `None` when the
+/// directory holds no schema that parses.
+pub(crate) fn load_module_schema(module: &str, schema_dir: &std::path::Path) -> Option<crate::ast::ModuleSchema> {
+    let files = discovery::find_schema_files(&schema_dir.to_path_buf()).ok()?;
+    if files.is_empty() {
+        return None;
+    }
+    module_loader::build_module_schema(module, &files).ok().map(|(schema, _)| schema)
+}
