@@ -295,7 +295,9 @@ pub fn model_uniqueness_rules(schema: &crate::ast::ModuleSchema, model: &Model) 
 }
 
 /// The audit query for a uniqueness rule: how many groups of stored rows already share its
-/// keys. Rows with a null key are left out, as a unique index treats nulls as distinct.
+/// keys. Rows with a null key are left out, as a unique index treats nulls as distinct. On a
+/// table the host scopes per org unit the keys hold within one unit, as the generated index
+/// does; `to_jsonb(t)` reads the unit as null where the table has no such column.
 pub fn uniqueness_audit_query(model: &Model, rule: &CompiledUnique) -> String {
     let keys: Vec<String> = rule.keys.iter().map(|k| format!("\"{k}\"")).collect();
     let mut wheres: Vec<String> = keys.iter().map(|k| format!("{k} IS NOT NULL")).collect();
@@ -303,7 +305,7 @@ pub fn uniqueness_audit_query(model: &Model, rule: &CompiledUnique) -> String {
         wheres.push(f.clone());
     }
     format!(
-        "SELECT '{}' AS rule, count(*) AS breaking FROM (SELECT 1 FROM {} WHERE {} GROUP BY {} HAVING count(*) > 1) AS duplicates;",
+        "SELECT '{}' AS rule, count(*) AS breaking FROM (SELECT 1 FROM {} AS t WHERE {} GROUP BY to_jsonb(t)->>'org_unit_id', {} HAVING count(*) > 1) AS duplicates;",
         rule.code.replace('\'', "''"),
         model.qualified_table_name(),
         wheres.join(" AND "),
@@ -1192,8 +1194,8 @@ pub(crate) mod tests {
         assert_eq!(u.filter_sql.as_deref(), Some("((\"metadata\"->>'deleted_at') IS NULL)"));
         assert_eq!(
             uniqueness_audit_query(&bucket(), &u),
-            "SELECT 'a_rule' AS rule, count(*) AS breaking FROM (SELECT 1 FROM bucket.buckets \
-             WHERE \"name\" IS NOT NULL AND ((\"metadata\"->>'deleted_at') IS NULL) GROUP BY \"name\" \
+            "SELECT 'a_rule' AS rule, count(*) AS breaking FROM (SELECT 1 FROM bucket.buckets AS t \
+             WHERE \"name\" IS NOT NULL AND ((\"metadata\"->>'deleted_at') IS NULL) GROUP BY to_jsonb(t)->>'org_unit_id', \"name\" \
              HAVING count(*) > 1) AS duplicates;"
         );
         for (text, says) in [
