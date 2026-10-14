@@ -7,6 +7,22 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-10-15
+
+### Changed
+
+- **The webapp's field validation is the write guard's.** Each entity schema's fields run the
+  checks the service refuses with, read from the rule register: the same bounds, codes and
+  messages ("This field must be at most 80 characters"), carried in `params.code`. A text
+  field's maximum stays Zod's own `.max`, so screens still size the input from it. Checks the
+  attributes' own Zod versions missed now run in the browser too: a whitespace-only required
+  text, `@range`, `@values`; an optional field's length message keeps "characters"; a pattern
+  keeps its backslashes.
+
+### Added
+
+- `rules::fields::browser_checks`: each refusing field check as the browser runs it.
+
 ## [0.29.0] — 2026-10-14
 
 ### Changed
