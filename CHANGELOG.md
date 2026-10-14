@@ -7,6 +7,15 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-10-15
+
+### Fixed
+
+- A declared-checks constraint is named with letters, digits and `_` only: a rule named
+  `G-MAIL-3` gave a name Postgres refuses.
+- A unique index on a table named without its schema is looked up in the current schema, so a
+  migration no longer tries to create an index that is already there.
+
 ## [0.31.0] — 2026-10-15
 
 ### Added
