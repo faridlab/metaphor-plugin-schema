@@ -7,6 +7,30 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-10-14
+
+### Changed
+
+- **State machines refuse what they do not declare.** All three checks that ran in shadow now
+  refuse:
+  - The per-machine database trigger raises a `check_violation` on an undeclared move, naming
+    the state column and `tg_<table>__state_transition_not_declared`, so backbone-core 3.8.1
+    answers it as a 422 violation on that field.
+  - The write guard refuses a generic write that changes a state field
+    (`state_field_verbs_only`). A verb's write, run through `write_guard::as_transition`, goes
+    through.
+  - A generated transition route needs `{model}:transition:{verb}` or one of the machine's
+    listed roles; `{model}:update` alone answers 403.
+- The trigger migration is named `state_transition_check_<table>_<digest>`, after its text. A
+  machine that declares another move lands as a new forward migration replacing the function;
+  the earlier `add_state_transition_check_<table>` migrations stay as they were.
+
+### Added
+
+- `schema validate` warns when a transition names a state its machine does not list.
+- The webapp's entity schema exports `<entity>StateFields`, the fields its state machines move,
+  read from the rule register, so it covers every hook format.
+
 ## [0.28.2] — 2026-10-14
 
 ### Fixed
