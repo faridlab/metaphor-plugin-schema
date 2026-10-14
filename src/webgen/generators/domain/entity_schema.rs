@@ -101,7 +101,15 @@ impl EntitySchemaGenerator {
 
         // The lifecycle section (state machine + permissions) rides the same
         // file when the hook schema states either.
-        let lifecycle = self.generate_lifecycle_section(entity, hooks);
+        let mut lifecycle = self.generate_lifecycle_section(entity, hooks);
+        let moved = state_fields(&self.config.schema_dir(), &entity.name);
+        if !moved.is_empty() {
+            let camel = to_camel_case(&entity.name);
+            let list = moved.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+            lifecycle.push_str(&format!(
+                "\n/**\n * The fields a state machine moves. Only its verbs change them: the service refuses a\n * generic write that does, so no generic edit offers them.\n */\nexport const {camel}StateFields = [{list}] as const;\n"
+            ));
+        }
 
         // Generate IP schema if needed
         let ip_schema = if uses_ip {
@@ -913,6 +921,28 @@ fn describing(field: &FieldDefinition, schema: String) -> String {
 /// barrel merges. The domain generator refuses to emit a module where two
 /// entities claim the same symbol; this list is what that check reads, and the
 /// invariant test below pins it to the template so the two cannot drift.
+/// The fields of `entity` a state machine moves, as the rule register reads the module's hook
+/// files under `schema_dir`: every hook format, the same reading the service's write guard uses.
+pub fn state_fields(schema_dir: &std::path::Path, entity: &str) -> Vec<String> {
+    let mut register = crate::rules::RuleRegister::default();
+    for e in walkdir::WalkDir::new(schema_dir.join("hooks")).sort_by_file_name().into_iter().flatten() {
+        let path = e.path();
+        if !path.extension().is_some_and(|x| x == "yaml" || x == "yml") {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(path) {
+            register.read_file(&path.file_name().unwrap_or_default().to_string_lossy(), &text);
+        }
+    }
+    let names = |m: &crate::rules::DeclaredMachine| {
+        std::iter::once(&m.target).chain(m.alternatives.iter()).any(|n| n.eq_ignore_ascii_case(entity))
+    };
+    let mut fields: Vec<String> = register.machines.iter().filter(|m| names(m)).map(|m| m.field.clone()).collect();
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
 pub fn schema_file_symbols(entity: &EntityDefinition, hooks: Option<&HookSchema>) -> Vec<String> {
     let has_hook = hooks.is_some();
     let pascal = to_pascal_case(&entity.name);
