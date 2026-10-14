@@ -339,6 +339,10 @@ impl RuleRegister {
                 || compile::compile_delete_guard(rule, model, &module, enums).is_ok()
             {
                 rule.status = if rule.shadow.is_some() { EnforcementStatus::Shadow } else { EnforcementStatus::Guard };
+            } else if compile::compile_uniqueness(rule, model, enums).is_ok() {
+                // A uniqueness rule becomes a unique index the database holds; an index has no
+                // shadow, so it refuses whatever the declaration says.
+                rule.status = EnforcementStatus::Guard;
             }
         }
     }
@@ -483,6 +487,25 @@ pub fn bind_target(target: &str, models: &[Model]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_uniqueness_rule_the_database_holds_reads_as_enforced() {
+        use crate::ast::{Field, Model, PrimitiveType, TypeRef};
+        let mut m = Model::new("Bucket");
+        m.schema = Some("bucket".into());
+        m.fields.push(Field::new("slug", TypeRef::Primitive(PrimitiveType::String)));
+        m.fields.push(Field::new("metadata", TypeRef::Primitive(PrimitiveType::Json)));
+        let mut r = super::RuleRegister::default();
+        r.read_file(
+            "bucket.hook.yaml",
+            "name: BucketRules\nmodel: Bucket\nrules:\n  unique_slug:\n    when: [create, update]\n    condition: \"count(Bucket, slug == $this.slug && id != $this.id && metadata.deleted_at == null) == 0\"\n    code: SLUG_EXISTS\n",
+        );
+        let models = vec![m];
+        r.bind(&models);
+        r.check(&models);
+        r.mark_compiled(&models, &Default::default());
+        assert_eq!(r.rules[0].status, super::EnforcementStatus::Guard);
+    }
+
     #[test]
     fn a_transition_naming_a_state_the_machine_does_not_list_is_warned_about() {
         let mut r = super::RuleRegister::default();
