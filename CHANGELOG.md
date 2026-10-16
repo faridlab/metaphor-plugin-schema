@@ -7,6 +7,13 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- `schema rules` labels each listed rule with how it is held (`GUARD`, `SHADOW`, `VERB` or
+  `UNENFORCED`); it printed `UNENFORCED` for every rule.
+- The raw-SQL bypass count leaves out a write inside a file the rule's own `enforced_by` names:
+  that write is the enforcer, such as a conditional update that holds a cap.
+
 ## [0.33.4] — 2026-10-16
 
 ### Changed

@@ -81,10 +81,17 @@ pub fn bypassable_rules(schema: &ModuleSchema, root: &Path) -> BTreeMap<String, 
             {
                 continue;
             }
+            // A write inside a file the rule's `enforced_by` names is the enforcer itself.
+            let enforcers: Vec<&str> = rule
+                .enforced_by
+                .as_deref()
+                .map(|c| c.split(',').filter_map(|one| one.trim().rsplit_once("::").map(|(file, _)| file)).collect())
+                .unwrap_or_default();
             let past: Vec<String> = writes
                 .iter()
                 .filter(|(kind, _)| applies_to(rule, **kind))
                 .flat_map(|(_, at)| at.iter().cloned())
+                .filter(|at| !enforcers.iter().any(|f| at.rsplit_once(':').is_some_and(|(file, _)| file == *f)))
                 .collect();
             if !past.is_empty() {
                 out.insert(super::baseline::rule_key(&rule.source.file, &rule.name), past);
@@ -154,6 +161,27 @@ mod tests {
         assert_eq!(w["journals"][&Write::Insert], ["src/application/service/close_write_service.rs:1"]);
         assert!(w["fiscal_periods"].contains_key(&Write::Update));
         assert!(w["journal_lines"].contains_key(&Write::Delete));
+    }
+
+    #[test]
+    fn a_write_inside_the_rules_own_enforcer_is_no_bypass() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "src/repo.rs", "pub async fn bump() { q(\"UPDATE lines SET qty = qty + 1 WHERE qty < cap\") }\n");
+        write(root, "src/other.rs", "fn f() { q(\"UPDATE lines SET qty = 99\") }\n");
+        let mut schema = ModuleSchema::new("m");
+        let mut model = crate::ast::Model::new("Line");
+        model.collection = Some("lines".into());
+        schema.models.push(model);
+        schema.rule_register.read_file(
+            "line.hook.yaml",
+            "name: Line\nrules:\n  capped:\n    when: [draw]\n    assert: \"qty <= cap\"\n    enforcement: service\n    enforced_by: \"src/repo.rs::bump\"\n",
+        );
+        let models = schema.models.clone();
+        schema.rule_register.bind(&models);
+        schema.rule_register.verify_enforced_by(root);
+        let found = bypassable_rules(&schema, root);
+        assert_eq!(found.get("line.hook.yaml: capped").map(Vec::as_slice), Some(&["src/other.rs:1".to_string()][..]), "{found:?}");
     }
 
     #[test]

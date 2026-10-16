@@ -180,7 +180,12 @@ fn print_pretty(module: &str, register: &RuleRegister, suggest: bool) {
             if rule.when.is_empty() { "always".to_string() } else { rule.when.join(", ") },
             rule.code.as_deref().unwrap_or("-"),
             enforcement,
-            "UNENFORCED".yellow()
+            match rule.status {
+                crate::rules::EnforcementStatus::Unenforced => "UNENFORCED".yellow(),
+                crate::rules::EnforcementStatus::Guard => "GUARD".green(),
+                crate::rules::EnforcementStatus::Shadow => "SHADOW".cyan(),
+                crate::rules::EnforcementStatus::Verb => "VERB".green(),
+            }
         );
         match &rule.body {
             RuleBody::Condition(text) | RuleBody::Assertion(text) => {
