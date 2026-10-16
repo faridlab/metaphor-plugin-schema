@@ -56,8 +56,9 @@ impl StateTransitionCheckGenerator {
         Self
     }
 
-    /// Whether a machine's states are the values its state field holds.
-    fn checkable(model: &Model, machine: &DeclaredMachine) -> bool {
+    /// Whether a machine's states are the values its state field holds: only then can a trigger
+    /// refuse an undeclared move.
+    pub(crate) fn checkable(model: &Model, machine: &DeclaredMachine) -> bool {
         use crate::ast::{PrimitiveType, TypeRef};
         let Some(field) = model.find_field(&machine.field) else { return false };
         let mut t = &field.type_ref;

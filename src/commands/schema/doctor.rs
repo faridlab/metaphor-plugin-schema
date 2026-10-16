@@ -249,9 +249,19 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         println!("  {} {warning}", "!".yellow().bold());
     }
 
-    // Generated services built around their constructor: advisory, never a gate.
-    for warning in super::events_check::services_built_by_hand(&consumer_root) {
-        println!("  {} {warning}", "!".yellow().bold());
+    // Generated services built without their guard: a gate when the entity has one, since its
+    // rules then check nothing on that service's writes; advisory otherwise.
+    let unguarded = super::events_check::services_built_by_hand(&consumer_root);
+    for (line, guarded) in &unguarded {
+        if *guarded {
+            println!("  {} {line}", "✗".red().bold());
+        } else {
+            println!("  {} {line}", "!".yellow().bold());
+        }
+    }
+    let bypassed = unguarded.iter().filter(|(_, g)| *g).count();
+    if bypassed > 0 && findings.is_empty() {
+        anyhow::bail!("{bypassed} service(s) with a generated guard are built without it");
     }
 
     // A module on the extension layout keeps no hand code in a generated file (ADR-0031):

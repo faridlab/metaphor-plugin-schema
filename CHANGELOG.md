@@ -7,6 +7,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- `schema doctor` matches a rule guard's name whole: a hand-owned build that attached
+  `MFASessionRowRules` no longer hides that `SessionRowRules` was never attached.
+- `schema doctor` fails on a generated service built with `with_repository` and no guard when its
+  entity has one, since its rules then check nothing on that service's writes; a statement that
+  attaches `.with_guard(...)` is no longer reported.
+- `schema rules` states how each state machine is held: `MOVES REFUSED` when the generated trigger
+  refuses an undeclared move, `MOVES UNENFORCED` when the machine's states are not its field's
+  values, and where its transition guards run. It printed `GUARDS UNENFORCED` for every machine.
+
 ## [0.33.5] — 2026-10-17
 
 ### Fixed

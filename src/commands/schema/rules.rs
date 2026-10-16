@@ -98,7 +98,7 @@ pub(super) fn execute_rules(
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Pretty => print_pretty(&module_schema.name, register, suggest),
+        OutputFormat::Pretty => print_pretty(&module_schema, register, suggest),
     }
     Ok(())
 }
@@ -153,7 +153,8 @@ fn describe(check: &ExpressionCheck) -> String {
     }
 }
 
-fn print_pretty(module: &str, register: &RuleRegister, suggest: bool) {
+fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, suggest: bool) {
+    let module = schema.name.as_str();
     println!(
         "{} {} — {}",
         "Rules:".bold(),
@@ -221,15 +222,32 @@ fn print_pretty(module: &str, register: &RuleRegister, suggest: bool) {
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| format!("{} (unbound)", m.target).red().to_string());
             let guarded = m.transitions.iter().filter(|t| t.guard.is_some()).count();
+            // The transitions are held by the generated trigger when the machine's states are the
+            // values its field holds; its guards by the generated verbs, or by hand-written ones
+            // the register cannot see into.
+            let model = m.bound_model.as_deref().and_then(|b| schema.models.iter().find(|x| x.name == b));
+            let moves = match model {
+                Some(model) if crate::generators::state_transition_check::StateTransitionCheckGenerator::checkable(model, m) => {
+                    "MOVES REFUSED".green()
+                }
+                _ => "MOVES UNENFORCED".yellow(),
+            };
+            let guards = match (guarded, m.verbs.as_deref()) {
+                (0, _) => "".normal(),
+                (_, Some("generated")) => " GUARDS IN GENERATED VERBS".green(),
+                (_, Some(_)) => " GUARDS IN HAND VERBS".cyan(),
+                (_, None) => " GUARDS UNENFORCED".yellow(),
+            };
             println!(
-                "  {}  {}.{}  {} state(s), {} transition(s), {} guarded  {}",
+                "  {}  {}.{}  {} state(s), {} transition(s), {} guarded  {}{}",
                 m.source.to_string().dimmed(),
                 bound,
                 m.field,
                 m.states.len(),
                 m.transitions.len(),
                 guarded,
-                "GUARDS UNENFORCED".yellow()
+                moves,
+                guards
             );
             for t in m.transitions.iter().filter(|t| t.guard.is_some()) {
                 println!(

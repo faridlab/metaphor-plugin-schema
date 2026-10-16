@@ -97,9 +97,11 @@ pub(in crate::commands::schema) fn unattached_guards(
             })
         })
         .filter(|guard| {
+            // Whole names only: `MFASessionRowRules` is no mention of `SessionRowRules`.
             let entity = guard.trim_end_matches("RowRules");
-            let constructor = format!("build_{}_service(", crate::utils::to_snake_case(entity));
-            !build.contains(guard.as_str()) && !build.contains(&constructor)
+            let named = |pattern: String| regex::Regex::new(&pattern).expect("an escaped name is a valid pattern").is_match(&build);
+            !named(format!(r"\b{}\b", regex::escape(guard)))
+                && !named(format!(r"\bbuild_{}_service\(", regex::escape(&crate::utils::to_snake_case(entity))))
         })
         .collect();
     missing.sort();
@@ -156,6 +158,24 @@ mod tests {
         let missing = unattached_guards(&generated, &dir, &owned.build().unwrap());
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(missing, ["TagRowRules"]);
+    }
+
+    #[test]
+    fn a_guard_whose_name_ends_another_is_not_taken_as_attached() {
+        let dir = std::env::temp_dir().join(format!("unattached-suffix-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "let m = MFASessionService::with_repository(r).with_guard(Arc::new(MFASessionRowRules));\nlet s = SessionService::with_repository(r2);\n",
+        )
+        .unwrap();
+        let mut generated = GeneratedOutput::new();
+        generated.add_file(std::path::PathBuf::from("src/application/service/guards.rs"), "pub struct MFASessionRowRules;\npub struct SessionRowRules;\n".to_string());
+        let mut owned = globset::GlobSetBuilder::new();
+        owned.add(globset::Glob::new("src/lib.rs").unwrap());
+        let missing = unattached_guards(&generated, &dir, &owned.build().unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(missing, ["SessionRowRules"]);
     }
     use globset::{Glob, GlobSetBuilder};
 
