@@ -7,6 +7,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.7] — 2026-10-17
+
+### Added
+
+- A transition takes `enforced_by: "<file>::<fn>"`, verified like a rule's claim, for a guard
+  held in hand-written verbs. The rule ratchet lists each guarded transition nothing visible holds
+  — no generated verb compiles it and no verified claim covers it — in the baseline's
+  `unclaimed_guards`, and fails when one joins the list; `schema rules` shows `GUARDS CLAIMED` or
+  how many are unclaimed. A baseline written before this release compares nothing until it is
+  next written.
+
 ## [0.33.6] — 2026-10-17
 
 ### Fixed

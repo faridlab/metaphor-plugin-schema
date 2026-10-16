@@ -173,6 +173,21 @@ pub struct DeclaredTransition {
     pub message: Option<String>,
     /// Whether its guard parses and resolves; set by [`RuleRegister::check`].
     pub guard_check: expr::ExpressionCheck,
+    /// The hand-written functions that check its guard, as `<file under the module>::<fn>`,
+    /// comma-separated: a guard on a machine whose verbs are hand-written is held only there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforced_by: Option<String>,
+    /// Whether every function `enforced_by` names exists; set by [`RuleRegister::verify_enforced_by`].
+    #[serde(default)]
+    pub guard_claimed: bool,
+}
+
+impl DeclaredTransition {
+    /// Whether this transition's guard is held by something the register can see: the generated
+    /// verbs compile it, or a verified `enforced_by` names the hand code that checks it.
+    pub fn guard_held(&self, machine: &DeclaredMachine) -> bool {
+        self.guard.is_none() || machine.verbs.as_deref() == Some("generated") || self.guard_claimed
+    }
 }
 
 impl DeclaredMachine {
@@ -353,24 +368,27 @@ impl RuleRegister {
     /// trigger or function. A rule whose claim holds reads `verb`; one whose claim
     /// does not is warned about, so the declaration cannot outlive the code it names.
     pub fn verify_enforced_by(&mut self, root: &std::path::Path) {
+        for machine in &mut self.machines {
+            for t in &mut machine.transitions {
+                let Some(claim) = t.enforced_by.clone() else { continue };
+                t.guard_claimed = claim_holds(root, &claim);
+                if !t.guard_claimed {
+                    self.warnings.push(RegisterWarning {
+                        source: machine.source.clone(),
+                        message: format!(
+                            "transition `{}` of {}.{} says its guard is enforced by `{claim}`, but no such function exists; \
+                             write it as `<file under the module>::<fn>`",
+                            t.verb.as_deref().unwrap_or("?"),
+                            machine.target,
+                            machine.field
+                        ),
+                    });
+                }
+            }
+        }
         for rule in &mut self.rules {
             let Some(claim) = rule.enforced_by.clone() else { continue };
-            // One function, or several separated by commas when the rule holds on several paths.
-            let found = claim.split(',').map(str::trim).try_for_each(|one| one.rsplit_once("::").and_then(|(file, func)| {
-                let text = std::fs::read_to_string(root.join(file)).ok()?;
-                // A migration names the database object that carries the rule: an index, a
-                // constraint, a trigger or a function it defines.
-                if file.ends_with(".sql") {
-                    return defines_sql_object(&text, func).then_some(());
-                }
-                let defines = text.lines().any(|l| {
-                    let l = l.trim_start();
-                    let l = l.strip_prefix("pub(crate) ").or_else(|| l.strip_prefix("pub(super) ")).or_else(|| l.strip_prefix("pub ")).unwrap_or(l);
-                    let l = l.strip_prefix("async ").unwrap_or(l);
-                    l.strip_prefix("fn ").is_some_and(|rest| rest.starts_with(func) && rest[func.len()..].starts_with(['(', '<']))
-                });
-                defines.then_some(())
-            }));
+            let found = claim_holds(root, &claim).then_some(());
             match found {
                 Some(()) if rule.status == EnforcementStatus::Unenforced => rule.status = EnforcementStatus::Verb,
                 Some(()) => {}
@@ -386,6 +404,19 @@ impl RuleRegister {
         }
     }
 
+    /// The guarded transitions no generated verb compiles and no verified claim covers, each as
+    /// `<hook file>: <Entity>.<field> <verb>`.
+    pub fn unclaimed_guards(&self) -> std::collections::BTreeSet<String> {
+        self.machines
+            .iter()
+            .flat_map(|m| {
+                m.transitions.iter().filter(|t| !t.guard_held(m)).map(move |t| {
+                    format!("{}: {}.{} {}", m.source.file, m.target, m.field, t.verb.as_deref().unwrap_or("?"))
+                })
+            })
+            .collect()
+    }
+
     pub fn unenforced_rules(&self) -> usize {
         self.rules.iter().filter(|r| r.status == EnforcementStatus::Unenforced).count()
     }
@@ -397,6 +428,26 @@ pub struct Readiness {
     pub ready: usize,
     pub unresolved: usize,
     pub unparsed: usize,
+}
+
+/// Whether every `<file>::<fn>` of a claim names something that exists under `root`: a function the
+/// file defines, or, for a migration (`.sql`), the index, constraint, trigger or function it defines.
+/// One function, or several separated by commas when the rule holds on several paths.
+fn claim_holds(root: &std::path::Path, claim: &str) -> bool {
+    claim.split(',').map(str::trim).all(|one| {
+        one.rsplit_once("::").is_some_and(|(file, func)| {
+            let Ok(text) = std::fs::read_to_string(root.join(file)) else { return false };
+            if file.ends_with(".sql") {
+                return defines_sql_object(&text, func);
+            }
+            text.lines().any(|l| {
+                let l = l.trim_start();
+                let l = l.strip_prefix("pub(crate) ").or_else(|| l.strip_prefix("pub(super) ")).or_else(|| l.strip_prefix("pub ")).unwrap_or(l);
+                let l = l.strip_prefix("async ").unwrap_or(l);
+                l.strip_prefix("fn ").is_some_and(|rest| rest.starts_with(func) && rest[func.len()..].starts_with(['(', '<']))
+            })
+        })
+    })
 }
 
 /// Replace `word` where it stands as a whole identifier.
@@ -551,6 +602,20 @@ mod tests {
 #[cfg(test)]
 mod enforced_by_tests {
     use super::*;
+
+    #[test]
+    fn a_hand_verb_guard_counts_as_held_only_with_a_verified_claim() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/verbs.rs"), "pub async fn approve(x: u8) {}\n").unwrap();
+        let hook = "module: m\nstate_machines:\n  - entity: Order\n    field: status\n    verbs: hand\n    transitions:\n      - { from: draft, to: approved, on: approve, guard: \"total > 0\", enforced_by: \"src/verbs.rs::approve\" }\n      - { from: approved, to: shipped, on: ship, guard: \"paid\" }\n      - { from: draft, to: void, on: void, guard: \"total == 0\", enforced_by: \"src/verbs.rs::void_it\" }\n      - { from: void, to: draft, on: reopen }\n";
+        let mut register = RuleRegister::default();
+        register.read_file("order.hook.yaml", hook);
+        register.verify_enforced_by(root.path());
+        let unclaimed: Vec<String> = register.unclaimed_guards().into_iter().collect();
+        assert_eq!(unclaimed, ["order.hook.yaml: Order.status ship", "order.hook.yaml: Order.status void"], "an unguarded move needs no claim");
+        assert_eq!(register.warnings.iter().filter(|w| w.message.contains("void_it")).count(), 1, "a claim naming nothing is warned about");
+    }
 
     #[test]
     fn an_enforced_by_claim_holds_only_while_every_function_it_names_exists() {

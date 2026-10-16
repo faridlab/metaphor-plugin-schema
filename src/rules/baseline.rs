@@ -36,6 +36,12 @@ pub struct Baseline {
     /// written before it was measured, which compares nothing until it is next written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypassable_rules: Option<BTreeSet<String>>,
+    /// The guarded transitions nothing visible holds — no generated verb compiles them and no
+    /// verified `enforced_by` names the hand code that checks them — each as
+    /// `<hook file>: <Entity>.<field> <verb>`. Absent from an older baseline, which compares
+    /// nothing until it is next written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unclaimed_guards: Option<BTreeSet<String>>,
 }
 
 pub(crate) fn rule_key(file: &str, name: &str) -> String {
@@ -64,6 +70,7 @@ pub fn measure(register: &RuleRegister, root: &Path) -> Baseline {
         untested_rule_ids,
         unenforced_rules,
         bypassable_rules: None,
+        unclaimed_guards: Some(register.unclaimed_guards()),
     }
 }
 
@@ -127,6 +134,11 @@ pub fn regressions(baseline: &Baseline, now: &Baseline) -> Vec<String> {
     }
     for rule in now.unenforced_rules.difference(&baseline.unenforced_rules) {
         out.push(format!("a new rule is unenforced: {rule}"));
+    }
+    if let (Some(was), Some(is)) = (&baseline.unclaimed_guards, &now.unclaimed_guards) {
+        for t in is.difference(was) {
+            out.push(format!("a transition guard is held by nothing the register can see: {t}"));
+        }
     }
     if let (Some(was), Some(is)) = (&baseline.bypassable_rules, &now.bypassable_rules) {
         for rule in is.difference(was) {
@@ -194,6 +206,15 @@ mod tests {
         assert!(regressions(&Baseline::default(), &now).is_empty(), "an older baseline compares nothing");
         let was = Baseline { bypassable_rules: set(&["a.hook.yaml: r1"]), ..Default::default() };
         assert_eq!(regressions(&was, &now), ["a rule only the service holds now has a raw-SQL writer: a.hook.yaml: r2"]);
+    }
+
+    #[test]
+    fn a_newly_unclaimed_guard_fails_once_the_baseline_records_the_set() {
+        let set = |xs: &[&str]| Some(xs.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>());
+        let now = Baseline { unclaimed_guards: set(&["o.hook.yaml: Order.status ship"]), ..Default::default() };
+        assert!(regressions(&Baseline::default(), &now).is_empty(), "an older baseline compares nothing");
+        let was = Baseline { unclaimed_guards: set(&[]), ..Default::default() };
+        assert_eq!(regressions(&was, &now), ["a transition guard is held by nothing the register can see: o.hook.yaml: Order.status ship"]);
     }
 
     #[test]

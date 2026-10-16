@@ -232,11 +232,13 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
                 }
                 _ => "MOVES UNENFORCED".yellow(),
             };
-            let guards = match (guarded, m.verbs.as_deref()) {
-                (0, _) => "".normal(),
-                (_, Some("generated")) => " GUARDS IN GENERATED VERBS".green(),
-                (_, Some(_)) => " GUARDS IN HAND VERBS".cyan(),
-                (_, None) => " GUARDS UNENFORCED".yellow(),
+            let unclaimed = m.transitions.iter().filter(|t| !t.guard_held(m)).count();
+            let guards = match (guarded, m.verbs.as_deref(), unclaimed) {
+                (0, _, _) => "".normal(),
+                (_, Some("generated"), _) => " GUARDS IN GENERATED VERBS".green(),
+                (_, _, 0) => " GUARDS CLAIMED".green(),
+                (_, Some(_), n) => format!(" GUARDS IN HAND VERBS, {n} UNCLAIMED").yellow(),
+                (_, None, _) => " GUARDS UNENFORCED".yellow(),
             };
             println!(
                 "  {}  {}.{}  {} state(s), {} transition(s), {} guarded  {}{}",
