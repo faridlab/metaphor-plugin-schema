@@ -31,9 +31,14 @@ pub struct Baseline {
     /// The unenforced rules, each as `<hook file>: <rule name>`.
     #[serde(default)]
     pub unenforced_rules: BTreeSet<String>,
+    /// The rules only the service holds whose table the module's hand-written SQL also writes,
+    /// each as `<hook file>: <rule name>`: a raw write never meets them. Absent from a baseline
+    /// written before it was measured, which compares nothing until it is next written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bypassable_rules: Option<BTreeSet<String>>,
 }
 
-fn rule_key(file: &str, name: &str) -> String {
+pub(crate) fn rule_key(file: &str, name: &str) -> String {
     format!("{file}: {name}")
 }
 
@@ -58,6 +63,16 @@ pub fn measure(register: &RuleRegister, root: &Path) -> Baseline {
         machines_without_verbs: register.machines.iter().filter(|m| m.verbs.is_none()).count(),
         untested_rule_ids,
         unenforced_rules,
+        bypassable_rules: None,
+    }
+}
+
+/// Measure the module `schema` describes, with its sources under `root`: [`measure`], plus the
+/// service-only rules a raw-SQL writer walks past.
+pub fn measure_module(schema: &crate::ast::ModuleSchema, root: &Path) -> Baseline {
+    Baseline {
+        bypassable_rules: Some(super::writers::bypassable_keys(schema, root)),
+        ..measure(&schema.rule_register, root)
     }
 }
 
@@ -113,6 +128,11 @@ pub fn regressions(baseline: &Baseline, now: &Baseline) -> Vec<String> {
     for rule in now.unenforced_rules.difference(&baseline.unenforced_rules) {
         out.push(format!("a new rule is unenforced: {rule}"));
     }
+    if let (Some(was), Some(is)) = (&baseline.bypassable_rules, &now.bypassable_rules) {
+        for rule in is.difference(was) {
+            out.push(format!("a rule only the service holds now has a raw-SQL writer: {rule}"));
+        }
+    }
     out
 }
 
@@ -165,6 +185,15 @@ mod tests {
         let r = register("name: Orders\nrules:\n  a:\n    id: R1\n    when: [submit]\n    condition: \"x > 0\"\n  b:\n    id: R2\n    when: [submit]\n    condition: \"x > 0\"\n  c:\n    id: R1-2\n    when: [submit]\n    condition: \"x > 0\"\n");
         assert_eq!(measure(&r, root.path()).untested_rule_ids, 2, "R2 and R1-2 are untested; R10 is not R1-2");
         assert!(mentions("see R1.", "R1") && !mentions("R10", "R1") && !mentions("XR1", "R1"));
+    }
+
+    #[test]
+    fn a_newly_bypassable_rule_fails_once_the_baseline_records_the_set() {
+        let set = |xs: &[&str]| Some(xs.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>());
+        let now = Baseline { bypassable_rules: set(&["a.hook.yaml: r1", "a.hook.yaml: r2"]), ..Default::default() };
+        assert!(regressions(&Baseline::default(), &now).is_empty(), "an older baseline compares nothing");
+        let was = Baseline { bypassable_rules: set(&["a.hook.yaml: r1"]), ..Default::default() };
+        assert_eq!(regressions(&was, &now), ["a rule only the service holds now has a raw-SQL writer: a.hook.yaml: r2"]);
     }
 
     #[test]

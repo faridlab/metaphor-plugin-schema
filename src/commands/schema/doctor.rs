@@ -103,22 +103,31 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     // protected, stateless, ...) and only some of them are model-scoped, so
     // searching for known-bad names is strictly less noisy than parsing
     // every reference and trying to filter.
-    let mut forbidden: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for model in &resolved.schema.models {
-        if !model_skips_target(model, GenerationTarget::Handler) {
-            continue;
-        }
-        let snake = crate::utils::to_snake_case(&model.name);
-        for name in [
+    let route_names = |snake: &str| {
+        [
             format!("create_{}_routes", snake),
             format!("create_{}_read_routes", snake),
             format!("create_{}_write_routes", snake),
             format!("create_protected_{}_routes", snake),
             format!("create_{}_transition_routes", snake),
-        ] {
+        ]
+    };
+    let mut forbidden: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut emitted: HashSet<String> = HashSet::new();
+    for model in &resolved.schema.models {
+        let snake = crate::utils::to_snake_case(&model.name);
+        if !model_skips_target(model, GenerationTarget::Handler) {
+            emitted.extend(route_names(&snake));
+            continue;
+        }
+        for name in route_names(&snake) {
             forbidden.insert(name, snake.clone());
         }
     }
+    // A name a handler-generating model emits is no drift, even when it also spells a skipped
+    // model's routes: `Announcement`'s read half is `create_announcement_read_routes`, which is
+    // also the plain routes name of a model `AnnouncementRead`.
+    forbidden.retain(|name, _| !emitted.contains(name));
 
     // Compile a single regex with alternation over the forbidden names.
     // Cheap to search per line; avoids re-scanning every line for every name.
@@ -189,8 +198,17 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
 
     println!("  audited {} .rs file(s)", audited_files);
 
+    // Where each service-only rule is walked past; the ratchet below counts them.
+    for (rule, past) in crate::rules::writers::bypassable_rules(&module_schema, &consumer_root) {
+        println!(
+            "  {} {rule} is held only by the service, and raw SQL writes its table at {}",
+            "!".yellow().bold(),
+            past.join(", ")
+        );
+    }
+
     // The rule ratchet: what the hook files leave unenforced may only go down.
-    let ratchet = rule_ratchet(&module_schema.rule_register, &consumer_root)?;
+    let ratchet = rule_ratchet(&module_schema, &consumer_root)?;
     for r in &ratchet {
         println!("  {} {r}", "✗".red().bold());
     }
@@ -224,7 +242,7 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
 
     // A module on the extension layout keeps no hand code in a generated file (ADR-0031):
     // every generated `src/**/*.rs` file must equal what a generation writes now.
-    let (edited, unattached) = generated_file_drift(module)?;
+    let (edited, missing, unattached) = generated_file_drift(module)?;
     for guard in &unattached {
         println!(
             "  {} the hand-owned src/lib.rs never attaches {guard}: the entity's declared rules check nothing",
@@ -241,8 +259,19 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
             rel
         );
     }
-    if !edited.is_empty() && findings.is_empty() {
-        anyhow::bail!("{} generated file(s) differ from the generator's output", edited.len());
+    for rel in &missing {
+        println!(
+            "  {} {} is generated and missing on disk: the next regeneration brings it back; regenerate, or declare it user_owned if it was removed on purpose",
+            "✗".red().bold(),
+            rel
+        );
+    }
+    if !(edited.is_empty() && missing.is_empty()) && findings.is_empty() {
+        anyhow::bail!(
+            "{} generated file(s) differ from the generator's output, {} missing",
+            edited.len(),
+            missing.len()
+        );
     }
 
     if findings.is_empty() {
@@ -304,11 +333,12 @@ struct Finding {
 /// files against the very same globs.
 /// What breaks the module's rule ratchet: a count above its committed baseline, a new unenforced
 /// rule, or no baseline at all for a module whose hooks declare rules or machines.
-pub(super) fn rule_ratchet(register: &crate::rules::RuleRegister, root: &Path) -> Result<Vec<String>> {
+pub(super) fn rule_ratchet(schema: &crate::ast::ModuleSchema, root: &Path) -> Result<Vec<String>> {
+    let register = &schema.rule_register;
     if register.rules.is_empty() && register.machines.is_empty() {
         return Ok(Vec::new());
     }
-    let now = crate::rules::baseline::measure(register, root);
+    let now = crate::rules::baseline::measure_module(schema, root);
     Ok(match crate::rules::baseline::read(root)? {
         Some(was) => crate::rules::baseline::regressions(&was, &now),
         None => vec![format!(
@@ -319,17 +349,18 @@ pub(super) fn rule_ratchet(register: &crate::rules::RuleRegister, root: &Path) -
 }
 
 /// The generated `src/**/*.rs` files of a layout module whose content on disk differs from what
-/// a generation writes now, as paths relative to the module root. Empty for a module that is
-/// not on the extension layout.
-fn generated_file_drift(module: &str) -> Result<(Vec<String>, Vec<String>)> {
+/// a generation writes now, then those a generation would add because they are not on disk, as
+/// paths relative to the module root, and the unattached guards. Empty for a module that is not
+/// on the extension layout.
+fn generated_file_drift(module: &str) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let Some((generated, root, user_owned, hand)) = super::generate::render_layout_module(module)? else {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new(), Vec::new()));
     };
     let unattached = super::generate::extensions::unattached_guards(&generated, &root, &user_owned);
     for f in &hand {
         println!("  {} {} still holds hand code in a CUSTOM zone: move it into an extension file", "✗".red().bold(), f);
     }
-    let mut edited = Vec::new();
+    let (mut edited, mut missing) = (Vec::new(), Vec::new());
     for (path, content) in &generated.files {
         let rel = path.to_string_lossy().replace('\\', "/");
         if !rel.starts_with("src/") || !rel.ends_with(".rs") || user_owned.is_match(&rel) {
@@ -337,11 +368,13 @@ fn generated_file_drift(module: &str) -> Result<(Vec<String>, Vec<String>)> {
         }
         match fs::read_to_string(root.join(path)) {
             Ok(disk) if disk != *content => edited.push(rel),
-            _ => {}
+            Ok(_) => {}
+            Err(_) => missing.push(rel),
         }
     }
     edited.sort();
-    Ok((edited, unattached))
+    missing.sort();
+    Ok((edited, missing, unattached))
 }
 
 pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {

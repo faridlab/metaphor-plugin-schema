@@ -28,7 +28,7 @@ pub(super) fn execute_rules(
     let (module_schema, _parse_errors) = build_module_schema(module, &schema_files)?;
     if check_baseline {
         let root = super::doctor::locate_consumer_root(&schema_path).unwrap_or_else(|| schema_path.clone());
-        let problems = super::doctor::rule_ratchet(&module_schema.rule_register, &root)?;
+        let problems = super::doctor::rule_ratchet(&module_schema, &root)?;
         for p in &problems {
             println!("  {} {p}", "✗".red().bold());
         }
@@ -40,7 +40,7 @@ pub(super) fn execute_rules(
     }
     if update_baseline {
         let root = super::doctor::locate_consumer_root(&schema_path).unwrap_or_else(|| schema_path.clone());
-        let now = crate::rules::baseline::measure(&module_schema.rule_register, &root);
+        let now = crate::rules::baseline::measure_module(&module_schema, &root);
         if let Some(was) = crate::rules::baseline::read(&root)? {
             for r in crate::rules::baseline::regressions(&was, &now) {
                 println!("  {} {r}: the baseline now accepts it", "!".yellow().bold());

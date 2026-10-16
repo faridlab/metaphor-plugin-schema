@@ -18,6 +18,7 @@ pub mod expr;
 pub mod fields;
 pub mod reader;
 pub mod rewrite;
+pub mod writers;
 
 use serde::{Deserialize, Serialize};
 
