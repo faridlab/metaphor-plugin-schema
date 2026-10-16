@@ -169,6 +169,40 @@ pub(super) fn optional_unit_binds(root: &Path) -> Vec<String> {
     out
 }
 
+/// One line per hand-written route whose path parameters use the other axum version's syntax:
+/// before axum 0.8 a parameter is `:id` and `{id}` is a literal segment, so the route never
+/// matches; from 0.8 a parameter is `{id}` and a `:id` segment panics when the router is built.
+/// The version is the module's locked axum; a module without a lock reports nothing.
+pub(super) fn route_param_syntax(root: &Path) -> Vec<String> {
+    let Ok(lock) = fs::read_to_string(root.join("Cargo.lock")) else { return Vec::new() };
+    let version = Regex::new(r#"name = "axum"\nversion = "(\d+)\.(\d+)"#).expect("a valid pattern");
+    let Some(cap) = version.captures(&lock) else { return Vec::new() };
+    let (major, minor): (u32, u32) = (cap[1].parse().unwrap_or(0), cap[2].parse().unwrap_or(0));
+    let braces = major == 0 && minor >= 8 || major >= 1;
+    let route = Regex::new(r#"\.route\(\s*"([^"]*)""#).expect("a valid pattern");
+    let (wrong, right) = if braces { (Regex::new(r"/:[A-Za-z_]").unwrap(), "{id}") } else { (Regex::new(r"\{[A-Za-z_]+\}").unwrap(), ":id") };
+    let mut out = Vec::new();
+    for entry in WalkDir::new(root.join("src")).sort_by_file_name().into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else { continue };
+        for cap in route.captures_iter(&text) {
+            let m = cap.get(1).expect("the path group");
+            if wrong.is_match(m.as_str()) {
+                let line = text[..m.start()].matches('\n').count() + 1;
+                let rel = path.strip_prefix(root).unwrap_or(path).display();
+                out.push(format!(
+                    "{rel}:{line} route \"{}\" names its parameters the way axum {major}.{minor} does not: write them as {right}",
+                    m.as_str()
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// The `rust_decimal` features that change how EVERY decimal of the composed service serializes:
 /// Cargo unifies features across a build, so one module turning one on changes money, rates and
 /// quantities in every other module's responses.
@@ -258,6 +292,19 @@ mod tests {
         write(dir.path(), "src/handler.rs", "q.bind(employee_id)\n    .bind(backbone_orm::org_scope::current_org_scope().map(|s| s.acting_unit_id()))\n    .bind(scope.acting_unit_id())\n    .bind(scope.as_ref().map(|s| s.acting_unit_id()))\n");
         let out = optional_unit_binds(dir.path());
         assert!(out.len() == 2 && out[0].starts_with("src/handler.rs:2 binds an optional acting unit") && out[1].starts_with("src/handler.rs:4 "), "{out:?}");
+    }
+
+    #[test]
+    fn a_route_in_the_other_axum_syntax_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "Cargo.lock", "[[package]]\nname = \"axum\"\nversion = \"0.7.9\"\n");
+        write(root, "src/routes.rs", "Router::new()\n    .route(\"/a/:id\", get(a))\n    .route(\n        \"/b/{id}/c\", post(b))\n");
+        let out = route_param_syntax(root);
+        assert!(out.len() == 1 && out[0].starts_with("src/routes.rs:4 route \"/b/{id}/c\"") && out[0].ends_with(":id"), "{out:?}");
+        write(root, "Cargo.lock", "[[package]]\nname = \"axum\"\nversion = \"0.8.1\"\n");
+        let out = route_param_syntax(root);
+        assert!(out.len() == 1 && out[0].starts_with("src/routes.rs:2 route \"/a/:id\""), "{out:?}");
     }
 
     #[test]

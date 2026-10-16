@@ -235,6 +235,15 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     if !switches.is_empty() {
         anyhow::bail!("{} crate-wide decimal serialization switch(es)", switches.len());
     }
+    // A route in the other axum version's parameter syntax never matches, or panics at startup.
+    let routes = super::events_check::route_param_syntax(&consumer_root);
+    for r in &routes {
+        println!("  {} {r}", "✗".red().bold());
+    }
+    if !routes.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} route(s) name their parameters in the wrong axum syntax", routes.len());
+    }
+
     // Writes that bind an optional acting unit and lean on the fill trigger: advisory.
     for warning in super::events_check::optional_unit_binds(&consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());
