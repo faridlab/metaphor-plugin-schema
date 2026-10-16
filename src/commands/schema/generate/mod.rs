@@ -18,6 +18,7 @@ mod announce;
 mod change_detect;
 mod load;
 mod post_check;
+mod reach;
 mod stabilize;
 mod write;
 
@@ -106,6 +107,17 @@ pub(super) fn execute_generate(
         );
     }
 
+    // A generated file no declaration chain reaches from the crate root is never compiled:
+    // it is not written, and a copy an earlier run left is then retired output.
+    for rel in reach::unreachable_generated(&generated, &output_dir, &user_owned, !layout) {
+        println!(
+            "  {} not written: {} — nothing in the module tree declares it",
+            "⚠".yellow().bold(),
+            rel.display()
+        );
+        generated.files.remove(&rel);
+    }
+
     // Stabilize migration filenames against on-disk state so existing
     // migrations keep their timestamp and new ones get a fresh, collision-free
     // later timestamp — under both plain generate and --force. Must run before
@@ -161,6 +173,9 @@ pub(in crate::commands::schema) fn render_layout_module(
     let hand = extensions::files_with_hand_code(&generated, &output_dir, &user_owned);
     extensions::weave_extensions(&mut generated, &output_dir, &user_owned);
     extensions::strip_custom_markers(&mut generated);
+    for rel in reach::unreachable_generated(&generated, &output_dir, &user_owned, false) {
+        generated.files.remove(&rel);
+    }
     Ok(Some((generated, output_dir, user_owned, hand)))
 }
 
