@@ -331,6 +331,11 @@ impl RustGenerator {
             }
             AttributeValue::String(s) => {
                 let s_trimmed = s.trim();
+                // A list field's `{}` or `[]` default is the empty list (the DDL's `DEFAULT '{}'`
+                // is an empty Postgres array), not a JSON object.
+                if rust_type.starts_with("Vec<") && matches!(s_trimmed, "{}" | "[]") {
+                    return Some("Vec::new()".to_string());
+                }
                 if s_trimmed.starts_with('{') || s_trimmed.starts_with('[') {
                     Some(format!("serde_json::json!({})", s_trimmed))
                 } else {
@@ -2364,6 +2369,14 @@ impl RustGenerator {
                 writeln!(output, "    /// {}", label).unwrap();
             }
 
+            // serde and sqlx spell `rename_all = "snake_case"` without a break before a digit
+            // (`Moved301` reads `moved301`); a label that has one (`moved_301`, as the SQL type
+            // and Display write it) is named on its variant, or it would never round-trip.
+            let label = to_snake_case(&variant.name);
+            if serde_snake_case(&variant_name) != label {
+                writeln!(output, "    #[serde(rename = \"{label}\")]").unwrap();
+                writeln!(output, "    #[sqlx(rename = \"{label}\")]").unwrap();
+            }
             writeln!(output, "    {},", variant_name).unwrap();
         }
 
@@ -2490,6 +2503,23 @@ impl Default for RustGenerator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// How serde and sqlx spell a PascalCase variant under `rename_all = "snake_case"`: an underscore
+/// before every uppercase letter but the first, nothing before a digit.
+fn serde_snake_case(variant: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in variant.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 impl Generator for RustGenerator {
@@ -2969,6 +2999,35 @@ mod tests {
             .get(&PathBuf::from(file))
             .unwrap_or_else(|| panic!("{file} should be generated"))
             .clone()
+    }
+
+    #[test]
+    fn a_list_field_defaulting_to_an_empty_array_builds_an_empty_vec() {
+        let mut model = Model::new("Menu");
+        model.fields = vec![
+            Field { name: "id".into(), type_ref: TypeRef::Primitive(PrimitiveType::Uuid), attributes: vec![Attribute::new("id")], ..Default::default() },
+            Field {
+                name: "roles".into(),
+                type_ref: TypeRef::Array(Box::new(TypeRef::Primitive(PrimitiveType::String))),
+                attributes: vec![Attribute::new("default").with_arg(AttributeValue::String("{}".into()))],
+                ..Default::default()
+            },
+        ];
+        let file = generate_entity_file(model, "src/domain/entity/menu.rs");
+        assert!(file.contains("roles: self.roles.unwrap_or(Vec::new())"), "{file}");
+        assert!(!file.contains("serde_json::json!({})"), "a list is not a JSON object");
+    }
+
+    #[test]
+    fn an_enum_label_with_a_digit_boundary_is_named_on_its_variant() {
+        let mut schema = ModuleSchema::new("test");
+        let variant = |n: &str| crate::ast::EnumVariant { name: n.into(), ..Default::default() };
+        schema.enums.push(EnumDef { name: "RedirectType".into(), variants: vec![variant("moved_301"), variant("temporary")], ..Default::default() });
+        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let file = &output.files[&PathBuf::from("src/domain/entity/redirect_type.rs")];
+        assert!(file.contains("    #[serde(rename = \"moved_301\")]\n    #[sqlx(rename = \"moved_301\")]\n    Moved301,"), "{file}");
+        assert!(file.contains("    Temporary,") && !file.contains("rename = \"temporary\""), "a label serde spells right needs no rename");
+        assert_eq!(serde_snake_case("Moved301"), "moved301");
     }
 
     #[test]
