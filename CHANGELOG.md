@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.5] — 2026-10-17
+
 ### Fixed
 
 - `schema rules` labels each listed rule with how it is held (`GUARD`, `SHADOW`, `VERB` or
