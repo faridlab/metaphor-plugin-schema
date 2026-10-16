@@ -140,6 +140,35 @@ pub(super) fn fields_without_columns(schema: &crate::ast::ModuleSchema, root: &P
     out
 }
 
+/// One line per hand-written place that binds an optional acting unit (`scope.map(|s| s.acting_unit_id())`)
+/// into a write: without a task-level scope it binds NULL, which only the table's
+/// `<table>_org_unit_fill` trigger turns back into the unit the connection carries. Leaving
+/// `org_unit_id` out of the insert lets the column default stamp it with no trigger to rely on.
+pub(super) fn optional_unit_binds(root: &Path) -> Vec<String> {
+    let bound = Regex::new(r"\.map\(\|\w+\|\s*\w+\.acting_unit_id\(\)\)").expect("a valid pattern");
+    let mut out = Vec::new();
+    for entry in WalkDir::new(root.join("src")).sort_by_file_name().into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else { continue };
+        if text.lines().take(12).any(|l| l.contains(GENERATED)) {
+            continue;
+        }
+        for (i, line) in text.lines().enumerate() {
+            if !line.trim_start().starts_with("//") && line.contains(".bind(") && bound.is_match(line) {
+                let rel = path.strip_prefix(root).unwrap_or(path).display();
+                out.push(format!(
+                    "{rel}:{} binds an optional acting unit: with no task scope it writes NULL and leans on the org_unit_fill trigger; leave org_unit_id out of the insert so its default stamps it",
+                    i + 1
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// The `rust_decimal` features that change how EVERY decimal of the composed service serializes:
 /// Cargo unifies features across a build, so one module turning one on changes money, rates and
 /// quantities in every other module's responses.
@@ -221,6 +250,14 @@ mod tests {
         assert!(out.len() == 1 && out[0].contains("rust_decimal/serde-float"), "{out:?}");
         write(dir.path(), "Cargo.toml", "[package]\nname = \"m\"\n[dependencies]\nrust_decimal = { version = \"1.36\", features = [\"serde\", \"serde-with-float\"] }\n");
         assert!(global_decimal_switches(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_bound_optional_acting_unit_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/handler.rs", "q.bind(employee_id)\n    .bind(backbone_orm::org_scope::current_org_scope().map(|s| s.acting_unit_id()))\n    .bind(scope.acting_unit_id())\n    .bind(scope.as_ref().map(|s| s.acting_unit_id()))\n");
+        let out = optional_unit_binds(dir.path());
+        assert!(out.len() == 2 && out[0].starts_with("src/handler.rs:2 binds an optional acting unit") && out[1].starts_with("src/handler.rs:4 "), "{out:?}");
     }
 
     #[test]

@@ -235,6 +235,11 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     if !switches.is_empty() {
         anyhow::bail!("{} crate-wide decimal serialization switch(es)", switches.len());
     }
+    // Writes that bind an optional acting unit and lean on the fill trigger: advisory.
+    for warning in super::events_check::optional_unit_binds(&consumer_root) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
+
     // Generated services built around their constructor: advisory, never a gate.
     for warning in super::events_check::services_built_by_hand(&consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());

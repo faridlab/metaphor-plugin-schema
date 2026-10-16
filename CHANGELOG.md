@@ -7,6 +7,13 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- `schema doctor` names each hand-written write that binds an optional acting unit
+  (`scope.map(|s| s.acting_unit_id())`): with no task-level scope it writes NULL, which only the
+  table's `org_unit_fill` trigger turns back into the connection's unit. Leaving `org_unit_id`
+  out of the insert lets the column default stamp it. Advisory, never a gate.
+
 ## [0.33.1] — 2026-10-16
 
 ### Fixed
