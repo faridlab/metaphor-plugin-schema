@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.6] — 2026-10-17
+
 ### Fixed
 
 - `schema doctor` matches a rule guard's name whole: a hand-owned build that attached
