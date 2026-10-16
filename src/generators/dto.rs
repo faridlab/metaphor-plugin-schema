@@ -38,7 +38,7 @@ impl DtoGenerator {
     }
 
     /// Generate DTO file for a model
-    fn generate_dto_file(&self, model: &Model) -> Result<String, GenerateError> {
+    fn generate_dto_file(&self, model: &Model, born: &std::collections::HashMap<String, String>) -> Result<String, GenerateError> {
         let mut output = String::new();
 
         // File header
@@ -65,7 +65,7 @@ impl DtoGenerator {
         self.write_imports(&mut output, model)?;
 
         // Generate CreateDto
-        self.write_create_dto(&mut output, model)?;
+        self.write_create_dto(&mut output, model, born)?;
 
         // Generate UpdateDto
         self.write_update_dto(&mut output, model)?;
@@ -80,7 +80,7 @@ impl DtoGenerator {
         self.write_list_response_dto(&mut output, model)?;
 
         // Generate conversion traits
-        self.write_conversions(&mut output, model)?;
+        self.write_conversions(&mut output, model, born)?;
 
         // Custom DTO section
         self.write_custom_section(&mut output, model)?;
@@ -176,7 +176,7 @@ impl DtoGenerator {
         }
     }
 
-    fn write_create_dto(&self, output: &mut String, model: &Model) -> Result<(), GenerateError> {
+    fn write_create_dto(&self, output: &mut String, model: &Model, born: &std::collections::HashMap<String, String>) -> Result<(), GenerateError> {
         writeln!(
             output,
             "// ============================================================================="
@@ -210,8 +210,9 @@ impl DtoGenerator {
         writeln!(output, "pub struct Create{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            // Skip auto-generated fields and fields excluded from write DTOs
-            if self.is_auto_field(&field.name) || self.is_excluded_from_dto(field) {
+            // Skip auto-generated fields and fields excluded from write DTOs, and the fields only
+            // an entity's own operations set: a create cannot choose them.
+            if self.is_auto_field(&field.name) || self.is_excluded_from_dto(field) || born.contains_key(&field.name) {
                 continue;
             }
 
@@ -557,7 +558,7 @@ impl DtoGenerator {
         Ok(())
     }
 
-    fn write_conversions(&self, output: &mut String, model: &Model) -> Result<(), GenerateError> {
+    fn write_conversions(&self, output: &mut String, model: &Model, born: &std::collections::HashMap<String, String>) -> Result<(), GenerateError> {
         writeln!(
             output,
             "// ============================================================================="
@@ -702,6 +703,10 @@ impl DtoGenerator {
                 } else {
                     writeln!(output, "            {}: Default::default(),", field_name).unwrap();
                 }
+            } else if let Some(value) = born.get(&field.name) {
+                // Set only by the entity's own operations: every record starts here.
+                let field_name = escape_rust_keyword(&field.name);
+                writeln!(output, "            {}: {},", field_name, value).unwrap();
             } else if self.is_excluded_from_dto(field) {
                 // @exclude_from_dto fields are absent from the Create DTO — default them
                 // (the field's type must implement Default, or carry @default at the DB layer).
@@ -1177,7 +1182,7 @@ impl Generator for DtoGenerator {
 
         // Generate DTO file for each model
         for model in &schema.schema.models {
-            let content = self.generate_dto_file(model)?;
+            let content = self.generate_dto_file(model, &born_values(&schema.schema, model))?;
             let file_name = format!("{}_dto.rs", to_snake_case(&model.name));
             let path = build_generated_path(
                 "src/presentation/dto",
@@ -1211,10 +1216,100 @@ impl Generator for DtoGenerator {
     }
 }
 
+/// The fields of `model` a generic create may not set, each with the Rust value a new record
+/// starts with. A state machine's field starts in the machine's initial state, so a record is never
+/// born past the verbs that move it. A hand-set or projected lifecycle field (a close stamp, a
+/// recomputed total) starts empty when it may be empty. A field whose starting value cannot be
+/// read from the schema stays in the create DTO.
+pub(crate) fn born_values(schema: &crate::ast::ModuleSchema, model: &Model) -> std::collections::HashMap<String, String> {
+    use crate::ast::model::LifecycleShape;
+    let mut born = std::collections::HashMap::new();
+    let is_enum = |name: &str| schema.enums.iter().any(|e| e.name == name);
+    for machine in schema.rule_register.machines.iter().filter(|m| m.bound_model.as_deref() == Some(model.name.as_str())) {
+        let (Some(field), Some(initial)) = (model.find_field(&machine.field), machine.initial.as_deref()) else { continue };
+        let value = |inner: &TypeRef| -> Option<String> {
+            match inner {
+                TypeRef::Custom(name) if is_enum(name) => Some(format!("{name}::{}", to_pascal_case(initial))),
+                TypeRef::Primitive(PrimitiveType::String) => Some(format!("{initial:?}.to_string()")),
+                TypeRef::Primitive(PrimitiveType::Bool) if initial == "true" || initial == "false" => Some(initial.to_string()),
+                _ => None,
+            }
+        };
+        let expr = match &field.type_ref {
+            TypeRef::Optional(_) if initial == crate::ast::NULL_STATE => Some("None".to_string()),
+            TypeRef::Optional(inner) => value(inner).map(|v| format!("Some({v})")),
+            other => value(other),
+        };
+        if let Some(expr) = expr {
+            born.insert(field.name.clone(), expr);
+        }
+    }
+    for field in &model.fields {
+        let owned = matches!(field.lifecycle.as_ref().map(|l| l.shape), Some(LifecycleShape::HandSet | LifecycleShape::Projection));
+        if !owned || born.contains_key(&field.name) {
+            continue;
+        }
+        if field.type_ref.is_optional() {
+            born.insert(field.name.clone(), "None".to_string());
+            continue;
+        }
+        // A required one starts at its literal `@default`, the value the column starts at too.
+        use crate::ast::model::AttributeValue;
+        let start = match (&field.type_ref, field.default_value()) {
+            (TypeRef::Custom(name), Some(AttributeValue::Ident(v) | AttributeValue::String(v))) if is_enum(name) => {
+                Some(format!("{name}::{}", to_pascal_case(v)))
+            }
+            (TypeRef::Primitive(PrimitiveType::String), Some(AttributeValue::String(v) | AttributeValue::Ident(v))) => {
+                Some(format!("{v:?}.to_string()"))
+            }
+            (TypeRef::Primitive(PrimitiveType::Bool), Some(AttributeValue::Bool(b))) => Some(b.to_string()),
+            _ => None,
+        };
+        if let Some(start) = start {
+            born.insert(field.name.clone(), start);
+        }
+    }
+    born
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::{Attribute, Model, ModuleSchema};
+
+    /// A record is never born past the verbs that move it: a machine's field leaves the create
+    /// DTO and starts in the machine's initial state; a hand-set stamp leaves it and starts empty;
+    /// a required hand-set field starts at its literal default.
+    #[test]
+    fn a_create_dto_omits_what_only_the_entitys_operations_set() {
+        let yaml = "models:\n  - name: Journal\n    collection: journals\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      memo:\n        type: string\n      status:\n        type: JournalStatus\n      period:\n        type: PeriodStatus\n        attributes: [\"@default(open)\"]\n        lifecycle:\n          shape: hand_set\n      posted_at:\n        type: datetime?\n        lifecycle:\n          shape: hand_set\n";
+        let mut schema = ModuleSchema::new("accounting");
+        schema.models = crate::parser::yaml_parser::parse_model_yaml_str(yaml).unwrap().into_models().unwrap();
+        for (name, values) in [("JournalStatus", ["draft", "posted"]), ("PeriodStatus", ["open", "closed"])] {
+            let mut e = crate::ast::EnumDef::new(name);
+            for v in values {
+                e.variants.push(crate::ast::EnumVariant { name: v.into(), ..Default::default() });
+            }
+            schema.enums.push(e);
+        }
+        let models = schema.models.clone();
+        schema.rule_register.read_file(
+            "journal.hook.yaml",
+            "module: accounting\nstate_machines:\n  - entity: Journal\n    field: status\n    initial: draft\n    states: [draft, posted]\n    transitions:\n      - { from: draft, to: posted, on: post }\n",
+        );
+        schema.rule_register.bind(&models);
+        let out = DtoGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let dto = &out.files[&std::path::PathBuf::from("src/presentation/dto/journal_dto.rs")];
+        let create = &dto[dto.find("pub struct CreateJournalDto").unwrap()..];
+        let create = &create[..create.find("\n}").unwrap()];
+        assert!(create.contains("pub memo:"), "{create}");
+        for gone in ["pub status:", "pub period:", "pub posted_at:"] {
+            assert!(!create.contains(gone), "`{gone}` is set only by the entity's operations: {create}");
+        }
+        for born in ["status: JournalStatus::Draft,", "period: PeriodStatus::Open,", "posted_at: None,"] {
+            assert!(dto.contains(born), "missing `{born}` in the create conversion");
+        }
+    }
 
     fn create_test_schema() -> ResolvedSchema {
         let mut schema = ModuleSchema::new("test");
