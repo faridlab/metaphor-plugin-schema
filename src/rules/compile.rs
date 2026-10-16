@@ -735,6 +735,18 @@ pub(crate) fn rust_num(n: f64) -> String {
 }
 
 impl Compiler<'_> {
+    /// The name of the row's own field `e` reads when its type is one no operator but a null
+    /// test reads.
+    fn opaque_field(&self, e: &Expression) -> Option<String> {
+        let name = match e {
+            Expression::FieldRef(FieldRef::Simple(n)) => n,
+            Expression::MemberAccess { object, member } if matches!(object.as_ref(), Expression::Context(c) if c == "this") => member,
+            _ => return None,
+        };
+        let field = self.model.find_field(name)?;
+        kind_of(&field.type_ref, self.enums).is_none().then(|| name.clone())
+    }
+
     fn field(&mut self, name: &str) -> Result<(String, String, Ty), String> {
         let Some(field) = self.model.find_field(name) else {
             return Err(format!("`{name}` is not a field of {}", self.model.name));
@@ -857,6 +869,20 @@ impl Compiler<'_> {
         let is_null_lit = |e: &Expression| matches!(e, Expression::Literal(Literal::Null));
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && (is_null_lit(left) || is_null_lit(right)) {
             let other = if is_null_lit(left) { right } else { left };
+            // A field of a type no other operator reads (JSON) can still be tested for null: the
+            // test reads the stored value itself, since the row's value of an object is not a
+            // value a rule compares.
+            if let Some(name) = self.opaque_field(other) {
+                if !self.fields.iter().any(|f| f == &name) {
+                    self.fields.push(name.clone());
+                }
+                let read = format!("{}.get({}).map_or(true, |v| v.is_null())", self.row_var, rust_str(&name));
+                return Ok(if op == BinaryOp::Eq {
+                    (format!("r::Val::Bool({read})"), format!("(\"{name}\" IS NULL)"), Ty::Bool)
+                } else {
+                    (format!("r::Val::Bool(!{read})"), format!("(\"{name}\" IS NOT NULL)"), Ty::Bool)
+                });
+            }
             let (r, s, _) = self.emit(other)?;
             return Ok(if op == BinaryOp::Eq {
                 (format!("r::is_null({r})"), format!("({s} IS NULL)"), Ty::Bool)
@@ -1042,6 +1068,16 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_json_field_can_be_tested_for_null_and_an_object_is_not_null() {
+        let c = compile("metadata == null").unwrap();
+        assert_eq!(c.rust, "r::Val::Bool(row.get(\"metadata\").map_or(true, |v| v.is_null()))");
+        assert_eq!(c.sql.as_deref().unwrap(), "(\"metadata\" IS NULL)");
+        assert_eq!(c.path, "metadata");
+        assert!(compile("metadata != null").unwrap().rust.starts_with("r::Val::Bool(!row.get("));
+        assert!(compile("metadata > 1").is_err(), "a JSON value compares with nothing else");
+    }
+
+    #[test]
     fn a_null_comparison_tests_for_null_and_an_enum_compares_as_text() {
         let c = compile("root_path != null && status in ['active', 'archived']").unwrap();
         assert!(c.rust.starts_with("r::and(r::is_not_null(r::field(row, \"root_path\")), r::in_list("));
@@ -1061,7 +1097,7 @@ pub(crate) mod tests {
         for (text, says) in [
             ("$actor.can('admin')", "unresolved"),
             ("$actor.email == name", "`$actor.email`"),
-            ("metadata != null", "cannot read"),
+            ("metadata > 1", "cannot read"),
             ("risk_score > metadata.created_at", "only test it for null"),
             ("name matches '('", "does not compile"),
             ("(now() - risk_score).years <= 150", "relation or a duration"),
