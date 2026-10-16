@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.4] — 2026-10-16
+
+### Changed
+
+- A required hand-set or projected field with an integer `@default` (an `int`, `decimal` or
+  `money`) leaves the Create DTO too and starts at that value, like an enum, string or boolean
+  one: a create cannot type in a count or a total only the entity's operations may set.
+
 ## [0.33.3] — 2026-10-16
 
 ### Added
