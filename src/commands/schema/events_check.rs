@@ -140,6 +140,39 @@ pub(super) fn fields_without_columns(schema: &crate::ast::ModuleSchema, root: &P
     out
 }
 
+/// The `rust_decimal` features that change how EVERY decimal of the composed service serializes:
+/// Cargo unifies features across a build, so one module turning one on changes money, rates and
+/// quantities in every other module's responses.
+const GLOBAL_DECIMAL_SWITCHES: &[&str] = &["serde-float", "serde-arbitrary-precision"];
+
+/// One line per `rust_decimal` feature in the module's `Cargo.toml` that changes the default wire
+/// shape of every decimal in the build. A field that wants a number asks for one itself, with
+/// `#[serde(with = "rust_decimal::serde::float")]` under the `serde-with-float` feature.
+pub(super) fn global_decimal_switches(root: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(root.join("Cargo.toml")) else { return Vec::new() };
+    let mut section = String::new();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            section = t.trim_matches(|c| c == '[' || c == ']').to_string();
+            continue;
+        }
+        let declares = t.starts_with("rust_decimal") && t["rust_decimal".len()..].trim_start().starts_with('=');
+        if !declares || t.starts_with('#') {
+            continue;
+        }
+        for f in GLOBAL_DECIMAL_SWITCHES {
+            if t.contains(&format!("\"{f}\"")) {
+                out.push(format!(
+                    "Cargo.toml [{section}] turns on rust_decimal/{f}, which changes how every decimal in the composed service serializes: use serde-with-float and a per-field `#[serde(with = \"rust_decimal::serde::float\")]` instead"
+                ));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +211,16 @@ mod tests {
         let out = services_built_by_hand(root);
         assert_eq!(out.len(), 1, "{out:?}");
         assert!(out[0].starts_with("src/lib.ext.rs:1 builds OrderService by hand: use build_order_service"), "{out:?}");
+    }
+
+    #[test]
+    fn a_crate_wide_decimal_switch_is_reported_and_the_per_field_one_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "Cargo.toml", "[package]\nname = \"m\"\n[dependencies]\nrust_decimal = { version = \"1.36\", features = [\"serde\", \"serde-float\"] }\n");
+        let out = global_decimal_switches(dir.path());
+        assert!(out.len() == 1 && out[0].contains("rust_decimal/serde-float"), "{out:?}");
+        write(dir.path(), "Cargo.toml", "[package]\nname = \"m\"\n[dependencies]\nrust_decimal = { version = \"1.36\", features = [\"serde\", \"serde-with-float\"] }\n");
+        assert!(global_decimal_switches(dir.path()).is_empty());
     }
 
     #[test]

@@ -209,6 +209,14 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     for warning in super::events_check::fields_without_columns(&module_schema, &consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());
     }
+    // A crate-wide decimal serialization switch changes every module's wire shape: a gate.
+    let switches = super::events_check::global_decimal_switches(&consumer_root);
+    for warning in &switches {
+        println!("  {} {warning}", "✗".red().bold());
+    }
+    if !switches.is_empty() {
+        anyhow::bail!("{} crate-wide decimal serialization switch(es)", switches.len());
+    }
     // Generated services built around their constructor: advisory, never a gate.
     for warning in super::events_check::services_built_by_hand(&consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());
