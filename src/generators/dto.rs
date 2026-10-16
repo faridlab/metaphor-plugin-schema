@@ -1263,6 +1263,12 @@ pub(crate) fn born_values(schema: &crate::ast::ModuleSchema, model: &Model) -> s
                 Some(format!("{v:?}.to_string()"))
             }
             (TypeRef::Primitive(PrimitiveType::Bool), Some(AttributeValue::Bool(b))) => Some(b.to_string()),
+            (TypeRef::Primitive(PrimitiveType::Int | PrimitiveType::Int32 | PrimitiveType::Int64), Some(AttributeValue::Int(i))) => {
+                Some(i.to_string())
+            }
+            (TypeRef::Primitive(PrimitiveType::Decimal | PrimitiveType::Money), Some(AttributeValue::Int(i))) => {
+                Some(format!("Decimal::from({i}_i64)"))
+            }
             _ => None,
         };
         if let Some(start) = start {
@@ -1282,7 +1288,7 @@ mod tests {
     /// a required hand-set field starts at its literal default.
     #[test]
     fn a_create_dto_omits_what_only_the_entitys_operations_set() {
-        let yaml = "models:\n  - name: Journal\n    collection: journals\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      memo:\n        type: string\n      status:\n        type: JournalStatus\n      period:\n        type: PeriodStatus\n        attributes: [\"@default(open)\"]\n        lifecycle:\n          shape: hand_set\n      posted_at:\n        type: datetime?\n        lifecycle:\n          shape: hand_set\n";
+        let yaml = "models:\n  - name: Journal\n    collection: journals\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      memo:\n        type: string\n      status:\n        type: JournalStatus\n      period:\n        type: PeriodStatus\n        attributes: [\"@default(open)\"]\n        lifecycle:\n          shape: hand_set\n      posted_at:\n        type: datetime?\n        lifecycle:\n          shape: hand_set\n      total:\n        type: decimal\n        attributes: [\"@default(0)\"]\n        lifecycle:\n          shape: projection\n      line_count:\n        type: int\n        attributes: [\"@default(0)\"]\n        lifecycle:\n          shape: projection\n";
         let mut schema = ModuleSchema::new("accounting");
         schema.models = crate::parser::yaml_parser::parse_model_yaml_str(yaml).unwrap().into_models().unwrap();
         for (name, values) in [("JournalStatus", ["draft", "posted"]), ("PeriodStatus", ["open", "closed"])] {
@@ -1303,10 +1309,10 @@ mod tests {
         let create = &dto[dto.find("pub struct CreateJournalDto").unwrap()..];
         let create = &create[..create.find("\n}").unwrap()];
         assert!(create.contains("pub memo:"), "{create}");
-        for gone in ["pub status:", "pub period:", "pub posted_at:"] {
+        for gone in ["pub status:", "pub period:", "pub posted_at:", "pub total:", "pub line_count:"] {
             assert!(!create.contains(gone), "`{gone}` is set only by the entity's operations: {create}");
         }
-        for born in ["status: JournalStatus::Draft,", "period: PeriodStatus::Open,", "posted_at: None,"] {
+        for born in ["status: JournalStatus::Draft,", "period: PeriodStatus::Open,", "posted_at: None,", "total: Decimal::from(0_i64),", "line_count: 0,"] {
             assert!(dto.contains(born), "missing `{born}` in the create conversion");
         }
     }
