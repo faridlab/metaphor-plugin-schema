@@ -7,6 +7,18 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.1] — 2026-10-16
+
+### Fixed
+
+- **An enum label with a break before a digit round-trips.** serde and sqlx spell
+  `rename_all = "snake_case"` without one (`Pph22` reads `pph22`), while the SQL type, `Display`
+  and `FromStr` write `pph_22`; such a variant now carries its label as an explicit
+  `#[serde(rename)]` and `#[sqlx(rename)]`. A stored row could not be read and a client sending
+  the schema's label was refused.
+- A list field defaulting to `'{}'` or `'[]'` builds an empty `Vec` instead of a JSON object,
+  which did not compile.
+
 ## [0.33.0] — 2026-10-16
 
 ### Fixed
