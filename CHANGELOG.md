@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.3] — 2026-10-16
+
+### Added
+
+- `schema doctor` fails on a route whose path parameters use the other axum version's syntax,
+  read from the module's locked axum: before 0.8 a parameter is `:id` and `{id}` is a literal
+  segment that never matches; from 0.8 `{id}` is the parameter and `:id` panics at startup.
+
 ## [0.33.2] — 2026-10-16
 
 ### Changed
