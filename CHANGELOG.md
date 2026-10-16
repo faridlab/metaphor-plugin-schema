@@ -7,6 +7,14 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.2] — 2026-10-16
+
+### Changed
+
+- A row rule can test a JSON field for null (`backup_codes_data == null`): the guard reads the
+  stored value itself, so an object counts as a value, and the `CHECK` is `IS NULL`. Every other
+  operator on a JSON field is still refused with its reason.
+
 ### Added
 
 - `schema doctor` names each hand-written write that binds an optional acting unit
