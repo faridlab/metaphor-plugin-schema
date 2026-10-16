@@ -73,8 +73,9 @@ pub(super) fn files_with_hand_code(generated: &GeneratedOutput, output_dir: &Pat
 }
 
 /// The generated row-rule guards (`<Entity>RowRules`) a hand-owned `src/lib.rs` never attaches.
-/// The generated build attaches each one; a module that owns its build must attach them itself
-/// (`.with_guard(Arc::new(<Entity>RowRules))`), or the entity's declared rules check nothing.
+/// The generated build attaches each one; a module that owns its build must attach them itself,
+/// by building the service with its generated `build_<entity>_service` or with
+/// `.with_guard(Arc::new(<Entity>RowRules))`, or the entity's declared rules check nothing.
 pub(in crate::commands::schema) fn unattached_guards(
     generated: &GeneratedOutput,
     output_dir: &Path,
@@ -95,7 +96,11 @@ pub(in crate::commands::schema) fn unattached_guards(
                 l.strip_prefix("pub struct ").and_then(|r| r.strip_suffix("RowRules;")).map(|e| format!("{e}RowRules"))
             })
         })
-        .filter(|guard| !build.contains(guard.as_str()))
+        .filter(|guard| {
+            let entity = guard.trim_end_matches("RowRules");
+            let constructor = format!("build_{}_service(", crate::utils::to_snake_case(entity));
+            !build.contains(guard.as_str()) && !build.contains(&constructor)
+        })
         .collect();
     missing.sort();
     missing.dedup();
@@ -131,6 +136,27 @@ pub(super) fn strip_custom_markers(generated: &mut GeneratedOutput) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hand_owned_build_attaches_a_guard_through_its_guarded_constructor() {
+        let dir = std::env::temp_dir().join(format!("unattached-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "let a = build_post_tag_service(repo.clone());\nlet b = BlogService::with_repository(r).with_guard(Arc::new(BlogRowRules));\n",
+        )
+        .unwrap();
+        let mut generated = GeneratedOutput::new();
+        generated.add_file(
+            std::path::PathBuf::from("src/application/service/guards.rs"),
+            "pub struct PostTagRowRules;\npub struct BlogRowRules;\npub struct TagRowRules;\n".to_string(),
+        );
+        let mut owned = globset::GlobSetBuilder::new();
+        owned.add(globset::Glob::new("src/lib.rs").unwrap());
+        let missing = unattached_guards(&generated, &dir, &owned.build().unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(missing, ["TagRowRules"]);
+    }
     use globset::{Glob, GlobSetBuilder};
 
     #[test]
