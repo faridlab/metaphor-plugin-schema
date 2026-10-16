@@ -7,6 +7,24 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-10-16
+
+### Changed
+
+- **A record is never born past the verbs that move it.** A Create DTO leaves out a state
+  machine's field and every hand-set or projected lifecycle field, and the create conversion
+  starts each at its known value: a machine field in the machine's initial state, an optional
+  hand-set stamp empty, a required hand-set field at its literal `@default`. A generic create
+  could set them: a journal born `posted`, a fiscal period born `locked` with its own close
+  stamps. A field whose starting value the schema does not give stays in the DTO.
+
+### Added
+
+- `schema doctor` refuses a module manifest that turns on `rust_decimal/serde-float` or
+  `serde-arbitrary-precision`: Cargo unifies features across a build, so one module's switch made
+  every decimal in the composed service a JSON float. A field that wants a number uses
+  `serde-with-float` and a per-field `#[serde(with = ...)]`.
+
 ## [0.31.1] — 2026-10-15
 
 ### Fixed
