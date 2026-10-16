@@ -7,6 +7,33 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-10-16
+
+### Fixed
+
+- **A generated file nothing compiles is not written.** A generated `src/**.rs` file is written
+  only when a chain of `mod` declarations (or a `#[path]` or `include!`) reaches it from
+  `src/lib.rs`, read as the module will be on disk: generated indexes, hand-owned ones, and their
+  extension files. Undeclared routes, config, handler, integration and value-object files, and an
+  enum file a hand-owned entity index names differently, no longer come back on every
+  regeneration; a copy an earlier run left is removed as retired output when git can restore it.
+- `schema doctor` no longer reports a rule guard as unattached when the hand-owned build makes
+  the service with its generated `build_<entity>_service`, which attaches the guard.
+- `schema doctor` no longer reports an entity's read or write routes as drift because their name
+  also spells the routes of a model that opts out of handlers (`create_announcement_read_routes`
+  is `Announcement`'s read half, not `AnnouncementRead`'s routes).
+
+### Added
+
+- `schema doctor` reports a generated file that is missing on disk: the next regeneration would
+  bring it back, so a stack deleted by hand is caught before a release instead of after it.
+- **The rule ratchet counts the rules raw SQL walks past.** A rule only the service holds — a
+  guard rule with no `CHECK` form, one in shadow, one a named verb enforces — is listed in the
+  baseline's `bypassable_rules` when the module's hand-written sources `INSERT INTO`, `UPDATE …
+  SET` or `DELETE FROM` its table for a write the rule applies to. `schema doctor` prints each
+  with the writing lines, and fails when a rule joins the list. A baseline written before this
+  release compares nothing until `schema rules . --update-baseline` records the set.
+
 ## [0.32.0] — 2026-10-16
 
 ### Changed
