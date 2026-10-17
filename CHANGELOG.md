@@ -7,6 +7,42 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- A Create DTO fills a non-optional field the request leaves out from its literal `@default`
+  (`#[serde(default)]`, or `default = "<fn>"` for a value other than the type's zero), as the column
+  and the webapp form do, instead of refusing the request with "missing field". A full update still
+  states every field. A `@required` text field with a non-blank default still refuses a blank the
+  writer supplies, on create and update.
+- A Patch DTO types a nullable column `Option<Option<T>>` (read through the generated
+  `double_option` helper), so an absent field leaves the column alone and `null` clears it.
+- The OpenAPI request schemas list what the DTOs take, from the same field filters: no `metadata`,
+  no `@exclude_from_dto` field, no hand-set or projected field on create, no `@immutable` field on
+  update, and a field with a literal default is not required on create. A read-only or hand-set
+  model documents only the read routes it mounts (list, one, trash), in the combined and the split
+  documents alike; split-document references also carry the schema segment of the path.
+- An index name longer than Postgres's 63 bytes ends in a digest of the whole name, so two long
+  names sharing their first 63 bytes no longer collapse into one index under `IF NOT EXISTS`. Every
+  name that fits is unchanged, so existing indexes keep theirs.
+- A generated transition writes its target state with the same label function as the SQL enum
+  type and the Rust enum (`moved_301`, not `moved301`).
+- A generated `can_transition` counts a `from: "*"` edge as leaving every state, final ones
+  included, so a final state left only through a wildcard edge is no longer refused.
+- The Create DTO's custom zone closes with the standard `// END CUSTOM` marker, and stripping an
+  empty zone on the extension layout removes its instruction comments with it, so no generated
+  file claims a section "will be preserved during regeneration".
+
+### Added
+
+- `schema doctor` fails on raw SQL in hand-written sources that writes or matches an enum column
+  with a literal its enum lacks (`UPDATE … SET status = 'cancelled'`), which Postgres refuses at run
+  time.
+- The webapp types a decimal (`decimal`, `money`, `percentage`) as the string the service sends:
+  its schema is the shared `decimalSchema` (`shared/types/decimal.ts`), which takes a string or a
+  number, refuses anything else with the `invalid_decimal` code, and hands on the decimal string;
+  its defaults are strings. An `int64` stays a `number` and refuses a value past
+  `Number.MAX_SAFE_INTEGER` with the `range` code.
+
 ## [0.34.0] - 2026-10-17
 
 ### Fixed
