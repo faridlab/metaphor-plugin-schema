@@ -478,12 +478,10 @@ impl StateMachineGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
-        // Determine which final states have NO outgoing transitions (truly terminal)
-        let states_with_outgoing: std::collections::HashSet<&str> = sm
-            .transitions
-            .iter()
-            .flat_map(|t| t.from.iter().map(|s| s.as_str()))
-            .collect();
+        // Determine which final states have NO outgoing transitions (truly terminal). A wildcard
+        // edge leaves every state, a final one included.
+        let states_with_outgoing: std::collections::HashSet<&str> =
+            sm.transitions.iter().flat_map(|t| sm.sources(t)).collect();
         let terminal_states: Vec<_> = sm
             .states
             .iter()
@@ -533,7 +531,7 @@ impl StateMachineGenerator {
             let trans_variant = to_pascal_case(&transition.name);
             for from_state in &transition.from {
                 if from_state == "*" {
-                    // Wildcard: allowed from any non-final state
+                    // Wildcard: allowed from every state, a final one included
                     writeln!(
                         output,
                         "            (_, {}Transition::{}) => true,",
@@ -1365,6 +1363,25 @@ mod tests {
         let content = generator.generate_state_machine_struct(&hook, sm).unwrap();
         assert!(content.contains("(_, UserTransition::Activate) => true,"));
         assert!(!content.contains("_ => false,"), "every transition is matched by a wildcard arm");
+    }
+
+    /// `from: "*"` leaves every state, a final one included: a suspended user can be restored
+    /// by a wildcard edge, so the final state is no dead end the guard refuses first.
+    #[test]
+    fn a_wildcard_edge_leaves_a_final_state_too() {
+        let generator = StateMachineGenerator::new();
+        let mut hook = create_test_hook();
+        let sm = hook.state_machine.as_mut().unwrap();
+        sm.transitions.push(Transition { name: "restore".into(), from: vec!["*".into()], to: "active".into(), ..Default::default() });
+        let sm = hook.state_machine.as_ref().unwrap();
+        assert!(sm.transitions_from("suspended").iter().any(|t| t.name == "restore"));
+        let content = generator.generate_state_machine_struct(&hook, sm).unwrap();
+        assert!(!content.contains("UserState::Suspended) {\n            return false;"), "{content}");
+        assert!(content.contains("(_, UserTransition::Restore) => true,"), "{content}");
+        // Without the wildcard edge the final state stays terminal.
+        let plain = create_test_hook();
+        let content = generator.generate_state_machine_struct(&plain, plain.state_machine.as_ref().unwrap()).unwrap();
+        assert!(content.contains("if matches!(self.current_state, UserState::Suspended) {\n            return false;"), "{content}");
     }
 
     #[test]

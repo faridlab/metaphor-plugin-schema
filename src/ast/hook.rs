@@ -78,12 +78,25 @@ impl StateMachine {
         self.states.iter().find(|s| s.name == name)
     }
 
+    /// The states `transition` leaves: its `from` list, with `*` standing for every state of the
+    /// machine, final ones included. Everything that asks where an edge starts reads this, so a
+    /// wildcard means the same to all of them.
+    pub fn sources<'a>(&'a self, transition: &'a Transition) -> Vec<&'a str> {
+        let mut out: Vec<&str> = Vec::new();
+        for from in &transition.from {
+            if from == "*" {
+                out.extend(self.states.iter().map(|s| s.name.as_str()).filter(|n| *n != "*"));
+            } else {
+                out.push(from.as_str());
+            }
+        }
+        out.dedup();
+        out
+    }
+
     /// Get all transitions from a given state
     pub fn transitions_from(&self, state: &str) -> Vec<&Transition> {
-        self.transitions
-            .iter()
-            .filter(|t| t.from.contains(&state.to_string()) || t.from.contains(&"*".to_string()))
-            .collect()
+        self.transitions.iter().filter(|t| self.sources(t).contains(&state)).collect()
     }
 
     /// Whether this machine touches the NULL boundary of its field — any
