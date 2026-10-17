@@ -1,8 +1,8 @@
 //! A model's field attributes, compiled into its write guard.
 //!
 //! The attributes a model declares on its fields — `@required`, `@max`, `@min`, `@length`,
-//! `@range`, `@positive`, `@non_negative`, `@pattern`, `@alpha_dash`, `@alpha_num`, `@values`
-//! and the `email` / `url` types — become checks in the same `<Model>RowRules` guard the hook
+//! `@range`, `@positive`, `@non_negative`, `@pattern`, `@alpha_dash`, `@alpha_num`, `@values`,
+//! `@email` / `@url` on a text field, and the `email` / `url` types — become checks in the same `<Model>RowRules` guard the hook
 //! rules compile into, so the generic write path checks them on every create and update.
 //!
 //! - **Every check refuses.** A field marked `@required` must hold a value: not null, and for
@@ -303,17 +303,24 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
             }
         }
 
-        // The format a type promises.
-        match kind {
+        // The format a type promises, or an `@email` / `@url` attribute on a text field: one
+        // check either way, with the same code, so the attribute is no weaker than the type.
+        let format = match kind {
+            Kind::Text if field.has_attribute("email") => Kind::Email,
+            Kind::Text if field.has_attribute("url") => Kind::Url,
+            k => k,
+        };
+        let origin = |what: &str| if kind == format { format!("type {what}") } else { format!("@{what}") };
+        match format {
             Kind::Email => {
                 let p = r"^[^@\s]+@[^@\s]+\.[^@\s]+$";
                 b.push("email", format!("{col} must be an email address"),
-                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), "type email".into());
+                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), origin("email"));
             }
             Kind::Url => {
                 let p = r"^[a-zA-Z][a-zA-Z0-9+.-]*://\S+$";
                 b.push("url", format!("{col} must be an absolute URL"),
-                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), "type url".into());
+                    format!("r::matches({v}, {})", rust_str(p)), format!("({col} ~ {})", sql_str(p)), Vec::new(), origin("url"));
             }
             _ => {}
         }
@@ -484,6 +491,27 @@ mod tests {
             rule(&rules, "status_label_required").rust,
             "r::and(r::is_not_null(r::field(row, \"status_label\")), r::not(r::is_empty(r::trim(r::field(row, \"status_label\")))))"
         );
+    }
+
+    /// `@email` / `@url` on a string field check what the `email` / `url` types check: the same
+    /// code in the guard, the database CHECK and the browser.
+    #[test]
+    fn email_and_url_attributes_check_as_their_types_do() {
+        let m = model(
+            "      backup_email:\n        type: string?\n        attributes: [\"@email\"]\n      docs_url:\n        type: string?\n        attributes: [\"@url\"]\n      contact_email:\n        type: email?\n        attributes: [\"@email\"]\n",
+        );
+        let rules = field_rules(&m, &[]);
+        let email = rule(&rules, "backup_email_email");
+        assert!(email.refuse);
+        assert_eq!(email.code, "email");
+        assert!(email.rust.starts_with("r::matches(r::field(row, \"backup_email\"), "), "{}", email.rust);
+        assert!(email.sql.as_deref().is_some_and(|s| s.starts_with("(backup_email ~ ")), "{:?}", email.sql);
+        assert_eq!(rule(&rules, "docs_url_url").code, "url");
+        assert_eq!(rules.iter().filter(|r| r.path == "contact_email").count(), 1, "the type and the attribute make one check, not two");
+        let schema = crate::ast::ModuleSchema::new("helpdesk");
+        let checks = browser_checks(&schema, &m);
+        assert!(checks.iter().any(|c| c.field == "backup_email" && c.code == "email"), "{checks:?}");
+        assert!(checks.iter().any(|c| c.field == "docs_url" && c.code == "url"), "{checks:?}");
     }
 
     #[test]

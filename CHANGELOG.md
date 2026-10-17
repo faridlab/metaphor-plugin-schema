@@ -7,6 +7,12 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- `@email` and `@url` on a string field check the value as the `email` and `url` types do, with
+  the same `email` / `url` code, in the write guard, the database CHECK and the webapp; the
+  attributes were parsed and then ignored.
+
 ## [0.35.0] - 2026-10-17
 
 ### Fixed
