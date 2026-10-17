@@ -87,6 +87,12 @@ pub fn bypassable_rules(schema: &ModuleSchema, root: &Path) -> BTreeMap<String, 
                 .as_deref()
                 .map(|c| c.split(',').filter_map(|one| one.trim().rsplit_once("::").map(|(file, _)| file)).collect())
                 .unwrap_or_default();
+            // A claim naming a migration's object (a trigger, a constraint) is the database holding
+            // the rule, and no raw-SQL writer walks past the database. The claim is verified first,
+            // so the object stands in that migration.
+            if enforcers.iter().any(|f| f.starts_with("migrations/")) && rule.enforced_by.as_deref().is_some_and(|c| super::claim_holds(root, c)) {
+                continue;
+            }
             let past: Vec<String> = writes
                 .iter()
                 .filter(|(kind, _)| applies_to(rule, **kind))
@@ -182,6 +188,27 @@ mod tests {
         schema.rule_register.verify_enforced_by(root);
         let found = bypassable_rules(&schema, root);
         assert_eq!(found.get("line.hook.yaml: capped").map(Vec::as_slice), Some(&["src/other.rs:1".to_string()][..]), "{found:?}");
+    }
+
+    #[test]
+    fn a_rule_the_database_holds_through_a_claimed_migration_object_has_no_bypass() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "src/repo.rs", "pub async fn close() { q(\"UPDATE lines SET status = 'done'\") }\n");
+        write(root, "src/service.rs", "pub async fn retire() {}\n");
+        write(root, "migrations/1_close.up.sql", "CREATE TRIGGER lines_close BEFORE UPDATE ON lines FOR EACH ROW EXECUTE FUNCTION f();\n");
+        let mut schema = ModuleSchema::new("m");
+        let mut model = crate::ast::Model::new("Line");
+        model.collection = Some("lines".into());
+        schema.models.push(model);
+        schema.rule_register.read_file(
+            "line.hook.yaml",
+            "name: Line\nrules:\n  closed:\n    when: [close]\n    assert: \"no open children\"\n    enforcement: both\n    enforced_by: \"src/service.rs::retire, migrations/1_close.up.sql::lines_close\"\n",
+        );
+        let models = schema.models.clone();
+        schema.rule_register.bind(&models);
+        schema.rule_register.verify_enforced_by(root);
+        assert!(bypassable_rules(&schema, root).is_empty());
     }
 
     #[test]
