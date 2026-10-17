@@ -918,6 +918,7 @@ pub fn declaration_warnings(schema: &ModuleSchema) -> Vec<String> {
     let mut warnings = Vec::new();
     warnings.extend(fence_warnings(schema));
     warnings.extend(scheduled_job_warnings(schema));
+    warnings.extend(declaration_only_warnings(schema));
     warnings
 }
 
@@ -1001,6 +1002,31 @@ fn job_posture_name(posture: crate::ast::JobPosture) -> &'static str {
         JobPosture::InactiveThenIcp => "inactive_then_icp",
         JobPosture::AutovacuumRide => "autovacuum_ride",
     }
+}
+
+/// What the schema declares that nothing generated runs, for [`declaration_warnings`] and
+/// `schema doctor`: hook `events:` (no publishing code is generated; the module publishes them
+/// by hand) and `schema/workflows` (parsed and validated; no generated code runs them). Said on
+/// every generation so nobody takes a declaration for behaviour.
+pub fn declaration_only_warnings(schema: &ModuleSchema) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut by_file: indexmap::IndexMap<&str, Vec<&str>> = indexmap::IndexMap::new();
+    for (file, event) in &schema.declared_events {
+        by_file.entry(file.as_str()).or_default().push(event.as_str());
+    }
+    for (file, events) in by_file {
+        out.push(format!(
+            "{file} declares event(s) {} under `events:`: declaration-only — nothing is generated from them and no generated code publishes them; the module publishes them by hand",
+            events.join(", ")
+        ));
+    }
+    for workflow in &schema.workflows {
+        out.push(format!(
+            "workflow '{}' (schema/workflows) is declaration-only: it is parsed and validated, and no generated code runs it; write the flow as a service method or a custom route",
+            workflow.name
+        ));
+    }
+    out
 }
 
 /// Scheduled-job warnings for [`declaration_warnings`] — see ADR-0020.

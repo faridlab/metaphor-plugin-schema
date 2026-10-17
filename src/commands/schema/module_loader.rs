@@ -104,6 +104,9 @@ pub(super) fn build_module_schema(
         let filename = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if filename == "index.model.yaml" {
+            for event in declared_event_names(&content) {
+                module_schema.declared_events.push((filename.to_string(), event));
+            }
             continue;
         }
 
@@ -310,6 +313,9 @@ pub(super) fn build_module_schema(
             }
         } else if filename.ends_with(".hook.yaml") {
             module_schema.rule_register.read_file(filename, &content);
+            for event in declared_event_names(&content) {
+                module_schema.declared_events.push((filename.to_string(), event));
+            }
             match parse_yaml_hook_flexible(&content) {
                 Ok(HookParseResult::Hook(hook_file)) => module_schema.merge_hook_file(hook_file),
                 Ok(HookParseResult::Index(index_schema)) => {
@@ -356,6 +362,20 @@ pub(super) fn build_module_schema(
     }
 
     Ok((module_schema, errors))
+}
+
+/// The event names a hook file or the model index declares under a top-level `events:`, as a map keyed by name or
+/// a list of `{ name: … }` entries.
+fn declared_event_names(content: &str) -> Vec<String> {
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(content) else { return Vec::new() };
+    match doc.get("events") {
+        Some(serde_yaml::Value::Mapping(m)) => m.keys().filter_map(|k| k.as_str().map(str::to_string)).collect(),
+        Some(serde_yaml::Value::Sequence(items)) => items
+            .iter()
+            .filter_map(|i| i.get("name").and_then(|n| n.as_str()).or_else(|| i.as_str()).map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -506,6 +526,23 @@ mod tests {
             let model = schema.models.iter().find(|m| m.name == "Ticket").unwrap();
             assert!(crate::rules::compile::mounts_generated_verbs(&schema, model), "the generated verbs are mounted");
         }
+    }
+
+
+    /// Declared events and workflows run nothing; generation says so instead of dropping them
+    /// without a word.
+    #[test]
+    fn declared_events_and_workflows_are_reported_as_declaration_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let hook = dir.path().join("ticket.hook.yaml");
+        std::fs::write(&hook, "name: Ticket\nmodel: Ticket\nevents:\n  - name: TicketOpened\n    fields: [id]\n").unwrap();
+        let (mut schema, errors) = build_module_schema("helpdesk", &[hook]).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(schema.declared_events, vec![("ticket.hook.yaml".to_string(), "TicketOpened".to_string())]);
+        schema.workflows.push(crate::ast::Workflow { name: "escalation".into(), ..Default::default() });
+        let warnings = crate::resolver::declaration_warnings(&schema);
+        assert!(warnings.iter().any(|w| w.contains("TicketOpened") && w.contains("declaration-only")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("workflow 'escalation'") && w.contains("declaration-only")), "{warnings:?}");
     }
 
 }

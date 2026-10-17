@@ -219,6 +219,10 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         );
     }
 
+    // Declarations nothing generated runs (hook events, workflows): advisory, never a gate.
+    for warning in crate::resolver::validator::declaration_only_warnings(&module_schema) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
     // Declared events no hand-written source names: advisory, never a gate.
     for warning in super::events_check::unpublished_events(&consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());

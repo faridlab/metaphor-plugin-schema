@@ -47,6 +47,10 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   `ck_<table>_<field>_<code>__<code>`. Indexes and constraints a database already has under the
   old names are renamed by the declared-checks migration; applied migrations are not edited. The
   migration diff names declared indexes as the table migration does.
+- Generation, `schema validate` and `schema doctor` say that `events:` declared in a hook file or
+  the model index, and workflows under `schema/workflows`, are declaration-only: nothing is
+  generated from them and nothing generated publishes or runs them. Events were dropped at load
+  without a word. Hook `triggers:` still fail validation, as before.
 
 ## [0.35.0] - 2026-10-17
 

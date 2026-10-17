@@ -267,6 +267,10 @@ pub struct ModuleSchema {
     /// parsed and dropped at load time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scheduled_jobs: Vec<ScheduledJob>,
+    /// The events the module's hook files declare under `events:`, as `(file, event)`. Nothing
+    /// is generated from them; the loader keeps them so generation can say so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declared_events: Vec<(String, String)>,
     /// Every rule and state machine the module's hook files declare, read
     /// from their raw YAML and bound to models ([`crate::rules`]). Reported by
     /// `schema validate` and `schema rules`; not read by any generator yet,
