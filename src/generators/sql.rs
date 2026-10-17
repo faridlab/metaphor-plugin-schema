@@ -1068,9 +1068,8 @@ impl SqlGenerator {
                 writeln!(output).unwrap();
                 writeln!(
                     output,
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_{}_{} ON {} ({});",
-                    table_name,
-                    field.name,
+                    "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({});",
+                    index_name(&format!("idx_{}_{}", table_name, field.name)),
                     qualified,
                     quote_ident(&field.name)
                 )
@@ -1086,8 +1085,8 @@ impl SqlGenerator {
                 writeln!(output, "-- GIN index for audit metadata JSONB queries").unwrap();
                 writeln!(
                     output,
-                    "CREATE INDEX IF NOT EXISTS idx_{}_{}_gin ON {} USING GIN ({});",
-                    table_name, field.name, qualified, field.name
+                    "CREATE INDEX IF NOT EXISTS {} ON {} USING GIN ({});",
+                    index_name(&format!("idx_{}_{}_gin", table_name, field.name)), qualified, field.name
                 )
                 .unwrap();
                 // Expression indexes for the audit timestamps. Stored as ISO-8601
@@ -1097,27 +1096,24 @@ impl SqlGenerator {
                 // needing an IMMUTABLE timestamptz cast wrapper.
                 writeln!(
                     output,
-                    "CREATE INDEX IF NOT EXISTS idx_{}_{}_deleted_at ON {} (({}->>'deleted_at'));",
-                    table_name,
-                    field.name,
+                    "CREATE INDEX IF NOT EXISTS {} ON {} (({}->>'deleted_at'));",
+                    index_name(&format!("idx_{}_{}_deleted_at", table_name, field.name)),
                     qualified,
                     quote_ident(&field.name)
                 )
                 .unwrap();
                 writeln!(
                     output,
-                    "CREATE INDEX IF NOT EXISTS idx_{}_{}_created_at ON {} (({}->>'created_at'));",
-                    table_name,
-                    field.name,
+                    "CREATE INDEX IF NOT EXISTS {} ON {} (({}->>'created_at'));",
+                    index_name(&format!("idx_{}_{}_created_at", table_name, field.name)),
                     qualified,
                     quote_ident(&field.name)
                 )
                 .unwrap();
                 writeln!(
                     output,
-                    "CREATE INDEX IF NOT EXISTS idx_{}_{}_updated_at ON {} (({}->>'updated_at'));",
-                    table_name,
-                    field.name,
+                    "CREATE INDEX IF NOT EXISTS {} ON {} (({}->>'updated_at'));",
+                    index_name(&format!("idx_{}_{}_updated_at", table_name, field.name)),
                     qualified,
                     quote_ident(&field.name)
                 )
@@ -1525,6 +1521,7 @@ impl SqlGenerator {
                 .join("_");
             format!("idx_{}_{}", table_name, slug)
         });
+        let index_name = self::index_name(&index_name);
 
         let index_type = match index.index_type {
             IndexType::Unique => "UNIQUE INDEX",
@@ -1755,7 +1752,7 @@ impl SqlGenerator {
         let variants: Vec<String> = enum_def
             .variants
             .iter()
-            .map(|v| format!("'{}'", to_snake_case(&v.name)))
+            .map(|v| format!("'{}'", crate::utils::enum_label(&v.name)))
             .collect();
 
         writeln!(output, "{});", variants.join(", ")).unwrap();
@@ -1940,14 +1937,14 @@ impl SqlGenerator {
             // Indexes for join table
             writeln!(
                 output,
-                "CREATE INDEX IF NOT EXISTS idx_{}_{} ON {} ({});",
-                table_name, source_fk, table_name, source_fk
+                "CREATE INDEX IF NOT EXISTS {} ON {} ({});",
+                index_name(&format!("idx_{}_{}", table_name, source_fk)), table_name, source_fk
             )
             .unwrap();
             writeln!(
                 output,
-                "CREATE INDEX IF NOT EXISTS idx_{}_{} ON {} ({});",
-                table_name, target_fk, table_name, target_fk
+                "CREATE INDEX IF NOT EXISTS {} ON {} ({});",
+                index_name(&format!("idx_{}_{}", table_name, target_fk)), table_name, target_fk
             )
             .unwrap();
             writeln!(output).unwrap();
@@ -2922,6 +2919,35 @@ fn extract_custom_type_name(type_ref: &TypeRef) -> Option<&str> {
 /// One foreign key, added only when its column carries none: `NOT VALID` so stored rows cannot
 /// block it, then validated; when stored rows still reference missing parents the validation is
 
+/// An index's name as Postgres keeps it. A name that fits its 63 bytes is unchanged, so an
+/// existing index keeps its name; a longer one keeps its head and ends in a digest of the whole,
+/// so two long names sharing their first 63 bytes stay two indexes instead of `IF NOT EXISTS`
+/// silently skipping the second.
+pub(crate) fn index_name(full: &str) -> String {
+    if full.len() <= 63 {
+        return full.to_string();
+    }
+    let tail = format!("_{:08x}", fnv1a(full));
+    let mut head = String::new();
+    for c in full.chars() {
+        if head.len() + c.len_utf8() + tail.len() > 63 {
+            break;
+        }
+        head.push(c);
+    }
+    format!("{head}{tail}")
+}
+
+/// A 32-bit FNV-1a digest: stable across runs and platforms, so a shortened name is too.
+fn fnv1a(s: &str) -> u32 {
+    let mut h: u32 = 0x811c9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
+}
+
 /// A generated constraint's name: `<prefix>_<table>_<rule>__<code>`, the code after `__` being
 /// what a database refusal maps back to (`backbone_core::violation::code_from_constraint`).
 /// Postgres keeps 63 bytes of a name, so a longer one shortens its middle to a digest, keeping
@@ -2935,12 +2961,7 @@ fn constraint_name(prefix: &str, table: &str, rule: &str, code: &str) -> String 
     if full.len() <= 63 {
         return full;
     }
-    let mut h: u32 = 0x811c9dc5;
-    for b in full.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x01000193);
-    }
-    let tail = format!("_{h:08x}__{code}");
+    let tail = format!("_{:08x}__{code}", fnv1a(&full));
     let keep = 63usize.saturating_sub(tail.len()).max(prefix.len() + 1);
     let head: String = format!("{prefix}_{table}_{rule}").chars().take(keep).collect();
     format!("{head}{tail}")
@@ -4103,6 +4124,26 @@ mod tests {
         assert_eq!(constraint_name("ck", "t", &"r".repeat(80), "code").len(), 63);
         assert_eq!(constraint_name("ck", "mail_activities", "G-MAIL-3", "res_id_required"), "ck_mail_activities_g_mail_3__res_id_required");
         assert!(constraint_name("ck", "t", &"r".repeat(80), "code").ends_with("__code"));
+    }
+
+    /// Postgres keeps 63 bytes of an index name and `IF NOT EXISTS` then skips a second index
+    /// whose first 63 bytes match the first, so a longer name shortens to a digest. A name that
+    /// fits is unchanged, so existing indexes keep theirs.
+    #[test]
+    fn a_long_index_name_shortens_to_a_digest_and_a_short_one_is_kept() {
+        let model = Model { name: "RequisitionSkillAssessment".into(), ..Default::default() };
+        let idx = |fields: &[&str]| crate::ast::Index { fields: fields.iter().map(|f| f.to_string()).collect(), ..Default::default() };
+        let gen = SqlGenerator::new();
+        let table = "requisition_skill_assessments";
+        let a = gen.generate_index(table, table, &idx(&["candidate_application_id", "requisition_skill_id", "assessor_id"]), &model).unwrap();
+        let b = gen.generate_index(table, table, &idx(&["candidate_application_id", "requisition_skill_id", "reviewer_id"]), &model).unwrap();
+        let name = |sql: &str| sql.split_whitespace().nth(5).unwrap().to_string();
+        assert!(name(&a).len() <= 63 && name(&b).len() <= 63, "{a}\n{b}");
+        assert_ne!(name(&a), name(&b), "two long names sharing a 63-byte prefix must not collide");
+        assert_eq!(name(&a), name(&gen.generate_index(table, table, &idx(&["candidate_application_id", "requisition_skill_id", "assessor_id"]), &model).unwrap()));
+        let short = gen.generate_index("users", "users", &idx(&["email"]), &model).unwrap();
+        assert_eq!(name(&short), "idx_users_email");
+        assert_eq!(index_name(&"x".repeat(63)), "x".repeat(63));
     }
 
     #[test]
