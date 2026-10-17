@@ -1610,7 +1610,7 @@ impl ValueObjectGenerator {
         let type_str = self.get_type_str(field);
         let type_str = type_str.trim().trim_end_matches('?');
 
-        matches!(type_str.to_lowercase().as_str(), "string" | "str")
+        matches!(type_str.to_lowercase().as_str(), "string" | "str" | "text")
     }
 
     /// Check if field has a default value
@@ -1678,7 +1678,7 @@ impl ValueObjectGenerator {
             .unwrap_or(without_optional);
 
         let base_type = match base_str.to_lowercase().as_str() {
-            "string" | "str" => "String".to_string(),
+            "string" | "str" | "text" => "String".to_string(),
             "email" | "phone" | "url" | "slug" | "ip" => "String".to_string(),
             "int" | "integer" | "int32" | "i32" => "i32".to_string(),
             "int64" | "i64" | "long" => "i64".to_string(),

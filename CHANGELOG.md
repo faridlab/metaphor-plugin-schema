@@ -16,6 +16,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   the entity, so a generic PATCH, which merges any entity field, refuses a new value for it with
   `field_not_writable` instead of storing it. Hand code that sets such a field through its own
   repository or SQL, or a verb moving a state field, is unaffected.
+- The `text` field type the module docs list is accepted as a string with no length cap (`String`,
+  `TEXT`, a TypeScript string) instead of failing validation as an unknown type.
 
 ## [0.35.0] - 2026-10-17
 

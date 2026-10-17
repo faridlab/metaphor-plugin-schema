@@ -68,8 +68,6 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
   from backbone-auditlog, which a standalone module does not compose.
 - The ADR-0029 acting-unit decorator: it is installed by a composing service's `tenancy.yaml`
   (`metaphor schema tenancy`), not declared in a module.
-- The `text` field type: the validator refuses it as unknown, although the skeleton's
-  `docs/schema/TYPES.md` lists it; `string` already maps to `TEXT`.
 - Outbox staging: the generator emits none, and the generic service publishes outside the
   write's transaction.
 

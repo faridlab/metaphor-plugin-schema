@@ -173,7 +173,8 @@ impl PrimitiveType {
     /// Parse from string
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "string" | "str" => Some(Self::String),
+            // `text` names long text: a string, which already maps to TEXT with no length cap.
+            "string" | "str" | "text" => Some(Self::String),
             "int" | "integer" => Some(Self::Int),
             "int32" | "i32" => Some(Self::Int32),
             "int64" | "i64" | "long" => Some(Self::Int64),
@@ -310,5 +311,19 @@ impl PrimitiveType {
                 | Self::Mac
                 | Self::Slug
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `text` is the long-text spelling the module docs list: a string with no length cap.
+    #[test]
+    fn text_reads_as_an_uncapped_string() {
+        let text = PrimitiveType::from_str("text").expect("text is a type");
+        assert_eq!(text, PrimitiveType::String);
+        assert_eq!(text.rust_type(), "String");
+        assert_eq!(text.postgres_type(), "TEXT");
     }
 }
