@@ -13,6 +13,7 @@ mod migrations;
 mod module_loader;
 mod openapi_collect;
 mod parse;
+mod permissions_check;
 mod rules;
 mod tenancy;
 mod undeclared;

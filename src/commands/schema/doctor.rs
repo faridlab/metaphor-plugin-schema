@@ -285,6 +285,13 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         anyhow::bail!("{} route(s) name their parameters in the wrong axum syntax", routes.len());
     }
 
+    // Permissions: what the schema declares, and where hand-written code lets a request reach a
+    // handler with no check. Nothing is allowed by default in either mode.
+    let permission_failures = permission_report(&module_schema, &consumer_root);
+    if !permission_failures.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} permission problem(s)", permission_failures.len());
+    }
+
     // A raw write of a literal an enum column's type lacks fails at run time: a gate.
     let literals = crate::rules::writers::enum_literal_mismatches(&module_schema, &consumer_root);
     for l in &literals {
@@ -396,6 +403,63 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     }
 
     anyhow::bail!("found {} drift reference(s)", findings.len())
+}
+
+/// Print the permission section of the report and return the failures (each already printed).
+fn permission_report(schema: &crate::ast::ModuleSchema, root: &Path) -> Vec<String> {
+    use super::permissions_check as pc;
+    let rbac = crate::rbac::Rbac::new(schema);
+    let source = pc::scan(root);
+    let mode = source.mode.unwrap_or(pc::Mode::AuthContext);
+    let required = rbac.required();
+    let distinct: std::collections::BTreeSet<&str> = required.iter().map(|r| r.permission.as_str()).collect();
+    println!(
+        "  permissions: mode {}; {} permission(s) required by {} generated route group(s)",
+        mode.label(),
+        distinct.len(),
+        required.len()
+    );
+    println!(
+        "    the seed migration writes them into the identity module's tables, so its migrations run first (a database without them skips the seed with a notice)"
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for p in rbac.problems() {
+        failures.push(p.message);
+    }
+    for r in source.routes.iter().filter(|r| !r.guarded) {
+        match &r.acknowledged {
+            Some(why) => println!("  {} {}:{} route `{}` is deliberately unguarded: {why}", "!".yellow().bold(), r.file, r.line, r.what),
+            None => failures.push(format!(
+                "{}:{} route `{}` has no permission guard: wrap it in `guarded(route, \"<entity>:<verb>\")` (backbone_core::http::guarded), or say why with `// unguarded: <reason>`",
+                r.file, r.line, r.what
+            )),
+        }
+    }
+    let vocabulary = rbac.vocabulary();
+    for n in pc::undeclared(&source, &rbac, &vocabulary) {
+        failures.push(format!(
+            "{}:{} guards with `{}`, which the permission vocabulary does not hold: declare it under `authorization: permissions:` (or fix the name)",
+            n.file, n.line, n.permission
+        ));
+    }
+    for (place, written, canonical) in rbac.legacy_spellings() {
+        println!("  {} {place} spells a permission `{written}`: write `{canonical}` (the older spelling is read for one release)", "!".yellow().bold());
+    }
+    let named: std::collections::BTreeSet<String> = source
+        .named
+        .iter()
+        .filter_map(|n| rbac.canonical(&n.permission).map(|c| c.permission))
+        .collect();
+    for d in rbac.unused_declared() {
+        if !named.contains(&d) {
+            println!("  {} `{d}` is declared but no generated route, system role or hand-written guard uses it", "!".yellow().bold());
+        }
+    }
+    for f in &failures {
+        println!("  {} {f}", "✗".red().bold());
+    }
+    failures
 }
 
 #[derive(Debug)]

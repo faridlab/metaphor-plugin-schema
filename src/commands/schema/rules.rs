@@ -83,6 +83,8 @@ pub(super) fn execute_rules(
         return Ok(());
     }
     let register = &module_schema.rule_register;
+    let root = super::doctor::locate_consumer_root(&schema_path).unwrap_or_else(|| schema_path.clone());
+    let mode = super::permissions_check::scan(&root).mode.unwrap_or(super::permissions_check::Mode::AuthContext);
 
     match format {
         OutputFormat::Json => {
@@ -102,12 +104,13 @@ pub(super) fn execute_rules(
                     "if": e.condition,
                     "problems": e.problems,
                 })).collect::<Vec<_>>(),
+                "permissions": permissions_json(&module_schema, mode),
                 "warnings": register.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
                 "proposals": proposals(register),
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Pretty => print_pretty(&module_schema, register, suggest),
+        OutputFormat::Pretty => print_pretty(&module_schema, register, suggest, mode),
     }
     Ok(())
 }
@@ -177,7 +180,7 @@ fn describe(check: &ExpressionCheck) -> String {
     }
 }
 
-fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, suggest: bool) {
+fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, suggest: bool, mode: super::permissions_check::Mode) {
     let module = schema.name.as_str();
     println!(
         "{} {} — {}",
@@ -312,10 +315,79 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
             }
         }
     }
+    print_permissions(schema, mode);
     if !register.warnings.is_empty() {
         println!("{} ({})", "Warnings:".yellow().bold(), register.warnings.len());
         for w in &register.warnings {
             println!("  {w}");
         }
     }
+}
+
+/// The permissions every mounted route requires, and the mode they are checked in.
+fn print_permissions(schema: &crate::ast::ModuleSchema, mode: super::permissions_check::Mode) {
+    let rbac = crate::rbac::Rbac::new(schema);
+    let by_model = rbac.by_model();
+    if by_model.is_empty() {
+        return;
+    }
+    println!("{} mode {}", "Permissions:".bold(), mode.label());
+    for (model, required) in &by_model {
+        let entity = required.first().map(|r| r.entity.as_str()).unwrap_or("");
+        let generic: Vec<&crate::rbac::Required> = required.iter().filter(|r| matches!(r.kind, crate::rbac::RouteKind::Generic(_))).collect();
+        let defaults: Vec<&str> = generic
+            .iter()
+            .filter(|r| !r.renamed)
+            .map(|r| r.permission.rsplit(':').next().unwrap_or(""))
+            .collect();
+        if !defaults.is_empty() {
+            println!(
+                "  {}  {} {}:{{{}}}  generic routes",
+                model.bold(),
+                "PERMISSION REQUIRED".green(),
+                entity,
+                defaults.join("|")
+            );
+        }
+        for r in generic.iter().filter(|r| r.renamed) {
+            println!("  {}  {} {}  generic routes, renamed by `requires:` ({})", model.bold(), "PERMISSION REQUIRED".green(), r.permission, r.what);
+        }
+        for r in required.iter().filter(|r| !matches!(r.kind, crate::rbac::RouteKind::Generic(_))) {
+            let kind = match r.kind {
+                crate::rbac::RouteKind::Transition => "generated verb",
+                _ => "hand verb (guard it with `guarded`)",
+            };
+            println!("  {}  {} {}  {kind}: {}", model.bold(), "PERMISSION REQUIRED".green(), r.permission, r.what);
+        }
+    }
+    let roles = rbac.system_roles();
+    if !roles.is_empty() {
+        println!("  system roles seeded: {}", roles.iter().map(|r| format!("{} ({} grant(s))", r.name, r.permissions.len())).collect::<Vec<_>>().join(", "));
+    }
+}
+
+fn permissions_json(schema: &crate::ast::ModuleSchema, mode: super::permissions_check::Mode) -> serde_json::Value {
+    let rbac = crate::rbac::Rbac::new(schema);
+    serde_json::json!({
+        "mode": match mode {
+            super::permissions_check::Mode::Resolver => "resolver",
+            super::permissions_check::Mode::AuthContext => "auth_context",
+        },
+        "label": mode.label(),
+        "required": rbac.required().iter().map(|r| serde_json::json!({
+            "model": r.model,
+            "permission": r.permission,
+            "what": r.what,
+            "renamed": r.renamed,
+            "kind": match r.kind {
+                crate::rbac::RouteKind::Generic(g) => format!("generic:{}", g.action()),
+                crate::rbac::RouteKind::Transition => "transition".to_string(),
+                crate::rbac::RouteKind::HandVerb => "hand_verb".to_string(),
+            },
+        })).collect::<Vec<_>>(),
+        "vocabulary": rbac.vocabulary().into_iter().collect::<Vec<_>>(),
+        "system_roles": rbac.system_roles().iter().map(|r| serde_json::json!({
+            "name": r.name, "permissions": r.permissions,
+        })).collect::<Vec<_>>(),
+    })
 }
