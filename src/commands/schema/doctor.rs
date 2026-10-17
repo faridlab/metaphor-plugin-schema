@@ -244,6 +244,15 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         anyhow::bail!("{} route(s) name their parameters in the wrong axum syntax", routes.len());
     }
 
+    // A raw write of a literal an enum column's type lacks fails at run time: a gate.
+    let literals = crate::rules::writers::enum_literal_mismatches(&module_schema, &consumer_root);
+    for l in &literals {
+        println!("  {} {l}", "✗".red().bold());
+    }
+    if !literals.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} raw SQL write(s) use a value their enum column does not have", literals.len());
+    }
+
     // An index whose module name and schema disagree: advisory, since routes and generated
     // clients both mount under the schema, but anything built on the module name misses them.
     if let Some(warning) = index_name_mismatch(&schema_path) {

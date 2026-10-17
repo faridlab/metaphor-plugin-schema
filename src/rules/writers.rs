@@ -133,6 +133,109 @@ fn applies_to(rule: &DeclaredRule, kind: Write) -> bool {
     })
 }
 
+/// Raw-SQL statements in the module's hand-written sources that give an enum column a literal
+/// its enum does not have: `SET status = 'cancelled'`, or `status = '...'` in a `WHERE`, in an
+/// `UPDATE` or `DELETE` of the column's table. Postgres refuses the value at run time ("invalid
+/// input value for enum"), so each is named as `<file>:<line> uses '<literal>' for
+/// <table>.<column>, which <Enum> does not have (<labels>)`.
+pub fn enum_literal_mismatches(schema: &ModuleSchema, root: &Path) -> Vec<String> {
+    use crate::ast::TypeRef;
+    // Each table's enum columns, with the enum's name and the labels the SQL type holds.
+    let mut columns: BTreeMap<String, BTreeMap<String, (String, Vec<String>)>> = BTreeMap::new();
+    for model in &schema.models {
+        for field in &model.fields {
+            let name = match &field.type_ref {
+                TypeRef::Custom(n) => n,
+                TypeRef::Optional(inner) => match inner.as_ref() {
+                    TypeRef::Custom(n) => n,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            let Some(e) = schema.enums.iter().find(|e| &e.name == name) else { continue };
+            let labels = e.variants.iter().map(|v| crate::utils::enum_label(&v.name)).collect();
+            columns.entry(model.collection_name().to_ascii_lowercase()).or_default().insert(field.name.to_ascii_lowercase(), (e.name.clone(), labels));
+        }
+    }
+    let mut out = Vec::new();
+    if columns.is_empty() {
+        return out;
+    }
+    let ident = r#"\\?"?([A-Za-z_][A-Za-z0-9_]*)\\?"?"#;
+    let target = format!(r"(?:{ident}\s*\.\s*)?{ident}");
+    let statements = [
+        Regex::new(&format!(r"(?i)\bupdate\s+(?:only\s+)?{target}\s")).expect("a valid pattern"),
+        Regex::new(&format!(r"(?i)\bdelete\s+from\s+(?:only\s+)?{target}")).expect("a valid pattern"),
+    ];
+    // `[qualifier.]column = '<literal>'`
+    let literal = Regex::new(r"(?:([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*)?\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'").expect("a valid pattern");
+    let alias = Regex::new(r"(?i)^\s*(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)").expect("a valid pattern");
+    for entry in walkdir::WalkDir::new(root.join("src")).sort_by_file_name().into_iter().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        if text.lines().take(12).any(|l| l.contains(GENERATED)) {
+            continue;
+        }
+        // Comment lines blanked, so positions still give line numbers.
+        let text: String = text
+            .split_inclusive('\n')
+            .map(|l| if l.trim_start().starts_with("//") { l.chars().map(|c| if c == '\n' { c } else { ' ' }).collect() } else { l.to_string() })
+            .collect();
+        let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let mut found: Vec<(usize, String)> = Vec::new();
+        for re in &statements {
+            for cap in re.captures_iter(&text) {
+                let Some(enum_columns) = columns.get(&cap[2].to_ascii_lowercase()) else { continue };
+                let table = cap[2].to_ascii_lowercase();
+                // The statement runs to the end of its string literal.
+                let start = cap.get(0).map_or(0, |m| m.end());
+                let rest = &text[start..];
+                let end = rest
+                    .char_indices()
+                    .find(|&(i, c)| c == '"' && !rest[..i].ends_with('\\'))
+                    .map_or(rest.len(), |(i, _)| i)
+                    .min(4000);
+                let end = (0..=end).rev().find(|&i| rest.is_char_boundary(i)).unwrap_or(0);
+                // The name the statement gives its table (`UPDATE appraisals a`), if any: a column
+                // another qualifier names belongs to another table.
+                let own = alias
+                    .captures(&rest[..end])
+                    .map(|c| c[1].to_ascii_lowercase())
+                    .filter(|a| !matches!(a.as_str(), "set" | "where" | "using" | "from" | "returning"));
+                for lit in literal.captures_iter(&rest[..end]) {
+                    if let Some(q) = lit.get(1).map(|q| q.as_str().to_ascii_lowercase()) {
+                        if q != table && own.as_deref() != Some(q.as_str()) {
+                            continue;
+                        }
+                    }
+                    let column = lit[2].to_ascii_lowercase();
+                    let Some((enum_name, labels)) = enum_columns.get(&column) else { continue };
+                    // A value built at run time (`'{to}'` in a `format!`) is not a literal.
+                    if labels.iter().any(|l| l == &lit[3]) || lit[3].contains('{') {
+                        continue;
+                    }
+                    let at = start + lit.get(0).map_or(0, |m| m.start());
+                    let line = text[..at].matches('\n').count() + 1;
+                    found.push((
+                        line,
+                        format!(
+                            "{rel}:{line} uses '{}' for {table}.{column}, which {enum_name} does not have ({})",
+                            &lit[3],
+                            labels.join(", ")
+                        ),
+                    ));
+                }
+            }
+        }
+        found.sort();
+        out.extend(found.into_iter().map(|(_, f)| f));
+    }
+    out
+}
+
 /// The set the ratchet keeps.
 pub fn bypassable_keys(schema: &ModuleSchema, root: &Path) -> BTreeSet<String> {
     bypassable_rules(schema, root).into_keys().collect()
@@ -209,6 +312,48 @@ mod tests {
         schema.rule_register.bind(&models);
         schema.rule_register.verify_enforced_by(root);
         assert!(bypassable_rules(&schema, root).is_empty());
+    }
+
+    /// A raw write that sets or matches an enum column with a literal its enum lacks fails at
+    /// run time ("invalid input value for enum"), so it is named with its place.
+    #[test]
+    fn a_raw_write_of_a_literal_its_enum_lacks_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "src/application/service/cycle_service.rs",
+            "fn a() { q(\"UPDATE performance.appraisal_cycles SET status = 'cancelled' WHERE id = $1\") }\n\
+             fn b() { q(\"UPDATE appraisal_cycles SET status = 'closed', note = 'cancelled' WHERE status = 'open'\") }\n\
+             fn c() {\n    q(r#\"UPDATE appraisal_cycles\n        SET status = 'archived'\n      WHERE id = $1\"#)\n}\n\
+             fn d() { q(\"DELETE FROM appraisal_cycles WHERE status='Closed'\") }\n\
+             fn e(to: &str) { q(&format!(\"UPDATE appraisal_cycles SET status = '{to}'\")) }\n\
+             fn f() { q(\"UPDATE appraisal_cycles c SET status = 'open' WHERE EXISTS (SELECT 1 FROM reviews r WHERE r.status = 'pending') AND c.status = 'draft'\") }\n\
+             // UPDATE appraisal_cycles SET status = 'ghost'\n",
+        );
+        write(root, "src/gen.rs", "// Generated by metaphor-schema. Do not edit manually.\nconst Q: &str = \"UPDATE appraisal_cycles SET status = 'nope'\";\n");
+        let mut schema = ModuleSchema::new("performance");
+        let mut model = crate::ast::Model::new("AppraisalCycle");
+        model.collection = Some("appraisal_cycles".into());
+        model.fields.push(crate::ast::Field { name: "status".into(), type_ref: crate::ast::TypeRef::Custom("CycleStatus".into()), ..Default::default() });
+        model.fields.push(crate::ast::Field { name: "note".into(), type_ref: crate::ast::TypeRef::Primitive(crate::ast::PrimitiveType::String), ..Default::default() });
+        schema.models.push(model);
+        let mut e = crate::ast::EnumDef::new("CycleStatus");
+        for v in ["Open", "Closed"] {
+            e.variants.push(crate::ast::EnumVariant { name: v.into(), ..Default::default() });
+        }
+        schema.enums.push(e);
+        let found = enum_literal_mismatches(&schema, root);
+        assert_eq!(
+            found,
+            [
+                "src/application/service/cycle_service.rs:1 uses 'cancelled' for appraisal_cycles.status, which CycleStatus does not have (open, closed)",
+                "src/application/service/cycle_service.rs:5 uses 'archived' for appraisal_cycles.status, which CycleStatus does not have (open, closed)",
+                "src/application/service/cycle_service.rs:8 uses 'Closed' for appraisal_cycles.status, which CycleStatus does not have (open, closed)",
+                "src/application/service/cycle_service.rs:10 uses 'draft' for appraisal_cycles.status, which CycleStatus does not have (open, closed)",
+            ],
+            "{found:#?}"
+        );
     }
 
     #[test]
