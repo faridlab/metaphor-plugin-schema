@@ -382,7 +382,7 @@ fn trigger_condition(trigger: &EventTrigger) -> String {
         EventTrigger::Create => "matches!(change, Change::Created { .. })".into(),
         EventTrigger::Update => "matches!(change, Change::Updated { .. } | Change::Transitioned { .. })".into(),
         EventTrigger::UpdateField(field) => format!(
-            "(matches!(change, Change::Updated {{ .. }} | Change::Transitioned {{ .. }}) && change.field_changed({field:?}))"
+            "matches!(change, Change::Updated {{ .. }} | Change::Transitioned {{ .. }}) && change.field_changed({field:?})"
         ),
         EventTrigger::Delete => "matches!(change, Change::Deleted { hard: false, .. })".into(),
         EventTrigger::Transition(verb) => {
@@ -500,7 +500,14 @@ pub fn model_write_hooks(
         let fires = if triggers.len() == 1 {
             triggers[0].clone()
         } else {
-            format!("({})", triggers.join(" || "))
+            format!(
+                "({})",
+                triggers
+                    .iter()
+                    .map(|t| format!("({t})"))
+                    .collect::<Vec<_>>()
+                    .join(" || ")
+            )
         };
         let when = match condition {
             Some(c) => format!("{fires} && r::holds(&{})", c.rust),
@@ -610,7 +617,7 @@ mod tests {
             "if matches!(change, Change::Created { .. }) {",
             "payload_from_row(row, &[\"id\", \"title\", \"amount\"])",
             "write.stage(payload.record_for(&aggregate_id, company, write)).await?;",
-            "(matches!(change, Change::Transitioned { transition, .. } if transition == \"close\") || (matches!(change, Change::Updated { .. } | Change::Transitioned { .. }) && change.field_changed(\"priority\")))",
+            "((matches!(change, Change::Transitioned { transition, .. } if transition == \"close\")) || (matches!(change, Change::Updated { .. } | Change::Transitioned { .. }) && change.field_changed(\"priority\")))",
             "r::holds(&r::and(",
             "let old_row = ",
         ] {

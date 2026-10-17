@@ -1242,6 +1242,8 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         }
 
         writeln!(output, "        .with_state(service)").unwrap();
+        // A verb's write stages its events under the request's correlation id, as the generic routes do.
+        writeln!(output, "        .layer(axum::middleware::from_fn(backbone_core::http::correlation_middleware))").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
