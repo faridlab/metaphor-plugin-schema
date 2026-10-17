@@ -404,7 +404,7 @@ fn output_text(out: &std::process::Output) -> String {
 
 /// Generator probes that need a variant of the fixture: each is generated (not built) on its own
 /// copy, so a variant that breaks generation or compilation cannot take the runtime run down.
-fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, rows: &mut Vec<Row>) {
+fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, main_output: &str, rows: &mut Vec<Row>) {
     // `text` is a documented field type.
     let dir = tempfile::tempdir().unwrap();
     let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
@@ -505,6 +505,29 @@ fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, rows: &mut Vec<R
         diagnosis: String::new(),
     });
 
+    // Declarations nothing runs are said to be declaration-only on generation.
+    let said = |needle: &str| main_output.lines().find(|l| l.contains(needle) && l.contains("declaration-only")).map(|l| one_line(l.trim()));
+    rows.push(gen_row(
+        "D",
+        "Declared events",
+        "generation says the hook file's declared events are declaration-only",
+        said("TicketOpened").is_some(),
+        "generate the fixture (ticket.hook.yaml declares `events: [TicketOpened]`)",
+        "a warning naming TicketOpened as declaration-only",
+        &said("TicketOpened").unwrap_or_else(|| "no such warning".into()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (declaration_only_warnings) and commands/schema/module_loader.rs (declared_events)",
+    ));
+    rows.push(gen_row(
+        "F",
+        "Workflow",
+        "generation says the workflow is declaration-only",
+        said("workflow").is_some(),
+        "generate the fixture (schema/workflows/ticket_escalation.workflow.yaml)",
+        "a warning naming the workflow as declaration-only",
+        &said("workflow").unwrap_or_else(|| "no such warning".into()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (declaration_only_warnings)",
+    ));
+
     // Workflows: declaration-only.
     let hits = grep_tree(&main.join("src"), "TicketEscalation");
     rows.push(Row {
@@ -591,7 +614,7 @@ fn every_backbone_feature_works_at_runtime_through_the_generator() {
     }
     let runtime = rows.clone();
     register_probes(&module, &mut rows, &runtime);
-    variant_probes(&skeleton, &fixture, &module, &mut rows);
+    variant_probes(&skeleton, &fixture, &module, &output_text(&generate), &mut rows);
     rows.sort_by_key(|r| AREAS.iter().position(|(k, _)| *k == r.area).unwrap_or(99));
 
     let header = format!(

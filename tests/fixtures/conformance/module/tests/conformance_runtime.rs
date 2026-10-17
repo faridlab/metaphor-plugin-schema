@@ -998,7 +998,7 @@ async fn area_d(c: &Ctx) {
     let e = log.entries();
     r.check("D", "Lifecycle hooks", "bulk patch fires the update hooks once per item", bp.status == 200 && count(&e, "before_update:") == 2 && count(&e, "after_update:") == 2, &bp.request, "2 before_update, 2 after_update", &format!("{e:?}"), "backbone-core/src/service.rs:882 (bulk_partial_update)");
 
-    c.rec.unsupported("D", "Declared events", "`events:` in a hook file produce publishing code", "nothing is generated: commands/schema/module_loader.rs:315-331 drops them; schema doctor only warns about a declared event no hand code names (commands/schema/events_check.rs); the generic service publishes CrudEvents through the publisher the module attaches, proven above");
+    c.rec.unsupported("D", "Declared events", "`events:` in a hook file produce publishing code", "nothing is generated: generation and schema doctor say the declared events are declaration-only (resolver/validator.rs declaration_only_warnings), and doctor warns about a declared event no hand code names (commands/schema/events_check.rs); the generic service publishes CrudEvents through the publisher the module attaches, proven above");
     c.rec.unsupported("D", "Outbox", "an event staged in the write's transaction (outbox)", "the generic service publishes fire-and-forget after the write, outside its transaction (backbone-core/src/service.rs, `let _ = self.event_publisher.publish(..)`); staging is hand code with backbone_outbox::outbox::stage, which the generator never emits");
 }
 
