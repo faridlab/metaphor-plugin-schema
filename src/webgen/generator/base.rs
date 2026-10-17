@@ -26,6 +26,7 @@ impl Generator {
     /// Run the code generation
     pub fn generate(&self) -> Result<GenerationResult> {
         let mut result = GenerationResult::default();
+        let started = std::time::SystemTime::now();
 
         // Validate output directory exists
         if !self.config.output_dir.exists() {
@@ -98,6 +99,24 @@ impl Generator {
                     self.generate_contracts_layer(&mut result)?;
                 }
             }
+        }
+
+        // A run limited to one entity writes only that entity's files, so every other entity's
+        // would look stale: sweep only after a run over the whole module.
+        if self.config.prune && self.config.entity_filter.is_none() {
+            let module_dir = self.config.output_dir.join(&self.config.module);
+            let written = if self.config.dry_run {
+                &result.dry_run_files
+            } else {
+                &result.files_generated
+            };
+            result.pruned = crate::webgen::prune::prune_stale(
+                &module_dir,
+                written,
+                started,
+                self.config.dry_run,
+            )
+            .map_err(|e| Error::write_error(module_dir.clone(), e))?;
         }
 
         Ok(result)
@@ -1149,6 +1168,8 @@ pub struct GenerationResult {
     pub dry_run_files: Vec<PathBuf>,
     /// Number of files skipped
     pub skipped: usize,
+    /// Stale generated files removed after generation (or that would be, on a dry run)
+    pub pruned: crate::webgen::prune::PruneReport,
 }
 
 impl GenerationResult {

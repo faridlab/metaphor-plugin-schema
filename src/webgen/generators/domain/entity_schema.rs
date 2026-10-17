@@ -33,11 +33,61 @@ impl EntitySchemaGenerator {
         }
     }
 
+    /// The module schema as the Rust generators read it, loaded once.
+    fn module_schema(&self) -> Option<&crate::ast::ModuleSchema> {
+        self.module
+            .get_or_init(|| {
+                let loaded = crate::commands::schema::load_module_schema(&self.config.module, &self.config.schema_dir());
+                if loaded.is_none() {
+                    // Without the module schema there is no rule register, so no field gets the
+                    // service's checks: say so rather than emit forms that check nothing.
+                    eprintln!(
+                        "Warning: could not load the module schema at {}; field checks are left out of the Zod schemas",
+                        self.config.schema_dir().display()
+                    );
+                }
+                loaded
+            })
+            .as_ref()
+    }
+
+    /// The fields `entity`'s create schema leaves out, as the Rust Create DTO does: a create
+    /// cannot set them, and a value a form chose would be silently dropped.
+    fn create_excluded(&self, entity: &EntityDefinition) -> std::collections::HashSet<String> {
+        let Some(schema) = self.module_schema() else { return Default::default() };
+        let Some(model) = schema.models.iter().find(|m| m.name == entity.name) else { return Default::default() };
+        let born = crate::generators::dto::born_values(schema, model);
+        model
+            .fields
+            .iter()
+            .filter(|f| crate::generators::dto::excluded_from_create(f, &born))
+            .map(|f| f.name.clone())
+            .collect()
+    }
+
+    /// The fields `entity`'s update schema leaves out, as the Rust Update and Patch DTOs do.
+    fn update_excluded(&self, entity: &EntityDefinition) -> std::collections::HashSet<String> {
+        let Some(schema) = self.module_schema() else { return Default::default() };
+        let Some(model) = schema.models.iter().find(|m| m.name == entity.name) else { return Default::default() };
+        model
+            .fields
+            .iter()
+            .filter(|f| crate::generators::dto::excluded_from_update(f))
+            .map(|f| f.name.clone())
+            .collect()
+    }
+
+    /// The fields a generic write may not change (the service refuses a new value), as the
+    /// Rust entity lists them.
+    fn write_protected(&self, entity: &EntityDefinition) -> Vec<String> {
+        let Some(schema) = self.module_schema() else { return Vec::new() };
+        let Some(model) = schema.models.iter().find(|m| m.name == entity.name) else { return Vec::new() };
+        model.write_protected_fields().into_iter().map(str::to_string).collect()
+    }
+
     /// The write guard's field checks for `entity`, by field.
     fn guard_checks(&self, entity: &EntityDefinition) -> std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>> {
-        let module = self
-            .module
-            .get_or_init(|| crate::commands::schema::load_module_schema(&self.config.module, &self.config.schema_dir()));
+        let module = self.module_schema();
         let mut by_field: std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>> = Default::default();
         let Some(schema) = module else { return by_field };
         let Some(model) = schema.models.iter().find(|m| m.name == entity.name) else { return by_field };
@@ -47,18 +97,17 @@ impl EntitySchemaGenerator {
         by_field
     }
 
-    /// A field's Zod schema: the write guard's checks where it has them, with its codes and
-    /// messages; the field attributes' own checks otherwise.
+    /// A field's Zod schema: the write guard's checks for it, with their codes and messages. A
+    /// field the guard does not check gets no checks from its attributes either (see
+    /// [`TypeMapper::to_zod_schema`]).
     fn field_zod(
         &self,
         field: &FieldDefinition,
         enums: &[EnumDefinition],
         checks: &std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>>,
     ) -> String {
-        match checks.get(&field.name) {
-            Some(list) if !list.is_empty() => self.type_mapper.to_zod_schema_checked(field, enums, &refinement(list)),
-            _ => self.type_mapper.to_zod_schema(field, enums),
-        }
+        let list = checks.get(&field.name).map(Vec::as_slice).unwrap_or(&[]);
+        self.type_mapper.to_zod_schema(field, enums, list)
     }
 
     /// Generate schema file for a single entity
@@ -109,9 +158,6 @@ impl EntitySchemaGenerator {
         let entity_camel = to_camel_case(&entity.name);
         let _entity_snake = to_snake_case(&entity.name);
 
-        // Check if entity uses IP address fields
-        let uses_ip = self.entity_uses_ip(entity);
-
         // Generate enum schemas
         let enum_schemas = self.generate_enum_schemas(entity, enums);
 
@@ -134,7 +180,22 @@ impl EntitySchemaGenerator {
         // The lifecycle section (state machine + permissions) rides the same
         // file when the hook schema states either.
         let mut lifecycle = self.generate_lifecycle_section(entity, hooks);
-        let moved = state_fields(&self.config.schema_dir(), &entity.name);
+        let protected = self.write_protected(entity);
+        if !protected.is_empty() {
+            let camel = to_camel_case(&entity.name);
+            let list = protected.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+            lifecycle.push_str(&format!(
+                "\n/**\n * The fields a generic write may not change: the service refuses a new value (it accepts\n * one sent unchanged). Set at creation, filled by the service, or moved only by the record's\n * own verbs, so no generic edit offers them.\n */\nexport const {camel}WriteProtectedFields = [{list}] as const;\n"
+            ));
+        }
+        // The same list the Rust entity's `state_fields()` carries, from the same function.
+        let moved = self
+            .module_schema()
+            .and_then(|schema| {
+                let model = schema.models.iter().find(|m| m.name == entity.name)?;
+                Some(crate::rules::compile::model_state_fields(schema, model))
+            })
+            .unwrap_or_default();
         if !moved.is_empty() {
             let camel = to_camel_case(&entity.name);
             let list = moved.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
@@ -142,32 +203,6 @@ impl EntitySchemaGenerator {
                 "\n/**\n * The fields a state machine moves. Only its verbs change them: the service refuses a\n * generic write that does, so no generic edit offers them.\n */\nexport const {camel}StateFields = [{list}] as const;\n"
             ));
         }
-
-        // Generate IP schema if needed
-        let ip_schema = if uses_ip {
-            r#"
-// ============================================================================
-// Common Validation Schemas
-// ============================================================================
-
-/**
- * IP address validation schema (supports both IPv4 and IPv6).
- * Module-local to avoid barrel collisions across entity schema files.
- */
-const ipSchema = z.string().refine(
-  (val) => {
-    // IPv4 regex pattern
-    const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-    // IPv6 regex pattern (simplified)
-    const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
-    return ipv4Pattern.test(val) || ipv6Pattern.test(val);
-  },
-  { message: "Invalid IP address format" }
-);
-"#
-        } else {
-            ""
-        };
 
         format!(
             r#"/**
@@ -179,7 +214,7 @@ const ipSchema = z.string().refine(
  * @module {module}/entity/{entity_pascal}.schema
  */
 
-import {{ z }} from 'zod';{ip_schema}{enum_schemas}
+import {{ z }} from 'zod';{enum_schemas}
 // ============================================================================
 // Base Schema
 // ============================================================================
@@ -218,7 +253,7 @@ export type Create{entity_pascal}Input = z.infer<typeof create{entity_pascal}Sch
  * All fields are optional except id
  */
 export const update{entity_pascal}Schema = z.object({{
-  id: z.string().uuid(),
+  id: {update_id},
 {update_fields}
 }});
 
@@ -307,7 +342,6 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             entity_pascal = entity_pascal,
             entity_camel = entity_camel,
             module = self.config.module,
-            ip_schema = ip_schema,
             enum_schemas = if enum_schemas.is_empty() {
                 String::new()
             } else {
@@ -316,6 +350,7 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             base_fields = base_fields,
             create_fields = create_fields,
             update_fields = update_fields,
+            update_id = format!("z.string().uuid({{ message: {} }})", serde_json::Value::from(super::type_mapping::UUID_MESSAGE)),
             filter_fields = self.generate_filter_field_schemas(entity, enums),
             relation_targets = self.generate_relation_targets(entity),
             hook_validations = hook_validations,
@@ -377,22 +412,6 @@ const {name_camel}Schema = z.enum({name}Values);
         })
     }
 
-    /// Check if entity has any IP address fields
-    fn entity_uses_ip(&self, entity: &EntityDefinition) -> bool {
-        entity.fields.iter().any(|f| {
-            matches!(&f.type_name, FieldType::Ip)
-                || matches!(&f.type_name, FieldType::Optional(inner) if {
-                    matches!(inner.as_ref(), FieldType::Ip)
-                })
-                || matches!(&f.type_name, FieldType::Array(inner) if {
-                    matches!(inner.as_ref(), FieldType::Ip) ||
-                    matches!(inner.as_ref(), FieldType::Optional(opt_inner) if {
-                        matches!(opt_inner.as_ref(), FieldType::Ip)
-                    })
-                })
-        })
-    }
-
     /// Generate base field schemas (all fields)
     fn generate_base_field_schemas(
         &self,
@@ -424,10 +443,11 @@ const {name_camel}Schema = z.enum({name}Values);
     ) -> String {
         let mut fields = Vec::new();
         let checks = self.guard_checks(entity);
+        let excluded = self.create_excluded(entity);
 
         for field in &entity.fields {
-            // Skip auto-generated fields
-            if self.is_auto_generated_field(field) {
+            // Skip auto-generated fields, and those the service's create leaves out
+            if self.is_auto_generated_field(field) || excluded.contains(&field.name) {
                 continue;
             }
 
@@ -446,10 +466,12 @@ const {name_camel}Schema = z.enum({name}Values);
     ) -> String {
         let mut fields = Vec::new();
         let checks = self.guard_checks(entity);
+        let excluded = self.update_excluded(entity);
 
         for field in &entity.fields {
-            // Skip id (handled separately) and auto-generated timestamp fields
-            if field.name == "id" || self.is_timestamp_field(field) {
+            // Skip id (handled separately), auto-generated timestamp fields, and those the
+            // service's update leaves out
+            if field.name == "id" || self.is_timestamp_field(field) || excluded.contains(&field.name) {
                 continue;
             }
 
@@ -956,60 +978,6 @@ fn describing(field: &FieldDefinition, schema: String) -> String {
 /// barrel merges. The domain generator refuses to emit a module where two
 /// entities claim the same symbol; this list is what that check reads, and the
 /// invariant test below pins it to the template so the two cannot drift.
-/// One `.superRefine` running the write guard's checks of a field, each refusal carrying the
-/// guard's code and values in `params` and its message. A value that is not there skips it, as
-/// the guard passes a null, so the checks sit before `.nullable()`.
-fn refinement(checks: &[crate::rules::fields::BrowserCheck]) -> String {
-    // A text field's maximum stays Zod's own `.max`, with the guard's message: the screens read
-    // it to choose between a line and a text area.
-    let mut out = String::new();
-    for c in checks.iter().filter(|c| c.code == "max_length") {
-        if let Some((_, max)) = c.params.iter().find(|(k, _)| k == "max") {
-            out.push_str(&format!(".max({max}, {{ message: {} }})", serde_json::Value::from(c.message.as_str())));
-        }
-    }
-    let mut body = String::new();
-    for c in checks.iter().filter(|c| c.test != "v != null" && c.code != "max_length") {
-        let mut params = serde_json::Map::new();
-        params.insert("code".into(), serde_json::Value::from(c.code.as_str()));
-        for (k, v) in &c.params {
-            params.insert(k.clone(), v.clone());
-        }
-        body.push_str(&format!(
-            "    if (!({})) ctx.addIssue({{ code: z.ZodIssueCode.custom, message: {}, params: {} }});\n",
-            c.test,
-            serde_json::Value::from(c.message.as_str()),
-            serde_json::Value::Object(params)
-        ));
-    }
-    if !body.is_empty() {
-        out.push_str(&format!(".superRefine((v, ctx) => {{\n{body}  }})"));
-    }
-    out
-}
-
-/// The fields of `entity` a state machine moves, as the rule register reads the module's hook
-/// files under `schema_dir`: every hook format, the same reading the service's write guard uses.
-pub fn state_fields(schema_dir: &std::path::Path, entity: &str) -> Vec<String> {
-    let mut register = crate::rules::RuleRegister::default();
-    for e in walkdir::WalkDir::new(schema_dir.join("hooks")).sort_by_file_name().into_iter().flatten() {
-        let path = e.path();
-        if !path.extension().is_some_and(|x| x == "yaml" || x == "yml") {
-            continue;
-        }
-        if let Ok(text) = fs::read_to_string(path) {
-            register.read_file(&path.file_name().unwrap_or_default().to_string_lossy(), &text);
-        }
-    }
-    let names = |m: &crate::rules::DeclaredMachine| {
-        std::iter::once(&m.target).chain(m.alternatives.iter()).any(|n| n.eq_ignore_ascii_case(entity))
-    };
-    let mut fields: Vec<String> = register.machines.iter().filter(|m| names(m)).map(|m| m.field.clone()).collect();
-    fields.sort();
-    fields.dedup();
-    fields
-}
-
 pub fn schema_file_symbols(entity: &EntityDefinition, hooks: Option<&HookSchema>) -> Vec<String> {
     let has_hook = hooks.is_some();
     let pascal = to_pascal_case(&entity.name);
@@ -1409,6 +1377,70 @@ mod tests {
                 "missing in: {body}"
             );
         }
+    }
+
+    /// The schema of a module on disk, and its first entity as the webapp parser reads it.
+    fn module_on_disk(models_yaml: &str) -> (tempfile::TempDir, Config, EntityDefinition, Vec<EnumDefinition>) {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models");
+        fs::create_dir_all(&models).unwrap();
+        let file = models.join("period.model.yaml");
+        fs::write(&file, models_yaml).unwrap();
+        let config = Config::new("test_module")
+            .with_output_dir(dir.path())
+            .with_schema_dir(Some(dir.path().to_path_buf()))
+            .with_dry_run(true);
+        let parsed = crate::webgen::parser::ModelParser::parse_file(&file).unwrap();
+        let entity = parsed.models[0].clone();
+        (dir, config, entity, parsed.enums)
+    }
+
+    const PERIOD: &str = "models:\n  - name: Period\n    collection: periods\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\", \"@default(uuid)\"]\n      name:\n        type: string\n        attributes: [\"@required\", \"@max(80)\"]\n      note:\n        type: string?\n        attributes: [\"@max(120)\"]\n      opened_on:\n        type: date\n      total_debits:\n        type: decimal\n        attributes: [\"@default(0)\", \"@non_negative\"]\n        lifecycle:\n          shape: projection\n      journal_count:\n        type: int\n        attributes: [\"@default(0)\", \"@non_negative\"]\n        lifecycle:\n          shape: projection\n      lines:\n        type: int\n        attributes: [\"@non_negative\"]\n      code:\n        type: string\n        attributes: [\"@immutable\", \"@max(20)\"]\n      checksum:\n        type: string?\n        attributes: [\"@exclude_from_dto\"]\n";
+
+    #[test]
+    fn a_field_the_service_fills_gets_no_check_and_no_field_falls_back_to_uncoded_wording() {
+        let (_dir, config, entity, enums) = module_on_disk(PERIOD);
+        let generator = EntitySchemaGenerator::new(config, TypeMapper::new());
+        let content = generator.generate_schema_content(&entity, &enums, None);
+        // The legacy attribute wording is gone from every field, whichever way it is written.
+        let fields = content.split("ListQuerySchema").next().unwrap();
+        for legacy in ["Must be", ".nonnegative(", ".positive(", ".int()", ".uuid()", ".date()", "ipSchema"] {
+            assert!(!fields.contains(legacy), "`{legacy}` in:\n{fields}");
+        }
+        // A projection the service fills: no browser check at all.
+        assert!(content.contains("  total_debits: z.number().default(0),"), "{content}");
+        assert!(content.contains("  journal_count: z.number().superRefine((v, ctx) => {\n    if (!(Number.isInteger(v))) ctx.addIssue("), "{content}");
+        let journal_count = content.split("  journal_count: ").nth(1).unwrap().split("\n  lines:").next().unwrap();
+        assert!(!journal_count.contains("non_negative"), "a projection carries no guard check: {journal_count}");
+        // A field the guard checks gets the guard's code and message.
+        assert!(content.contains("message: \"This field must not be negative\", params: {\"code\":\"non_negative\"}"), "{content}");
+        assert!(content.contains("name: z.string().max(80, { message: \"This field must be at most 80 characters\" }).superRefine("), "{content}");
+        assert!(content.contains("note: z.string().max(120, { message: \"This field must be at most 120 characters\" }).nullable().optional()"), "{content}");
+        crate::webgen::generators::domain::type_mapping::tests::assert_every_message_coded(&content);
+    }
+
+    /// The create and update schemas offer exactly the fields the service's Create and Update
+    /// DTOs take: a value a form chose for any other field would be dropped without a word.
+    #[test]
+    fn the_write_schemas_offer_what_the_service_dtos_take() {
+        let (_dir, config, entity, enums) = module_on_disk(PERIOD);
+        let generator = EntitySchemaGenerator::new(config, TypeMapper::new());
+        let create = generator.generate_create_field_schemas(&entity, &enums);
+        let update = generator.generate_update_field_schemas(&entity, &enums);
+        let has = |body: &str, f: &str| body.lines().any(|l| l.starts_with(&format!("  {f}: ")));
+        // A projection the module fills starts at its default: no create sets it.
+        assert!(!has(&create, "total_debits") && !has(&create, "journal_count"), "{create}");
+        // Excluded from every write DTO.
+        assert!(!has(&create, "checksum") && !has(&update, "checksum"), "{create}\n{update}");
+        // Immutable: set at creation, never by an update.
+        assert!(has(&create, "code") && !has(&update, "code"), "{create}\n{update}");
+        assert!(has(&create, "name") && has(&update, "name"));
+        // The fields a generic write may not change are listed for the screens.
+        let content = generator.generate_schema_content(&entity, &enums, None);
+        assert!(
+            content.contains("export const periodWriteProtectedFields = [\"total_debits\", \"journal_count\", \"code\"] as const;"),
+            "{content}"
+        );
     }
 
     #[test]

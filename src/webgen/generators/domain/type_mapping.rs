@@ -5,7 +5,45 @@
 //! - Zod validation schemas
 //! - Default values
 
-use crate::webgen::ast::entity::{EnumDefinition, FieldAttribute, FieldDefinition, FieldType};
+use crate::rules::fields::BrowserCheck;
+use crate::webgen::ast::entity::{EnumDefinition, FieldDefinition, FieldType};
+
+/// The service's wording for a value that is not a UUID (its `invalid_uuid` check).
+pub const UUID_MESSAGE: &str = "This field must be a valid UUID";
+/// The wording for a value that is not an ISO date and time.
+pub const DATETIME_MESSAGE: &str = "This field must be a date and time";
+/// The wording for a value that is not an ISO calendar date.
+pub const DATE_MESSAGE: &str = "This field must be a date";
+
+/// `s` as a double-quoted JavaScript string literal.
+fn js_str(s: &str) -> String {
+    serde_json::Value::from(s).to_string()
+}
+
+/// One `.superRefine` running `checks` over a value that is there, each refusal carrying its
+/// code and values in `params` and its message. A null never reaches it: the refinement sits
+/// before `.nullable()`, as the service passes a null to every check but `required`.
+pub fn super_refine(checks: &[BrowserCheck]) -> String {
+    let mut body = String::new();
+    for c in checks {
+        let mut params = serde_json::Map::new();
+        params.insert("code".into(), serde_json::Value::from(c.code.as_str()));
+        for (k, v) in &c.params {
+            params.insert(k.clone(), v.clone());
+        }
+        body.push_str(&format!(
+            "    if (!({})) ctx.addIssue({{ code: z.ZodIssueCode.custom, message: {}, params: {} }});\n",
+            c.test,
+            js_str(&c.message),
+            serde_json::Value::Object(params)
+        ));
+    }
+    if body.is_empty() {
+        String::new()
+    } else {
+        format!(".superRefine((v, ctx) => {{\n{body}  }})")
+    }
+}
 
 /// Type mapper for Schema → TypeScript/Zod conversion
 #[derive(Debug, Clone)]
@@ -118,27 +156,35 @@ impl TypeMapper {
         }
     }
 
-    /// Convert a schema field type to Zod schema
-    pub fn to_zod_schema(&self, field: &FieldDefinition, enums: &[EnumDefinition]) -> String {
-        let base_schema = Self::base_zod_schema(&field.type_name, enums);
-        let validations = self.zod_validations(field, &[]);
-        self.finish(field, format!("{}{}", base_schema, validations))
-    }
-
-    /// The attribute checks the service's write guard owns: with the guard's own checks in
-    /// place, Zod's versions of them would only say the same thing in other words.
-    const GUARD_OWNED: &'static [&'static str] = &[
-        "min", "max", "length", "range", "positive", "non_negative", "nonnegative", "pattern", "regex", "alpha_dash",
-        "alpha_num", "values",
-    ];
-
-    /// [`Self::to_zod_schema`] with the service's checks in place of the attributes' own:
-    /// `refine` is a `.superRefine(..)` built from the rule register, and the attribute checks
-    /// it covers, Zod's email and url checks among them, are left out.
-    pub fn to_zod_schema_checked(&self, field: &FieldDefinition, enums: &[EnumDefinition], refine: &str) -> String {
-        let base_schema = Self::base_zod_schema(&field.type_name, enums).replace(".email()", "").replace(".url()", "");
-        let validations = self.zod_validations(field, Self::GUARD_OWNED);
-        self.finish(field, format!("{}{}{}", base_schema, validations, refine))
+    /// A field's Zod schema, with a code on every refusal it can make.
+    ///
+    /// - `checks` are the service's own checks for the field (the write guard's, read from the
+    ///   rule register). They run in one `.superRefine`, each refusal carrying the guard's code
+    ///   and values in `params` and the guard's message.
+    /// - The type's own shape checks that a refinement can carry (a whole number, a time of
+    ///   day, an IP address) join that `.superRefine`, coded the same way.
+    /// - The shape checks screens read off the schema stay Zod's own, with the service's
+    ///   wording: `.uuid()`, `.date()`, `.datetime()`, `z.enum` and a text field's `.max` (the
+    ///   screens choose a line or a text area by it). Zod 3 takes no `params` on these, so their
+    ///   code is read off the issue itself by `shared/validation`.
+    ///
+    /// The field's attributes add no checks of their own: the browser refuses what the service
+    /// refuses and nothing more. A field the service fills, or that no write supplies, has no
+    /// guard check and so carries only its type; a check the browser enforced there would block
+    /// a form over a value the person cannot change.
+    pub fn to_zod_schema(&self, field: &FieldDefinition, enums: &[EnumDefinition], checks: &[BrowserCheck]) -> String {
+        let (mut schema, mut refusals) = Self::base_zod(&field.type_name, enums, &field.name);
+        if Self::is_text(&field.type_name) {
+            schema.push_str(&Self::transforms(field));
+            if let Some((max, message)) = Self::text_max(field, checks) {
+                schema.push_str(&format!(".max({max}, {{ message: {} }})", js_str(&message)));
+            }
+        }
+        // A required check over a nullable non-text value is the type's own: the base schema
+        // already refuses a missing value.
+        refusals.extend(checks.iter().filter(|c| c.code != "max_length" && c.test != "v != null").cloned());
+        schema.push_str(&super_refine(&refusals));
+        self.finish(field, schema)
     }
 
     /// Optionality and the default, after the checks.
@@ -163,188 +209,114 @@ impl TypeMapper {
         schema
     }
 
-    /// Get base Zod schema for a field type
-    fn base_zod_schema(field_type: &FieldType, enums: &[EnumDefinition]) -> String {
+    /// Whether a field holds text the way the service's checks count it: the types its
+    /// length checks apply to, and whose Zod schema is a plain `z.string()` underneath.
+    fn is_text(field_type: &FieldType) -> bool {
         match field_type {
-            FieldType::String | FieldType::Text => "z.string()".to_string(),
-            FieldType::Int => "z.number().int()".to_string(),
-            FieldType::Float | FieldType::Decimal => "z.number()".to_string(),
-            FieldType::Bool => "z.boolean()".to_string(),
-            FieldType::Uuid => "z.string().uuid()".to_string(),
-            FieldType::DateTime => "z.string().datetime()".to_string(),
-            FieldType::Date => "z.string().date()".to_string(),
-            FieldType::Time => "z.string().time()".to_string(),
-            FieldType::Email => "z.string().email()".to_string(),
-            FieldType::Phone => "z.string()".to_string(),
-            FieldType::Url => "z.string().url()".to_string(),
-            FieldType::Json => "z.record(z.unknown())".to_string(),
-            FieldType::Ip => "ipSchema".to_string(), // IP address validation
-            FieldType::Enum(name) => {
+            FieldType::Optional(inner) => Self::is_text(inner),
+            FieldType::String
+            | FieldType::Text
+            | FieldType::Email
+            | FieldType::Phone
+            | FieldType::Url
+            | FieldType::Uuid
+            | FieldType::Ip => true,
+            _ => false,
+        }
+    }
+
+    /// The value rewrites a field declares (`@trim`, `@lowercase`, `@uppercase`). They change
+    /// what is sent and never refuse, so they carry no code.
+    fn transforms(field: &FieldDefinition) -> String {
+        field
+            .attributes
+            .iter()
+            .filter_map(|a| match a.name.as_str() {
+                "trim" => Some(".trim()"),
+                "lowercase" => Some(".toLowerCase()"),
+                "uppercase" => Some(".toUpperCase()"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A text field's maximum length and its message. The service's own check gives both. A
+    /// field it does not check (filled by the service, or written by no form) still declares
+    /// its column's size, which no stored value exceeds, so the maximum is kept for the screens
+    /// that read it; a field whose checks are kept in shadow (`@shadow`) holds longer values,
+    /// so it gets none.
+    fn text_max(field: &FieldDefinition, checks: &[BrowserCheck]) -> Option<(String, String)> {
+        if let Some(c) = checks.iter().find(|c| c.code == "max_length") {
+            let max = c.params.iter().find(|(k, _)| k == "max")?.1.to_string();
+            return Some((max, c.message.clone()));
+        }
+        if field.attributes.iter().any(|a| a.name == "shadow") {
+            return None;
+        }
+        let declared = field.attributes.iter().find_map(|a| match a.name.as_str() {
+            "max" => a.first_arg().and_then(|v| v.trim().parse::<u64>().ok()),
+            "length" => a.args.iter().find_map(|v| v.strip_prefix("max=").and_then(|n| n.trim().parse::<u64>().ok())),
+            _ => None,
+        })?;
+        Some((declared.to_string(), format!("This field must be at most {declared} characters")))
+    }
+
+    /// A type's Zod schema and the shape checks it needs beyond Zod's own (run in the field's
+    /// `.superRefine`, coded). The Zod checks kept here carry the service's wording.
+    fn base_zod(field_type: &FieldType, enums: &[EnumDefinition], field: &str) -> (String, Vec<BrowserCheck>) {
+        let check = |code: &str, message: &str, test: &str| BrowserCheck {
+            field: field.to_string(),
+            code: code.to_string(),
+            message: message.to_string(),
+            params: Vec::new(),
+            test: test.to_string(),
+        };
+        let plain = |s: &str| (s.to_string(), Vec::new());
+        match field_type {
+            FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone | FieldType::Url => plain("z.string()"),
+            FieldType::Int => ("z.number()".to_string(), vec![check("integer", "This field must be a whole number", "Number.isInteger(v)")]),
+            FieldType::Float | FieldType::Decimal => plain("z.number()"),
+            FieldType::Bool => plain("z.boolean()"),
+            FieldType::Uuid => (format!("z.string().uuid({{ message: {} }})", js_str(UUID_MESSAGE)), Vec::new()),
+            FieldType::DateTime => (format!("z.string().datetime({{ message: {} }})", js_str(DATETIME_MESSAGE)), Vec::new()),
+            FieldType::Date => (format!("z.string().date({})", js_str(DATE_MESSAGE)), Vec::new()),
+            FieldType::Time => (
+                "z.string()".to_string(),
+                vec![check("invalid_time", "This field must be a time of day", r#"/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?$/.test(v)"#)],
+            ),
+            FieldType::Json => plain("z.record(z.unknown())"),
+            FieldType::Ip => (
+                "z.string()".to_string(),
+                vec![check(
+                    "invalid_ip",
+                    "This field must be an IP address",
+                    r#"/^(\d{1,3}\.){3}\d{1,3}$/.test(v) || /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/.test(v)"#,
+                )],
+            ),
+            FieldType::Enum(name) | FieldType::Custom(name) => {
                 if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
-                    let variants: Vec<String> = enum_def
-                        .variants
-                        .iter()
-                        .map(|v| format!("'{}'", v.name))
-                        .collect();
-                    format!("z.enum([{}])", variants.join(", "))
-                } else {
-                    format!("{}Schema", name)
-                }
-            }
-            FieldType::Custom(name) => {
-                // Check if it's an enum
-                if let Some(enum_def) = enums.iter().find(|e| &e.name == name) {
-                    let variants: Vec<String> = enum_def
-                        .variants
-                        .iter()
-                        .map(|v| format!("'{}'", v.name))
-                        .collect();
-                    format!("z.enum([{}])", variants.join(", "))
+                    let variants: Vec<String> = enum_def.variants.iter().map(|v| format!("'{}'", v.name)).collect();
+                    let names: Vec<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
+                    let message = format!("This field must be one of {}", names.join(", "));
+                    (format!("z.enum([{}], {{ message: {} }})", variants.join(", "), js_str(&message)), Vec::new())
+                } else if matches!(field_type, FieldType::Enum(_)) {
+                    (format!("{}Schema", name), Vec::new())
                 } else if Self::is_freeform_custom(name) {
                     // Free-form framework types (e.g. Metadata) → permissive record
-                    "z.record(z.unknown())".to_string()
+                    plain("z.record(z.unknown())")
                 } else if Self::is_numeric_scalar(name) {
-                    "z.number()".to_string()
+                    plain("z.number()")
                 } else {
                     // Assume it's another entity reference
-                    format!("{}Schema", name)
+                    (format!("{}Schema", name), Vec::new())
                 }
             }
             FieldType::Array(inner) => {
-                format!("z.array({})", Self::base_zod_schema(inner, enums))
+                // An element's own checks run on each element, inside the array.
+                let (element, checks) = Self::base_zod(inner, enums, field);
+                (format!("z.array({}{})", element, super_refine(&checks)), Vec::new())
             }
-            FieldType::Optional(inner) => Self::base_zod_schema(inner, enums),
-        }
-    }
-
-    /// Generate Zod validation chains from field attributes
-    fn zod_validations(&self, field: &FieldDefinition, skip: &[&str]) -> String {
-        let mut validations = Vec::new();
-
-        for attr in field.attributes.iter().filter(|a| !skip.contains(&a.name.as_str())) {
-            if let Some(validation) = self.attribute_to_zod_validation(attr, &field.type_name) {
-                validations.push(validation);
-            }
-        }
-
-        validations.join("")
-    }
-
-    /// Convert a single attribute to Zod validation
-    fn attribute_to_zod_validation(
-        &self,
-        attr: &FieldAttribute,
-        field_type: &FieldType,
-    ) -> Option<String> {
-        match attr.name.as_str() {
-            "min" => {
-                let arg = attr.first_arg()?;
-                let is_string = matches!(
-                    field_type,
-                    FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone | FieldType::Url | FieldType::Ip
-                );
-                if is_string {
-                    Some(format!(".min({}, {{ message: 'Must be at least {} characters' }})", arg, arg))
-                } else {
-                    Some(format!(".min({}, {{ message: 'Must be at least {}' }})", arg, arg))
-                }
-            }
-            "max" => {
-                let arg = attr.first_arg()?;
-                let is_string = matches!(
-                    field_type,
-                    FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone | FieldType::Url | FieldType::Ip
-                );
-                if is_string {
-                    Some(format!(".max({}, {{ message: 'Must be at most {} characters' }})", arg, arg))
-                } else {
-                    Some(format!(".max({}, {{ message: 'Must be at most {}' }})", arg, arg))
-                }
-            }
-            "length" => {
-                // `@length(N)` is an exact-length constraint, but schemas also
-                // use the kwarg form — `@length(max=N)` / `@length(min=N)` —
-                // which bounds the length instead of pinning it. Map kwargs
-                // onto the respective zod bounds; only a bare numeric argument
-                // keeps the exact-length check.
-                let bounds: Vec<String> = attr
-                    .args
-                    .iter()
-                    .filter_map(|arg| {
-                        if let Some(n) = arg.strip_prefix("max=") {
-                            Some(format!(
-                                ".max({}, {{ message: 'Must be at most {} characters' }})",
-                                n, n
-                            ))
-                        } else if let Some(n) = arg.strip_prefix("min=") {
-                            Some(format!(
-                                ".min({}, {{ message: 'Must be at least {} characters' }})",
-                                n, n
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !bounds.is_empty() {
-                    return Some(bounds.join(""));
-                }
-                let arg = attr.first_arg()?;
-                Some(format!(".length({}, {{ message: 'Must be exactly {} characters' }})", arg, arg))
-            }
-            "pattern" | "regex" => {
-                let pattern = attr.first_arg()?;
-                Some(format!(".regex(/{}/)", pattern))
-            }
-            "alpha_dash" => {
-                Some(".regex(/^[a-zA-Z0-9_-]+$/, { message: 'Only alphanumeric, underscore, and hyphen allowed' })".to_string())
-            }
-            "alpha_num" => {
-                Some(".regex(/^[a-zA-Z0-9]+$/, { message: 'Only alphanumeric characters allowed' })".to_string())
-            }
-            "positive" => {
-                Some(".positive({ message: 'Must be a positive number' })".to_string())
-            }
-            "negative" => {
-                Some(".negative({ message: 'Must be a negative number' })".to_string())
-            }
-            "non_negative" | "nonnegative" => {
-                Some(".nonnegative({ message: 'Must be zero or positive' })".to_string())
-            }
-            "non_positive" | "nonpositive" => {
-                Some(".nonpositive({ message: 'Must be zero or negative' })".to_string())
-            }
-            "integer" | "int" => {
-                Some(".int({ message: 'Must be an integer' })".to_string())
-            }
-            "finite" => {
-                Some(".finite({ message: 'Must be a finite number' })".to_string())
-            }
-            "safe" => {
-                Some(".safe({ message: 'Must be a safe integer' })".to_string())
-            }
-            "trim" => {
-                Some(".trim()".to_string())
-            }
-            "lowercase" => {
-                Some(".toLowerCase()".to_string())
-            }
-            "uppercase" => {
-                Some(".toUpperCase()".to_string())
-            }
-            "includes" => {
-                let arg = attr.first_arg()?;
-                Some(format!(".includes('{}', {{ message: \"Must include '{}'\" }})", arg, arg))
-            }
-            "starts_with" | "startsWith" => {
-                let arg = attr.first_arg()?;
-                Some(format!(".startsWith('{}', {{ message: \"Must start with '{}'\" }})", arg, arg))
-            }
-            "ends_with" | "endsWith" => {
-                let arg = attr.first_arg()?;
-                Some(format!(".endsWith('{}', {{ message: \"Must end with '{}'\" }})", arg, arg))
-            }
-            _ => None,
+            FieldType::Optional(inner) => Self::base_zod(inner, enums, field),
         }
     }
 
@@ -548,8 +520,9 @@ impl ValueObjectType {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::webgen::ast::entity::FieldAttribute;
 
     #[test]
     fn test_typescript_type_mapping() {
@@ -575,46 +548,117 @@ mod tests {
         assert_eq!(mapper.to_typescript_type(&FieldType::Uuid, false), "string");
     }
 
-    #[test]
-    fn test_length_attribute_kwarg_bounds() {
-        let mapper = TypeMapper::new();
+    fn field(name: &str, type_name: FieldType, attrs: &[(&str, &[&str])], optional: bool) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            type_name,
+            attributes: attrs
+                .iter()
+                .map(|(n, args)| FieldAttribute::new(*n, args.iter().map(|a| a.to_string()).collect()))
+                .collect(),
+            description: None,
+            optional,
+            default_value: None,
+        }
+    }
 
-        // Kwarg form bounds the length instead of pinning it.
-        let attr = FieldAttribute::new("length", vec!["max=255".to_string()]);
-        assert_eq!(
-            mapper.attribute_to_zod_validation(&attr, &FieldType::String),
-            Some(".max(255, { message: 'Must be at most 255 characters' })".to_string())
-        );
-        let attr = FieldAttribute::new("length", vec!["min=2".to_string()]);
-        assert_eq!(
-            mapper.attribute_to_zod_validation(&attr, &FieldType::String),
-            Some(".min(2, { message: 'Must be at least 2 characters' })".to_string())
-        );
-
-        // A bare numeric argument keeps the exact-length check.
-        let attr = FieldAttribute::new("length", vec!["16".to_string()]);
-        assert_eq!(
-            mapper.attribute_to_zod_validation(&attr, &FieldType::String),
-            Some(".length(16, { message: 'Must be exactly 16 characters' })".to_string())
-        );
+    /// Every message a schema carries is either in a coded refinement or on one of the Zod
+    /// checks `shared/validation` reads a code off.
+    pub(crate) fn assert_every_message_coded(schema: &str) {
+        let native = regex::Regex::new(r"(\.uuid\(\{ |\.datetime\(\{ |\.max\(\d+, \{ |\], \{ )$").unwrap();
+        for (idx, _) in schema.match_indices("message:") {
+            let after = &schema[idx..];
+            let end = after.find("});").or_else(|| after.find("})")).unwrap_or(after.len());
+            let coded = after[..end].contains("params: {\"code\":");
+            assert!(coded || native.is_match(&schema[..idx]), "uncoded message at {idx} in: {schema}");
+        }
     }
 
     #[test]
-    fn test_zod_schema_mapping() {
+    fn a_field_the_service_does_not_check_gets_no_attribute_check() {
         let mapper = TypeMapper::new();
-        let enums: Vec<EnumDefinition> = vec![];
+        // A service-filled total: `@non_negative`, but no guard check, so no browser check.
+        let total = field("total_debits", FieldType::Decimal, &[("non_negative", &[]), ("positive", &[])], false);
+        assert_eq!(mapper.to_zod_schema(&total, &[], &[]), "z.number()");
+        let email = field("email", FieldType::Email, &[], false);
+        assert_eq!(mapper.to_zod_schema(&email, &[], &[]), "z.string()");
+    }
 
-        let field = FieldDefinition {
-            name: "email".to_string(),
-            type_name: FieldType::Email,
-            attributes: vec![],
-            description: None,
-            optional: false,
-            default_value: None,
-        };
+    #[test]
+    fn an_optional_text_field_counts_its_maximum_in_characters() {
+        let mapper = TypeMapper::new();
+        let note = field("note", FieldType::Optional(Box::new(FieldType::String)), &[("max", &["120"])], true);
+        assert_eq!(
+            mapper.to_zod_schema(&note, &[], &[]),
+            "z.string().max(120, { message: \"This field must be at most 120 characters\" }).nullable().optional()"
+        );
+        let label = field("label", FieldType::String, &[("length", &["max=255"])], false);
+        assert_eq!(
+            mapper.to_zod_schema(&label, &[], &[]),
+            "z.string().max(255, { message: \"This field must be at most 255 characters\" })"
+        );
+        // A field whose checks are shadowed holds longer values: no maximum.
+        let shadowed = field("memo", FieldType::String, &[("max", &["10"]), ("shadow", &["widen later"])], false);
+        assert_eq!(mapper.to_zod_schema(&shadowed, &[], &[]), "z.string()");
+        // A number's maximum is not a length, and with no guard check there is none.
+        let qty = field("qty", FieldType::Optional(Box::new(FieldType::Int)), &[("max", &["5"])], true);
+        assert!(!mapper.to_zod_schema(&qty, &[], &[]).contains(".max("));
+    }
 
-        let schema = mapper.to_zod_schema(&field, &enums);
-        assert!(schema.contains("z.string().email()"));
+    #[test]
+    fn every_type_check_carries_a_code() {
+        let mapper = TypeMapper::new();
+        let variant = |n: &str| crate::webgen::ast::entity::EnumVariant { name: n.to_string(), description: None, is_default: false };
+        let enums = vec![EnumDefinition { name: "Stage".to_string(), variants: vec![variant("draft"), variant("posted")] }];
+        let cases = [
+            (field("qty", FieldType::Int, &[], false), "params: {\"code\":\"integer\"}"),
+            (field("at", FieldType::Time, &[], false), "params: {\"code\":\"invalid_time\"}"),
+            (field("ip", FieldType::Ip, &[], false), "params: {\"code\":\"invalid_ip\"}"),
+            (field("ref_id", FieldType::Uuid, &[], false), ".uuid({ message: \"This field must be a valid UUID\" })"),
+            (field("on", FieldType::Date, &[], false), ".date(\"This field must be a date\")"),
+            (field("ts", FieldType::DateTime, &[], false), ".datetime({ message: \"This field must be a date and time\" })"),
+            (
+                field("stage", FieldType::Enum("Stage".into()), &[], false),
+                "z.enum(['draft', 'posted'], { message: \"This field must be one of draft, posted\" })",
+            ),
+            (field("ids", FieldType::Array(Box::new(FieldType::Int)), &[], false), "z.array(z.number().superRefine("),
+        ];
+        for (f, expected) in cases {
+            let schema = mapper.to_zod_schema(&f, &enums, &[]);
+            assert!(schema.contains(expected), "{} → {schema}", f.name);
+            assert!(!schema.contains(".uuid()") && !schema.contains(".int(") && !schema.contains(".time("), "{schema}");
+            assert_every_message_coded(&schema);
+        }
+    }
+
+    #[test]
+    fn the_guard_checks_run_coded_and_the_text_maximum_stays_zods() {
+        let mapper = TypeMapper::new();
+        let name = field("name", FieldType::String, &[("required", &[]), ("max", &["80"])], false);
+        let checks = vec![
+            BrowserCheck {
+                field: "name".into(),
+                code: "required".into(),
+                message: "This field is required".into(),
+                params: vec![],
+                test: "v != null && String(v).trim() !== \"\"".into(),
+            },
+            BrowserCheck {
+                field: "name".into(),
+                code: "max_length".into(),
+                message: "This field must be at most 80 characters".into(),
+                params: vec![("max".into(), serde_json::Value::from(80))],
+                test: "[...String(v)].length <= 80".into(),
+            },
+        ];
+        let schema = mapper.to_zod_schema(&name, &[], &checks);
+        assert!(
+            schema.starts_with("z.string().max(80, { message: \"This field must be at most 80 characters\" }).superRefine("),
+            "{schema}"
+        );
+        assert!(schema.contains("params: {\"code\":\"required\"}"), "{schema}");
+        assert!(!schema.contains("\"max_length\""), "the maximum is Zod's own, not repeated in the refinement: {schema}");
+        assert_every_message_coded(&schema);
     }
 
     #[test]

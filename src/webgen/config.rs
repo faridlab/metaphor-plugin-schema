@@ -3,16 +3,28 @@
 use crate::webgen::{Error, Result};
 use std::path::{Path, PathBuf};
 
-/// Read a module's declared schema name from its schema index
+/// The module segment a module's REST routes mount under, read from its schema index
 /// (`<schema_dir>/models/index.model.yaml`).
 ///
-/// The index stamps two fields with the module's short name at module
-/// creation: `module:` (the logical module name) and `schema:` (the Postgres
-/// schema the module owns). Both hold the same short name by convention
-/// (e.g. `sapiens`, `bucket`, `catalog`); `module:` is preferred and
-/// `schema:` is the fallback. Returns `None` when the index is missing,
-/// unreadable, or declares neither field.
+/// The index stamps two names: `module:` (the logical module name) and `schema:` (the Postgres
+/// schema the module owns). Routes mount under the schema, as the OpenAPI document says (see
+/// [`crate::generators::openapi::mount_segment`]), and the two names differ in places
+/// (`module: assets`, `schema: asset`; `module: payment-gateway`, `schema: payment_gateway`),
+/// so the schema wins. `module:` is the fallback for an index whose schema is missing, empty or
+/// `public`. Returns `None` when the index is missing, unreadable, or declares neither.
 pub(crate) fn read_schema_module_name(schema_dir: &Path) -> Option<String> {
+    let (module, schema) = read_index_names(schema_dir)?;
+    crate::generators::openapi::mount_segment(schema.as_deref())
+        .map(str::to_string)
+        .or_else(|| {
+            module
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+        })
+}
+
+/// The `module:` and `schema:` names of a module's schema index, as written.
+pub(crate) fn read_index_names(schema_dir: &Path) -> Option<(Option<String>, Option<String>)> {
     #[derive(serde::Deserialize)]
     struct IndexHeader {
         module: Option<String>,
@@ -21,12 +33,7 @@ pub(crate) fn read_schema_module_name(schema_dir: &Path) -> Option<String> {
     let path = schema_dir.join("models/index.model.yaml");
     let content = std::fs::read_to_string(path).ok()?;
     let header: IndexHeader = serde_yaml::from_str(&content).ok()?;
-    let name = header.module.or(header.schema)?.trim().to_string();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    Some((header.module, header.schema))
 }
 
 /// Code generation target
@@ -209,6 +216,10 @@ pub struct Config {
 
     /// Force overwrite existing files
     pub force: bool,
+
+    /// Remove the generated files of this module that the run did not write (on by default;
+    /// see [`crate::webgen::prune`]).
+    pub prune: bool,
 }
 
 impl Config {
@@ -228,6 +239,7 @@ impl Config {
             api_root: false,
             dry_run: false,
             force: false,
+            prune: true,
         }
     }
 
@@ -303,6 +315,12 @@ impl Config {
         self
     }
 
+    /// Set whether stale generated files are removed after generation
+    pub fn with_prune(mut self, prune: bool) -> Self {
+        self.prune = prune;
+        self
+    }
+
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         if self.module.is_empty() {
@@ -345,9 +363,9 @@ impl Config {
     /// A module is addressed on the CLI by its crate/project key (e.g.
     /// `backbone_sapiens`, because hyphenated project names must be passed
     /// with underscores), but REST routes are namespaced by the module's
-    /// **schema name** — the short name declared in the schema index
-    /// (`<schema>/models/index.model.yaml`, `module:`/`schema:` fields, e.g.
-    /// `sapiens`). This resolves the segment from that index, so a generation
+    /// **Postgres schema name** declared in the schema index
+    /// (`<schema>/models/index.model.yaml`, its `schema:` field, falling back to
+    /// `module:`; e.g. `sapiens`). This resolves the segment from that index, so a generation
     /// invoked as `backbone_sapiens` still emits clients for
     /// `/api/v1/sapiens/{collection}`. When no index declares a name the
     /// configured module name is used as-is.
@@ -422,6 +440,37 @@ mod tests {
         // Schema dir absent entirely (derived default path that doesn't exist).
         let config = Config::new("backbone_catalog");
         assert_eq!(config.url_segment(), "backbone_catalog");
+    }
+
+    #[test]
+    fn url_segment_follows_the_schema_routes_mount_under() {
+        // Where the logical name and the Postgres schema differ, the service mounts by the
+        // schema; a client built on the module name calls a path nothing serves.
+        for (index, expected) in [
+            ("module: assets\nschema: asset\n", "asset"),
+            (
+                "module: payment-gateway\nschema: payment_gateway\n",
+                "payment_gateway",
+            ),
+            // No usable schema: the module name is the only name there is.
+            ("module: orders\nschema: \"\"\n", "orders"),
+            ("module: orders\nschema: public\n", "orders"),
+        ] {
+            let dir = temp_schema_dir(Some(index));
+            let config = Config::new("backbone_x").with_schema_dir(Some(dir.clone()));
+            assert_eq!(config.url_segment(), expected, "{index}");
+            std::fs::remove_dir_all(dir).ok();
+        }
+        // The same rule the OpenAPI document mounts its paths by.
+        assert_eq!(
+            crate::generators::openapi::mount_segment(Some("asset")),
+            Some("asset")
+        );
+        assert_eq!(crate::generators::openapi::mount_segment(Some("")), None);
+        assert_eq!(
+            crate::generators::openapi::mount_segment(Some("public")),
+            None
+        );
     }
 
     #[test]

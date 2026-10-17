@@ -244,6 +244,12 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         anyhow::bail!("{} route(s) name their parameters in the wrong axum syntax", routes.len());
     }
 
+    // An index whose module name and schema disagree: advisory, since routes and generated
+    // clients both mount under the schema, but anything built on the module name misses them.
+    if let Some(warning) = index_name_mismatch(&schema_path) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
+
     // Writes that bind an optional acting unit and lean on the fill trigger: advisory.
     for warning in super::events_check::optional_unit_binds(&consumer_root) {
         println!("  {} {warning}", "!".yellow().bold());
@@ -411,6 +417,29 @@ pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
     builder.build().context("compile user_owned glob set")
 }
 
+/// A schema index whose `module:` and `schema:` name different route segments. The service
+/// mounts a module's routes under its Postgres schema, so the module name is not a path: a
+/// client, script or document that builds one from it calls a route nothing serves.
+fn index_name_mismatch(schema_path: &Path) -> Option<String> {
+    let candidates = [
+        Some(schema_path.to_path_buf()),
+        schema_path.parent().map(Path::to_path_buf),
+        Some(schema_path.join("schema")),
+    ];
+    let dir = candidates
+        .into_iter()
+        .flatten()
+        .find(|d| d.join("models/index.model.yaml").is_file())?;
+    let (module, schema) = crate::webgen::config::read_index_names(&dir)?;
+    let module = module?.trim().to_string();
+    let segment = crate::generators::openapi::mount_segment(schema.as_deref())?;
+    (module != segment).then(|| {
+        format!(
+            "models/index.model.yaml declares module `{module}` but schema `{segment}`: routes mount at /api/v1/{segment}, not /api/v1/{module}; align the two names, or never build a path from the module name"
+        )
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 enum DriftReason {
     HandlerDisabled,
@@ -435,5 +464,33 @@ pub(super) fn locate_consumer_root(start: &Path) -> Option<PathBuf> {
         if !cur.pop() {
             return None;
         }
+    }
+}
+
+#[cfg(test)]
+mod index_name_tests {
+    use super::*;
+
+    fn index(body: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("models")).unwrap();
+        fs::write(dir.path().join("models/index.model.yaml"), body).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_index_whose_names_change_the_path_is_flagged() {
+        let dir = index("module: assets\nschema: asset\n");
+        let warning = index_name_mismatch(dir.path()).expect("flagged");
+        assert!(warning.contains("/api/v1/asset"), "{warning}");
+        let dir = index("module: payment-gateway\nschema: payment_gateway\n");
+        assert!(index_name_mismatch(&dir.path().join("models")).is_some(), "found from the models dir too");
+    }
+
+    #[test]
+    fn agreeing_names_or_no_schema_are_not_flagged() {
+        assert!(index_name_mismatch(index("module: sapiens\nschema: sapiens\n").path()).is_none());
+        assert!(index_name_mismatch(index("module: orders\nschema: \"\"\n").path()).is_none());
+        assert!(index_name_mismatch(index("schema: bucket\n").path()).is_none());
     }
 }

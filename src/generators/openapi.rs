@@ -20,6 +20,15 @@ pub struct OpenApiGenerator {
     split: bool,
 }
 
+/// The module segment a Postgres schema's routes mount under (`/api/v1/<segment>/...`): the
+/// schema's own name, or none for `public` or a missing or empty schema. Every generator that
+/// writes a route path or a client base path reads it from here, so the two cannot disagree.
+pub fn mount_segment(schema: Option<&str>) -> Option<&str> {
+    schema
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "public")
+}
+
 /// The URL path a model's routes are actually mounted under.
 ///
 /// Routes mount beneath their Postgres schema name — `/api/v1/organization/companies`,
@@ -29,11 +38,7 @@ pub struct OpenApiGenerator {
 ///
 /// A model in `public` keeps the bare path: it has no module segment to mount under.
 fn mounted_base_path(model: &Model, model_plural: &str) -> String {
-    match model
-        .schema
-        .as_deref()
-        .filter(|s| !s.is_empty() && *s != "public")
-    {
+    match mount_segment(model.schema.as_deref()) {
         Some(schema) => format!("/api/v1/{}/{}", schema, model_plural),
         None => format!("/api/v1/{}", model_plural),
     }

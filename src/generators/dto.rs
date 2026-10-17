@@ -212,7 +212,7 @@ impl DtoGenerator {
         for field in &model.fields {
             // Skip auto-generated fields and fields excluded from write DTOs, and the fields only
             // an entity's own operations set: a create cannot choose them.
-            if self.is_auto_field(&field.name) || self.is_excluded_from_dto(field) || born.contains_key(&field.name) {
+            if excluded_from_create(field, born) {
                 continue;
             }
 
@@ -277,10 +277,7 @@ impl DtoGenerator {
         writeln!(output, "pub struct Update{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            if self.is_auto_field(&field.name)
-                || field.has_attribute("immutable")
-                || self.is_excluded_from_dto(field)
-            {
+            if excluded_from_update(field) {
                 continue;
             }
 
@@ -340,10 +337,7 @@ impl DtoGenerator {
         writeln!(output, "pub struct Patch{}Dto {{", model.name).unwrap();
 
         for field in &model.fields {
-            if self.is_auto_field(&field.name)
-                || field.has_attribute("immutable")
-                || self.is_excluded_from_dto(field)
-            {
+            if excluded_from_update(field) {
                 continue;
             }
 
@@ -841,10 +835,7 @@ impl DtoGenerator {
     // Helper methods
 
     fn is_auto_field(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "id" | "created_at" | "updated_at" | "deleted_at" | "metadata"
-        )
+        is_auto_field(name)
     }
 
     /// Fields marked `@exclude_from_dto` (synonyms: `@readonly`, `@no_input`) are omitted from
@@ -852,9 +843,7 @@ impl DtoGenerator {
     /// must be driven by a write service or DB default. Stronger than `@immutable` (which only
     /// excludes from Update/Patch, keeping Create).
     fn is_excluded_from_dto(&self, field: &Field) -> bool {
-        field.has_attribute("exclude_from_dto")
-            || field.has_attribute("readonly")
-            || field.has_attribute("no_input")
+        is_excluded_from_dto(field)
     }
 
     /// Check if a type reference needs a specific primitive type
@@ -1214,6 +1203,30 @@ impl Generator for DtoGenerator {
     fn name(&self) -> &'static str {
         "dto"
     }
+}
+
+/// Columns the server fills on every write, absent from every write DTO.
+fn is_auto_field(name: &str) -> bool {
+    matches!(name, "id" | "created_at" | "updated_at" | "deleted_at" | "metadata")
+}
+
+/// Fields marked `@exclude_from_dto` (or `@readonly`, `@no_input`): absent from every write DTO.
+fn is_excluded_from_dto(field: &Field) -> bool {
+    field.has_attribute("exclude_from_dto") || field.has_attribute("readonly") || field.has_attribute("no_input")
+}
+
+/// Whether `field` is left out of the Create DTO: a server-filled column, a field excluded from
+/// write DTOs, or one only the entity's own operations set (`born`, from [`born_values`]). The
+/// webapp's create schema reads the same rule, so a form never offers what the service drops.
+pub(crate) fn excluded_from_create(field: &Field, born: &std::collections::HashMap<String, String>) -> bool {
+    is_auto_field(&field.name) || is_excluded_from_dto(field) || born.contains_key(&field.name)
+}
+
+/// Whether `field` is left out of the Update and Patch DTOs: a server-filled column, an
+/// `@immutable` field, or one excluded from write DTOs. The webapp's update schema reads the same
+/// rule.
+pub(crate) fn excluded_from_update(field: &Field) -> bool {
+    is_auto_field(&field.name) || field.has_attribute("immutable") || is_excluded_from_dto(field)
 }
 
 /// The fields of `model` a generic create may not set, each with the Rust value a new record

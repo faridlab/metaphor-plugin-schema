@@ -260,5 +260,11 @@ pub enum Commands {
         /// Force overwrite existing files
         #[arg(short, long)]
         force: bool,
+
+        /// Keep the generated files of entities the schema no longer declares. By default they
+        /// are removed after each module is generated; only files carrying the generator's mark
+        /// are ever removed.
+        #[arg(long)]
+        no_prune: bool,
     },
 }

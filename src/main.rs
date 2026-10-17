@@ -113,6 +113,7 @@ fn main() -> Result<()> {
             with_grpc,
             dry_run,
             force,
+            no_prune,
         } => {
             webapp::run(
                 module.as_deref(),
@@ -124,6 +125,7 @@ fn main() -> Result<()> {
                 with_grpc,
                 dry_run,
                 force,
+                !no_prune,
             )?;
         }
     }

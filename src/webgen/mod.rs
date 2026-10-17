@@ -11,6 +11,7 @@ pub mod error;
 pub mod generator;
 pub mod generators;
 pub mod parser;
+pub mod prune;
 pub mod templates;
 
 // Re-exports
