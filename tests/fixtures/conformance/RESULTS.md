@@ -5,21 +5,21 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.35.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 86s
+- Generation: 2s; whole run: 35s
 
 ## Summary
 
 | Area | PASS | FAIL | UNSUPPORTED |
 |---|---|---|---|
 | A. Generic routes | 57 | 0 | 1 |
-| B. Validation | 40 | 2 | 0 |
-| C. Custom validation | 14 | 1 | 0 |
+| B. Validation | 42 | 0 | 0 |
+| C. Custom validation | 15 | 0 | 0 |
 | D. Hooks and events | 12 | 0 | 3 |
 | E. State machine | 20 | 0 | 0 |
 | F. Extension | 12 | 0 | 1 |
-| G. Scoping | 33 | 1 | 0 |
+| G. Scoping | 33 | 0 | 1 |
 | H. Debuggability | 20 | 0 | 0 |
-| **Total** | **208** | **4** | **5** |
+| **Total** | **211** | **0** | **6** |
 
 ## Matrix
 
@@ -118,11 +118,11 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | B | Lifecycle hand_set | an entity with a hand_set field mounts no generic create (405) | PASS |
 | B | DB constraints | a dangling foreign key answers 422 reference_missing on project_id | PASS |
 | B | DB constraints | permanently deleting a referenced row answers 422 still_referenced | PASS |
-| B | DB constraints | a duplicate @unique value answers 422 naming contact_email, without the raw index name | FAIL |
+| B | DB constraints | a duplicate @unique value answers 422 naming contact_email, without the raw index name | PASS |
 | B | DB constraints | a duplicate composite unique (project_id, title) answers 422 with a field path, without the raw index name | PASS |
 | B | DB constraints | PATCH nulling a NOT NULL column answers 422 required on its path | PASS |
 | B | DB constraints | a CHECK from @non_negative refuses a raw write and maps to non_negative on budget | PASS |
-| B | DB constraints | a CHECK from a declared rule refuses a raw write and maps to its code, on the path the guard reports (kind) | FAIL |
+| B | DB constraints | a CHECK from a declared rule refuses a raw write and maps to its code, on the path the guard reports (kind) | PASS |
 | B | DB constraints | a CHECK from @required refuses a blank title and maps to required | PASS |
 | B | Field types | a `text?` field maps to Option<String> | PASS |
 | C | Declared rule | declared row rule refuses: amount over budget_cap answers 422 over_budget | PASS |
@@ -130,7 +130,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | C | Declared rule | declared row rule refuses on update too | PASS |
 | C | Declared rule | declared row rule refuses: a discount without a reason answers 422 discount_reason_required | PASS |
 | C | Declared rule | declared row rule refuses: a client project without a website answers 422 website_required_for_client | PASS |
-| C | Declared uniqueness | declared uniqueness rule refuses a duplicate code in the company: 422 code_taken on path code | FAIL |
+| C | Declared uniqueness | declared uniqueness rule refuses a duplicate code in the company: 422 code_taken on path code | PASS |
 | C | Declared uniqueness | declared uniqueness rule is per company: the same code in another company is accepted | PASS |
 | C | Declared uniqueness | declared uniqueness rule ignores soft-deleted rows (its filter) | PASS |
 | C | Shadow rule | shadow rule lets the write through | PASS |
@@ -199,8 +199,8 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | G | Write fence | delete: B's DELETE of A's project answers 404 | PASS |
 | G | Write fence | bulk: B's bulk patch and bulk delete of A's ids change nothing | PASS |
 | G | Write fence | bulk: B's bulk permanent delete of A's id removes nothing | PASS |
-| G | Read fence | include=: B cannot read A's project through a relation | PASS |
-| G | Write fence | B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides) | FAIL |
+| G | Write fence | B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides) | PASS |
+| G | Read fence | include=: B cannot read A's project through a relation | UNSUPPORTED |
 | G | Read fence | aggregate: B's aggregate sees none of A's rows | PASS |
 | G | Read fence | count: B's count of A's code is 0 | PASS |
 | G | Read fence | an OR-filter attempt (?code[or]=…) cannot widen past the fence | PASS |
@@ -243,40 +243,13 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | H | Schema doctor | `schema doctor .` accepts the freshly generated module with its extension files | PASS |
 | H | Diagnostics | a hook file with an `assert:` rule (no message) beside its `states:` generates, or names the offending rule | PASS |
 
-## Failures (4)
+## Failures (0)
 
-### X1 — B / DB constraints / a duplicate @unique value answers 422 naming contact_email, without the raw index name
-
-- **Request:** POST /projects {"code":"P698F10","companyId":"e0487331-26cf-4e58-840c-652bf1c96b0b","contactEmail":"u0edf2e@example.com","name":"Project D5BA45"}
-- **Expected:** 422, violation path contact_email, no index name in the body
-- **Got:** 422 {"success":false,"error":"repository error: validation failed: This value is already taken by another record","violations":[{"path":"","code":"unique","message":"This value is already taken by another record"}]}
-- **Diagnosis:** the index is uq_projects_contact_email__unique (generators/sql.rs unique_index_name); Postgres reports no key on a table with RLS, so backbone-core/src/persistence/traits.rs must read the path out of the name (convention: generators/sql.rs constraint_name)
-
-### X2 — B / DB constraints / a CHECK from a declared rule refuses a raw write and maps to its code, on the path the guard reports (kind)
-
-- **Request:** UPDATE conformance.projects SET kind = 'client', website = NULL
-- **Expected:** Violation {path: kind, code: website_required_for_client}, no ck_ name in the message
-- **Got:** Violations([Violation { path: "", code: "website_required_for_client", params: {}, message: "The record does not satisfy one of its rules" }])
-- **Diagnosis:** a row rule's CHECK is ck_<table>_<field>__<code> (generators/sql.rs constraint_name); backbone-core/src/persistence/traits.rs check_column must read that form as well as a field check's ck_<table>_<field>_<code>__<code>
-
-### X3 — C / Declared uniqueness / declared uniqueness rule refuses a duplicate code in the company: 422 code_taken on path code
-
-- **Request:** POST /projects {"code":"QBD1DA7","companyId":"e0487331-26cf-4e58-840c-652bf1c96b0b","name":"Unique two"}
-- **Expected:** 422 {path: code, code: code_taken}
-- **Got:** 422 {"success":false,"error":"repository error: validation failed: This value is already taken by another record","violations":[{"path":"","code":"code_taken","message":"This value is already taken by another record"}]}
-- **Diagnosis:** the index is uq_projects_company_id_code__code_taken (generators/sql.rs unique_index_name); Postgres omits the DETAIL key on a table with RLS, so backbone-core/src/persistence/traits.rs must read the path out of the name, stripping the leading tenant keys
-
-### X4 — G / Write fence / B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides)
-
-- **Request:** POST /tickets {"orgUnitId":"5da79861-a4b0-4c53-a209-1d98589286bd","projectId":"bd1251f5-d347-4861-8e08-a82410ade541","title":"B ticket on A project"}
-- **Expected:** refused (422 reference_missing)
-- **Got:** 201 {"success":true,"data":{"amount":"0","archiveReason":null,"budgetCap":null,"discount":null,"discountReason":null,"dueOn":null,"id":"d18f4f31-cb13-4b20-9e5f-be9a17272514","metadata":{"created_at":"2026-10-17T18:40:17.973474Z","updated_at":"2026-10-17T18:40:17.973474Z"},"note":null,"orgUnitId":"5da79861-a4b0-4c53-a209-1d98589286bd","projectId":"bd1251f5-d347-4861-8e08-a82410ade541","reference":"…
-- **Diagnosis:** Postgres referential checks bypass RLS, and nothing in the generated guard checks the referenced row is visible (rules/fields.rs; generators/sql.rs add_declared_foreign_keys): a scoped writer can probe for and reference another company's ids
-
-## Unsupported (5)
+## Unsupported (6)
 
 - **A / History / row history of an `audited: true` model** — needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither
 - **D / Declared events / `events:` in a hook file produce publishing code** — nothing is generated: generation and schema doctor say the declared events are declaration-only (resolver/validator.rs declaration_only_warnings), and doctor warns about a declared event no hand code names (commands/schema/events_check.rs); the generic service publishes CrudEvents through the publisher the module attaches, proven above
 - **D / Outbox / an event staged in the write's transaction (outbox)** — the generic service publishes fire-and-forget after the write, outside its transaction (backbone-core/src/service.rs, `let _ = self.event_publisher.publish(..)`); staging is hand code with backbone_outbox::outbox::stage, which the generator never emits
 - **D / Schema lifecycle hooks / before/after create/update/delete declared as hook `triggers:` produce runtime hooks** — generation fails —   Error: Validation error: Hook 'Ticket' declares trigger 'after_create' with 1 action(s); hook triggers are not generated, so nothing runs them: move the behaviour into the service and declare the events it publishes under `events:` \\| Error: Schema validation failed with 1 error(s); the trigger target is retired (generators/mod.rs:621) and resolver/validator.rs:1916 refuses t…
 - **F / Workflow / schema/workflows/ticket_escalation.workflow.yaml does something at runtime** — declaration-only: it is parsed and validated (resolver/validator.rs:55) and no generated file mentions it; the flow target is retired (generators/mod.rs:621) — the hand-written escalate route is the executable flow (proven in F)
+- **G / Read fence / include=: B cannot read A's project through a relation** — not reachable: B could not create a ticket referencing A's project
