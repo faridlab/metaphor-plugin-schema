@@ -1160,3 +1160,22 @@ models:
         .unwrap();
     assert!(!model.has_attribute("audited"));
 }
+
+/// A map-format hook with a mistake in a rule is diagnosed as that mistake, naming the rule, the
+/// missing key and the line, not read by the list parser as a hook with no rules and no states
+/// (which surfaced later as "State machine ... has no states").
+#[test]
+fn a_broken_map_format_hook_names_its_own_mistake() {
+    let yaml = "name: Ticket\nmodel: Ticket\n\nstates:\n  field: status\n  values:\n    open:\n      initial: true\n    done:\n      final: true\n  transitions:\n    finish:\n      from: open\n      to: done\n\nrules:\n  tone:\n    when: [create]\n    assert: \"the title reads well\"\n    code: title_tone\n";
+    let err = format!("{:#}", parse_hook_yaml_flexible(yaml).expect_err("a rule without condition and message is refused"));
+    assert!(err.contains("rules.tone"), "names the rule: {err}");
+    assert!(err.contains("missing field `condition`"), "names the missing key: {err}");
+    assert!(err.contains("line 18"), "names the line: {err}");
+    assert!(!err.contains("no states"), "{err}");
+    let located = crate::parser::parse_yaml_hook_flexible(yaml).err().and_then(|e| e.location());
+    assert_eq!(located.map(|(line, _)| line), Some(18), "the excerpt points at the rule");
+
+    // The list format still reads.
+    let list = "model: Ticket\nrules:\n  - name: tone\n    when: [create]\n    assert: \"the title reads well\"\n";
+    assert!(matches!(parse_hook_yaml_flexible(list), Ok(YamlHookParseResult::Hook(_))));
+}

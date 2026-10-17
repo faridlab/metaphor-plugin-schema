@@ -18,6 +18,10 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   repository or SQL, or a verb moving a state field, is unaffected.
 - The `text` field type the module docs list is accepted as a string with no length cap (`String`,
   `TEXT`, a TypeScript string) instead of failing validation as an unknown type.
+- A map-format hook file with a mistake in it (a rule missing `condition` or `message`) is reported
+  as that mistake, with the rule, the key and the line, instead of being read by the list-format
+  parser as a hook with no rules and no states and failing later with "State machine ... has no
+  states".
 
 ## [0.35.0] - 2026-10-17
 

@@ -155,7 +155,15 @@ pub fn parse_hook_yaml_flexible(content: &str) -> Result<YamlHookParseResult> {
     // Try parsing as standard hook (map-based format with name: field)
     match parse_hook_yaml_str(content) {
         Ok(hook) => Ok(YamlHookParseResult::Hook(hook)),
-        Err(_) => {
+        Err(map_err) => {
+            // A file written in the map format (rules keyed by name, states keyed by name) is a
+            // map-format hook with a mistake in it. The list parser would accept it all the same,
+            // reading none of its map-format rules or states, and the mistake would surface later
+            // as something unrelated ("State machine ... has no states"). Quote the map parser's
+            // own error instead: it names the key and the line.
+            if index_err.is_none() && is_map_format_hook(content) {
+                anyhow::bail!("Failed to parse hook YAML: {}", map_error_text(&map_err));
+            }
             // Standard parsing failed — try list-based format (model: X, rules as sequence).
             // Never when the file already declared itself an index: the list parser
             // also accepts `module:`, so it would match such a file and return an
@@ -174,11 +182,35 @@ pub fn parse_hook_yaml_flexible(content: &str) -> Result<YamlHookParseResult> {
                 // The file declared itself an index — quote the real parse error.
                 anyhow::bail!("Failed to parse hook index YAML: {e:#}")
             } else {
-                // Return a descriptive error
-                anyhow::bail!("Failed to parse hook YAML: not a valid hook (map or list format) or index file")
+                // Neither format reads it: the map parser's error is the one that says where.
+                anyhow::bail!(
+                    "Failed to parse hook YAML: not a valid hook (map or list format) or index file; as a map-format hook: {}",
+                    map_error_text(&map_err)
+                )
             }
         }
     }
+}
+
+/// Whether `content` is written in the map format: `rules:` keyed by rule name, or `states:`
+/// whose `values:` are keyed by state name. The list format writes both as sequences.
+fn is_map_format_hook(content: &str) -> bool {
+    use serde_yaml::Value;
+    let Ok(Value::Mapping(top)) = serde_yaml::from_str::<Value>(&strip_yaml_comments(content)) else {
+        return false;
+    };
+    let rules_by_name = matches!(top.get(Value::String("rules".into())), Some(Value::Mapping(_)));
+    let states_by_name = matches!(
+        top.get(Value::String("states".into())).and_then(|s| s.get("values")),
+        Some(Value::Mapping(_))
+    );
+    rules_by_name || states_by_name
+}
+
+/// The map parser's error with its cause: serde's own message names the key and the line
+/// and column (`rules.tidy: missing field `message` at line 40 column 5`).
+fn map_error_text(e: &anyhow::Error) -> String {
+    e.chain().last().map(|c| c.to_string()).unwrap_or_else(|| e.to_string())
 }
 
 /// Convert a `states:` mapping from list-format hook YAML into a `YamlStateMachine`.

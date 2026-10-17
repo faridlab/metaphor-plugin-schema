@@ -295,10 +295,11 @@ pub enum ModelParseResult {
 pub fn parse_yaml_hook_flexible(source: &str) -> Result<HookParseResult, ParseError> {
     use yaml_parser::YamlHookParseResult;
 
-    let result = parse_hook_yaml_flexible(source).map_err(|e| ParseError::SyntaxError {
-        line: 1,
-        col: 1,
-        message: e.to_string(),
+    let result = parse_hook_yaml_flexible(source).map_err(|e| {
+        let message = e.to_string();
+        // serde's message ends `at line L column C`: point the source excerpt there.
+        let (line, col) = yaml_error_location(&message).unwrap_or((1, 1));
+        ParseError::SyntaxError { line, col, message }
     })?;
 
     match result {
@@ -310,6 +311,15 @@ pub fn parse_yaml_hook_flexible(source: &str) -> Result<HookParseResult, ParseEr
             Ok(HookParseResult::Index(Box::new(index_schema)))
         }
     }
+}
+
+/// The `line L column C` a YAML error message ends with.
+fn yaml_error_location(message: &str) -> Option<(usize, usize)> {
+    let at = message.rfind(" at line ")?;
+    let mut words = message[at + " at line ".len()..].split_whitespace();
+    let line = words.next()?.parse().ok()?;
+    let col = (words.next()? == "column").then(|| words.next())??.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok()?;
+    Some((line, col))
 }
 
 /// Parse a model YAML file that might be either standard model or index file
