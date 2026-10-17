@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-17
+
 ### Fixed
 
 - A Create DTO fills a non-optional field the request leaves out from its literal `@default`
