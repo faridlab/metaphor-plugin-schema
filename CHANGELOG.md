@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-18
+
 ### Fixed
 
 - `@email` and `@url` on a string field check the value as the `email` and `url` types do, with
