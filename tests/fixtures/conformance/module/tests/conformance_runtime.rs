@@ -837,12 +837,12 @@ async fn area_b(c: &Ctx) {
     let u1 = c.project(ta, c.org.company_a, json!({ "contactEmail": mail })).await;
     let u2 = c.project(ta, c.org.company_a, json!({ "contactEmail": mail })).await;
     let raw_leak = u2.raw.contains("idx_projects") || u2.raw.contains("duplicate key");
-    r.check("B", "DB constraints", "a duplicate @unique value answers 422 naming contact_email, without the raw index name", u1.status == 201 && u2.status == 422 && u2.violations().iter().any(|v| v["path"] == json!("contact_email")) && !raw_leak, &u2.request, "422, violation path contact_email, no index name in the body", &u2.got(), "metaphor-plugin-schema/src/generators/sql.rs:1063 names the @unique index idx_<table>_<field>; backbone-core/src/persistence/traits.rs:125/194 maps only uq_* names, so any other 23505 becomes AlreadyExists(raw pg message) → 409 with the constraint name");
+    r.check("B", "DB constraints", "a duplicate @unique value answers 422 naming contact_email, without the raw index name", u1.status == 201 && u2.status == 422 && u2.violations().iter().any(|v| v["path"] == json!("contact_email")) && !raw_leak, &u2.request, "422, violation path contact_email, no index name in the body", &u2.got(), "the index is uq_projects_contact_email__unique (generators/sql.rs unique_index_name); Postgres reports no key on a table with RLS, so backbone-core/src/persistence/traits.rs must read the path out of the name (convention: generators/sql.rs constraint_name)");
     let title = format!("Same title {}", uniq(""));
     let c1 = c.ticket(ta, c.org.company_a, &parent, json!({ "title": title })).await;
     let c2 = c.ticket(ta, c.org.company_a, &parent, json!({ "title": title })).await;
     let raw_leak = c2.raw.contains("idx_tickets") || c2.raw.contains("duplicate key");
-    r.check("B", "DB constraints", "a duplicate composite unique (project_id, title) answers 422 with a field path, without the raw index name", c1.status == 201 && c2.status == 422 && !c2.violations().is_empty() && !raw_leak, &c2.request, "422 with a violation, no index name in the body", &c2.got(), "metaphor-plugin-schema/src/generators/sql.rs:1501 names `indexes: unique` idx_<table>_<cols>; backbone-core/src/persistence/traits.rs:125/194 maps only uq_* names → 409 AlreadyExists with the raw message");
+    r.check("B", "DB constraints", "a duplicate composite unique (project_id, title) answers 422 with a field path, without the raw index name", c1.status == 201 && c2.status == 422 && !c2.violations().is_empty() && !raw_leak, &c2.request, "422 with a violation, no index name in the body", &c2.got(), "the index is uq_tickets_title__unique (generators/sql.rs unique_index_name); backbone-core/src/persistence/traits.rs reads the code from it and the path from the DETAIL or the name");
 
     let nn = app.patch(&format!("/tickets/{}", c1.id()), ta, json!({ "title": null })).await;
     r.check("B", "DB constraints", "PATCH nulling a NOT NULL column answers 422 required on its path", nn.status == 422 && nn.violation("title", "required"), &nn.request, "422 {path: title, code: required}", &nn.got(), "backbone-core/src/service.rs:1034 merge_patch / persistence/traits.rs (23502)");
@@ -875,7 +875,7 @@ async fn area_b(c: &Ctx) {
                     ),
                     _ => (false, rendered.clone()),
                 };
-                r.check("B", "DB constraints", what, ok, sql, &format!("Violation {{path: {path}, code: {code}}}, no ck_ name in the message"), &got, "backbone-core/src/persistence/traits.rs:250 check_column reads the field out of `ck_<table>_<field>_<code>__<code>`; a hook rule's constraint is named after the rule (`ck_<table>_<rule>__<code>`, generators/sql.rs:2955), so its path comes back empty while the guard reports the rule's first field");
+                r.check("B", "DB constraints", what, ok, sql, &format!("Violation {{path: {path}, code: {code}}}, no ck_ name in the message"), &got, "a row rule's CHECK is ck_<table>_<field>__<code> (generators/sql.rs constraint_name); backbone-core/src/persistence/traits.rs check_column must read that form as well as a field check's ck_<table>_<field>_<code>__<code>");
             }
             Ok(done) => {
                 r.check("B", "DB constraints", what, false, sql, "the database refuses", &format!("{} row(s) updated", done.rows_affected()), "the add_declared_checks migration did not add the constraint");
@@ -908,7 +908,7 @@ async fn area_c(c: &Ctx) {
     let code = uniq("Q");
     let first = app.post("/projects", ta, c.project_body(c.org.company_a, &code, "Unique one")).await;
     let dup = app.post("/projects", ta, c.project_body(c.org.company_a, &code, "Unique two")).await;
-    r.check("C", "Declared uniqueness", "declared uniqueness rule refuses a duplicate code in the company: 422 code_taken on path code", first.status == 201 && dup.status == 422 && dup.violation("code", "code_taken"), &dup.request, "422 {path: code, code: code_taken}", &dup.got(), "backbone-core/src/persistence/traits.rs:194 takes the path from the DETAIL `Key (cols)=`, which Postgres omits for a table with RLS enabled (BuildIndexValueDescription), so a declared uniqueness rule on a fenced table answers path \"\"; the rule's own name carries no field to fall back on");
+    r.check("C", "Declared uniqueness", "declared uniqueness rule refuses a duplicate code in the company: 422 code_taken on path code", first.status == 201 && dup.status == 422 && dup.violation("code", "code_taken"), &dup.request, "422 {path: code, code: code_taken}", &dup.got(), "the index is uq_projects_company_id_code__code_taken (generators/sql.rs unique_index_name); Postgres omits the DETAIL key on a table with RLS, so backbone-core/src/persistence/traits.rs must read the path out of the name, stripping the leading tenant keys");
     let other = app.post("/projects", &c.tb, c.project_body(c.org.company_b, &code, "Other company")).await;
     r.check("C", "Declared uniqueness", "declared uniqueness rule is per company: the same code in another company is accepted", other.status == 201, &other.request, "201", &other.got(), "generators/sql.rs:2414-2445");
     app.delete(&format!("/projects/{}", first.id()), ta).await;
@@ -1017,10 +1017,10 @@ async fn area_e(c: &Ctx) {
     r.check("E", "Transitions", "an allowed transition (start: open → in_progress) answers 200 and moves the state", s.status == 200 && s.data()["status"] == json!("in_progress"), &s.request, "200, status in_progress", &s.got(), H);
     let bad = app.post(&tr("archive"), ta, json!({})).await;
     r.check("E", "Transitions", "a disallowed transition (archive from in_progress) is refused with 4xx", (400..500).contains(&bad.status), &bad.request, "4xx", &bad.got(), H);
-    r.check("E", "Transitions", "a disallowed transition names a stable code", bad.body["violations"].as_array().is_some_and(|v| !v.is_empty()) || bad.body.get("code").is_some(), &bad.request, "a violation or code (e.g. transition_not_allowed)", &bad.got(), "metaphor-plugin-schema/src/generators/handler.rs (the 400 'Transition not allowed from current state' is ApiResponse::error with no code)");
+    r.check("E", "Transitions", "a disallowed transition names a stable code", bad.has_code("transition_not_allowed"), &bad.request, "a transition_not_allowed violation", &bad.got(), "metaphor-plugin-schema/src/generators/handler.rs (the 400 'Transition not allowed from current state' is ApiResponse::error with no code)");
     let g = app.post(&tr("resolve"), ta, json!({})).await;
     r.check("E", "Transition guard", "a transition whose guard does not hold (amount <= 1000) is refused 422", g.status == 422, &g.request, "422", &g.got(), H);
-    r.check("E", "Transition guard", "a refused guard names a stable code", !g.violations().is_empty(), &g.request, "a violation with a code", &g.got(), "metaphor-plugin-schema/src/generators/handler.rs (guard refusal is ApiResponse::error with no code)");
+    r.check("E", "Transition guard", "a refused guard names a stable code", g.has_code("transition_guard_failed"), &g.request, "a transition_guard_failed violation", &g.got(), "metaphor-plugin-schema/src/generators/handler.rs (guard refusal is ApiResponse::error with no code)");
     app.patch(&format!("/tickets/{tid}"), ta, json!({ "amount": 500 })).await;
     let g = app.post(&tr("resolve"), ta, json!({})).await;
     r.check("E", "Transition guard", "the same transition passes once its guard holds", g.status == 200 && g.data()["status"] == json!("resolved"), &g.request, "200, resolved", &g.got(), H);
@@ -1190,7 +1190,7 @@ async fn area_g(c: &Ctx) {
     let ft = c.ticket(ta, c.org.company_b, &aid, json!({ "title": "Forged unit" })).await;
     r.check("G", "Write fence", "a ticket naming another company's org unit is refused and writes nothing", (400..500).contains(&ft.status), &ft.request, "4xx", &ft.got(), "42501 unmapped in backbone-core/src/persistence/traits.rs:108-150");
     let root = c.ticket(ta, c.org.root, &aid, json!({ "title": "Root unit" })).await;
-    r.check("G", "Write fence", "the org kind guard refuses a ticket on the root node with a 4xx naming org_unit_id", (400..500).contains(&root.status) && root.violations().iter().any(|v| v["path"] == json!("org_unit_id")), &root.request, "422 on org_unit_id", &root.got(), "the kind guard (generators/sql.rs:1238, enable_org_fence) raises a plain RAISE EXCEPTION (P0001) with no ERRCODE/CONSTRAINT, which backbone-core/src/persistence/traits.rs:150 cannot map → 500");
+    r.check("G", "Write fence", "the org kind guard refuses a ticket on the root node with a 4xx naming org_unit_id", (400..500).contains(&root.status) && root.violations().iter().any(|v| v["path"] == json!("org_unit_id") && v["code"] == json!("org_kind_refused")), &root.request, "422 org_kind_refused on org_unit_id", &root.got(), "the kind guard (generators/sql.rs org_kind_guard_function_sql) raises check_violation with COLUMN org_unit_id and CONSTRAINT tg_<table>__org_kind_refused; backbone-core/src/persistence/traits.rs maps it");
 
     // tokens
     let other_tenant = OrgIssuer::hs256(SECRET).for_audience("globex").issue_access("admin-a", c.org.company_a, &[], Some(c.org.company_a), Duration::from_secs(3600)).unwrap();

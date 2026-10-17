@@ -5,7 +5,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.35.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 62s
+- Generation: 2s; whole run: 86s
 
 ## Summary
 
@@ -247,30 +247,30 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 ### X1 — B / DB constraints / a duplicate @unique value answers 422 naming contact_email, without the raw index name
 
-- **Request:** POST /projects {"code":"P86E7D9","companyId":"1cf98c86-0ac0-449e-981b-b46f51420772","contactEmail":"u8b1197@example.com","name":"Project 6F02A3"}
+- **Request:** POST /projects {"code":"P698F10","companyId":"e0487331-26cf-4e58-840c-652bf1c96b0b","contactEmail":"u0edf2e@example.com","name":"Project D5BA45"}
 - **Expected:** 422, violation path contact_email, no index name in the body
 - **Got:** 422 {"success":false,"error":"repository error: validation failed: This value is already taken by another record","violations":[{"path":"","code":"unique","message":"This value is already taken by another record"}]}
-- **Diagnosis:** metaphor-plugin-schema/src/generators/sql.rs:1063 names the @unique index idx_<table>_<field>; backbone-core/src/persistence/traits.rs:125/194 maps only uq_* names, so any other 23505 becomes AlreadyExists(raw pg message) → 409 with the constraint name
+- **Diagnosis:** the index is uq_projects_contact_email__unique (generators/sql.rs unique_index_name); Postgres reports no key on a table with RLS, so backbone-core/src/persistence/traits.rs must read the path out of the name (convention: generators/sql.rs constraint_name)
 
 ### X2 — B / DB constraints / a CHECK from a declared rule refuses a raw write and maps to its code, on the path the guard reports (kind)
 
 - **Request:** UPDATE conformance.projects SET kind = 'client', website = NULL
 - **Expected:** Violation {path: kind, code: website_required_for_client}, no ck_ name in the message
 - **Got:** Violations([Violation { path: "", code: "website_required_for_client", params: {}, message: "The record does not satisfy one of its rules" }])
-- **Diagnosis:** backbone-core/src/persistence/traits.rs:250 check_column reads the field out of `ck_<table>_<field>_<code>__<code>`; a hook rule's constraint is named after the rule (`ck_<table>_<rule>__<code>`, generators/sql.rs:2955), so its path comes back empty while the guard reports the rule's first field
+- **Diagnosis:** a row rule's CHECK is ck_<table>_<field>__<code> (generators/sql.rs constraint_name); backbone-core/src/persistence/traits.rs check_column must read that form as well as a field check's ck_<table>_<field>_<code>__<code>
 
 ### X3 — C / Declared uniqueness / declared uniqueness rule refuses a duplicate code in the company: 422 code_taken on path code
 
-- **Request:** POST /projects {"code":"QAC89B7","companyId":"1cf98c86-0ac0-449e-981b-b46f51420772","name":"Unique two"}
+- **Request:** POST /projects {"code":"QBD1DA7","companyId":"e0487331-26cf-4e58-840c-652bf1c96b0b","name":"Unique two"}
 - **Expected:** 422 {path: code, code: code_taken}
 - **Got:** 422 {"success":false,"error":"repository error: validation failed: This value is already taken by another record","violations":[{"path":"","code":"code_taken","message":"This value is already taken by another record"}]}
-- **Diagnosis:** backbone-core/src/persistence/traits.rs:194 takes the path from the DETAIL `Key (cols)=`, which Postgres omits for a table with RLS enabled (BuildIndexValueDescription), so a declared uniqueness rule on a fenced table answers path ""; the rule's own name carries no field to fall back on
+- **Diagnosis:** the index is uq_projects_company_id_code__code_taken (generators/sql.rs unique_index_name); Postgres omits the DETAIL key on a table with RLS, so backbone-core/src/persistence/traits.rs must read the path out of the name, stripping the leading tenant keys
 
 ### X4 — G / Write fence / B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides)
 
-- **Request:** POST /tickets {"orgUnitId":"bb67026c-5912-4899-b973-4ebde87c78e3","projectId":"8de7b436-3335-44e9-9f8d-1a7974074b8d","title":"B ticket on A project"}
+- **Request:** POST /tickets {"orgUnitId":"5da79861-a4b0-4c53-a209-1d98589286bd","projectId":"bd1251f5-d347-4861-8e08-a82410ade541","title":"B ticket on A project"}
 - **Expected:** refused (422 reference_missing)
-- **Got:** 201 {"success":true,"data":{"amount":"0","archiveReason":null,"budgetCap":null,"discount":null,"discountReason":null,"dueOn":null,"id":"8625e43e-704d-4731-955c-c37839a0194b","metadata":{"created_at":"2026-10-17T18:36:13.980349Z","updated_at":"2026-10-17T18:36:13.980349Z"},"note":null,"orgUnitId":"bb67026c-5912-4899-b973-4ebde87c78e3","projectId":"8de7b436-3335-44e9-9f8d-1a7974074b8d","reference":"…
+- **Got:** 201 {"success":true,"data":{"amount":"0","archiveReason":null,"budgetCap":null,"discount":null,"discountReason":null,"dueOn":null,"id":"d18f4f31-cb13-4b20-9e5f-be9a17272514","metadata":{"created_at":"2026-10-17T18:40:17.973474Z","updated_at":"2026-10-17T18:40:17.973474Z"},"note":null,"orgUnitId":"5da79861-a4b0-4c53-a209-1d98589286bd","projectId":"bd1251f5-d347-4861-8e08-a82410ade541","reference":"…
 - **Diagnosis:** Postgres referential checks bypass RLS, and nothing in the generated guard checks the referenced row is visible (rules/fields.rs; generators/sql.rs add_declared_foreign_keys): a scoped writer can probe for and reference another company's ids
 
 ## Unsupported (5)
