@@ -125,7 +125,7 @@ fn patch_manifest(module: &Path, framework: Option<&Path>) {
     let mut text = fs::read_to_string(&manifest).unwrap();
     let marker = "[dev-dependencies]\n";
     assert!(text.contains(marker), "the skeleton manifest has a [dev-dependencies] table");
-    let extra = "backbone-auth = { version = \"3.0.0\", features = [\"axum\"] }\n\
+    let extra = "backbone-auth = { version = \"3.0.0\", features = [\"axum\", \"identity-grants\"] }\n\
                  backbone-tenant = { version = \"3.0.0\", features = [\"axum\"] }\n\
                  tower = { version = \"0.4\", features = [\"util\"] }\n\
                  http-body-util = \"0.1\"\n\
@@ -192,6 +192,7 @@ const AREAS: &[(&str, &str)] = &[
     ("F", "Extension"),
     ("G", "Scoping"),
     ("H", "Debuggability"),
+    ("I", "Permissions"),
 ];
 
 fn one_line(s: &str) -> String {
@@ -372,8 +373,75 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         "metaphor-plugin-schema/src/commands/schema/rules.rs:229-242",
     ));
 
+    // Permissions: the register says what every route requires, and in which mode.
+    let permissions = register.get("permissions").cloned().unwrap_or(Value::Null);
+    let required: Vec<String> = permissions
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|r| r.get("permission").and_then(Value::as_str).map(str::to_string)).collect())
+        .unwrap_or_default();
+    let vocabulary: Vec<String> = permissions
+        .get("vocabulary")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let has = |list: &[String], names: &[&str]| names.iter().all(|n| list.iter().any(|l| l == n));
+    rows.push(gen_row(
+        "I",
+        "Register",
+        "`schema rules` lists the permission every generic route, generated verb and declared verb requires",
+        has(&required, &["ticket:read", "ticket:create", "ticket:update", "ticket:delete", "ticket:restore", "ticket:purge", "ticket:start", "ticket:resolve", "approval:submit", "project:read"])
+            && has(&vocabulary, &["ticket:escalate", "ticket:archive_with_reason"]),
+        "metaphor-schema schema rules . -f json",
+        "permissions.required names the generic actions and the verbs; permissions.vocabulary the declared custom verbs",
+        &format!("required {required:?}; vocabulary {vocabulary:?}"),
+        "metaphor-plugin-schema/src/rbac.rs",
+    ));
+    let roles = permissions.get("system_roles").and_then(Value::as_array).cloned().unwrap_or_default();
+    let viewer: Vec<String> = roles
+        .iter()
+        .find(|r| r.get("name").and_then(Value::as_str) == Some("viewer"))
+        .and_then(|r| r.get("permissions").and_then(Value::as_array))
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    rows.push(gen_row(
+        "I",
+        "Register",
+        "a declared system role's grants are normalised to the canonical spelling (projects.read -> project:read)",
+        viewer == ["project:read", "ticket:read"],
+        "metaphor-schema schema rules . -f json",
+        "viewer: [project:read, ticket:read]",
+        &format!("{viewer:?}"),
+        "metaphor-plugin-schema/src/rbac.rs (canonical)",
+    ));
+    let mode = permissions.get("mode").and_then(Value::as_str).unwrap_or("absent").to_string();
+    let permission_lines: Vec<&str> = text.lines().filter(|l| l.contains("PERMISSION REQUIRED")).collect();
+    rows.push(gen_row(
+        "I",
+        "Register",
+        "`schema rules` labels each route group PERMISSION REQUIRED <permission> and says the mode (no resolver installed: AUTHCONTEXT)",
+        mode == "auth_context"
+            && text.contains("Permissions: mode AUTHCONTEXT")
+            && permission_lines.iter().any(|l| l.contains("Ticket") && l.contains("ticket:{read|create|update|delete|restore|purge}"))
+            && permission_lines.iter().any(|l| l.contains("ticket:start") && l.contains("generated verb")),
+        "metaphor-schema schema rules .",
+        "mode AUTHCONTEXT; `Ticket PERMISSION REQUIRED ticket:{read|...}`; `PERMISSION REQUIRED ticket:start  generated verb`",
+        &format!("mode {mode}; {} PERMISSION REQUIRED line(s): {}", permission_lines.len(), permission_lines.iter().take(3).map(|l| l.trim()).collect::<Vec<_>>().join(" | ")),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (print_permissions)",
+    ));
+
     let out = run(Command::new(bin).args(["schema", "doctor", "."]).current_dir(module).env("NO_COLOR", "1"), "schema doctor");
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    rows.push(gen_row(
+        "I",
+        "Schema doctor",
+        "doctor says the mode, and warns (without failing) on the dotted spelling a role uses",
+        out.status.success() && text.contains("permissions: mode AUTHCONTEXT") && text.contains("spells a permission `projects.read`: write `project:read`"),
+        "metaphor-schema schema doctor .",
+        "exit 0; the mode line; a warning naming projects.read and project:read",
+        &format!("exit {:?}; {}", out.status.code(), one_line(&text)),
+        "metaphor-plugin-schema/src/commands/schema/doctor.rs (permission_report)",
+    ));
     rows.push(gen_row(
         "H",
         "Schema doctor",
@@ -611,6 +679,155 @@ fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, main_output: &st
     });
 }
 
+/// Run `schema doctor .` in `module`: whether it passed, and what it said.
+fn doctor(module: &Path) -> (bool, String) {
+    let out = run(Command::new(env!("CARGO_BIN_EXE_metaphor-schema")).args(["schema", "doctor", "."]).current_dir(module).env("NO_COLOR", "1"), "schema doctor");
+    (out.status.success(), output_text(&out))
+}
+
+/// Permission probes that need a variant of the fixture: each is generated (not built), then the
+/// doctor or the register is run on it.
+fn permission_variant_probes(skeleton: &Path, fixture: &Path, rows: &mut Vec<Row>) {
+    const EXT: &str = "src/presentation/http/ticket_handler.ext.rs";
+    let guarded_line = "        .route(\"/tickets/:id/escalate\", guarded(post(escalate), \"ticket:escalate\"))";
+
+    // An unguarded hand route fails the doctor, naming the file and line; saying why accepts it.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(EXT), |t| t.replace(guarded_line, "        .route(\"/tickets/:id/escalate\", post(escalate))"))
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Schema doctor",
+        "an unguarded hand-written route fails `schema doctor`, naming the file, the line and the fix",
+        out.status.success() && !ok && text.contains("ticket_handler.ext.rs:") && text.contains("route `/tickets/:id/escalate` has no permission guard") && text.contains("guarded(route"),
+        "remove guarded(..) from the escalate route in ticket_handler.ext.rs and run doctor",
+        "exit 1; src/presentation/http/ticket_handler.ext.rs:<line> route `/tickets/:id/escalate` has no permission guard",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text)),
+        "metaphor-plugin-schema/src/commands/schema/permissions_check.rs (scan) and doctor.rs (permission_report)",
+    ));
+    edit(&module.join(EXT), |t| {
+        t.replace("        .route(\"/tickets/:id/escalate\", post(escalate))", "        // unguarded: the provider's callback is verified by its signature\n        .route(\"/tickets/:id/escalate\", post(escalate))")
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Schema doctor",
+        "a route marked `// unguarded: <why>` is accepted, and the doctor prints the reason",
+        ok && text.contains("deliberately unguarded: the provider's callback is verified by its signature"),
+        "add `// unguarded: <why>` above the route and run doctor",
+        "exit 0; a notice with the reason",
+        &format!("doctor ok={ok}; {}", one_line(&text)),
+        "metaphor-plugin-schema/src/commands/schema/permissions_check.rs",
+    ));
+
+    // A permission the vocabulary lacks fails the doctor (a typo in a verb's name).
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(EXT), |t| t.replace("\"ticket:escalate\"", "\"ticket:escalat\""))
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Schema doctor",
+        "a guarded verb whose permission the vocabulary does not hold fails `schema doctor`",
+        out.status.success() && !ok && text.contains("guards with `ticket:escalat`, which the permission vocabulary does not hold"),
+        "guard the escalate route with \"ticket:escalat\" and run doctor",
+        "exit 1, naming ticket:escalat",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text)),
+        "metaphor-plugin-schema/src/commands/schema/permissions_check.rs (undeclared)",
+    ));
+
+    // A direct call of the framework's unguarded generic routes is an unguarded hand route.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("src/lib.ext.rs"), |t| t.replace("::routes_guarded(", "::routes(").replace("            crate::presentation::http::project_permissions(),\n", ""))
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Schema doctor",
+        "a hand-written call of the unguarded generic routes (BackboneCrudHandler::routes) fails `schema doctor`",
+        out.status.success() && !ok && text.contains("lib.ext.rs:") && text.contains("BackboneCrudHandler::routes"),
+        "mount /hooked-projects with BackboneCrudHandler::routes and run doctor",
+        "exit 1, naming lib.ext.rs and BackboneCrudHandler::routes",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text)),
+        "metaphor-plugin-schema/src/commands/schema/permissions_check.rs",
+    ));
+
+    // The mode follows the source: a service that installs the resolver is labelled RESOLVER.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, _) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("src/lib.ext.rs"), |t| t + "\n// A composing service mounts `from_fn_with_state(GrantResolver::new(source), resolve_grants)`.\nfn _installs() { let _ = \"GrantResolver\"; }\n")
+    });
+    let out = run(Command::new(env!("CARGO_BIN_EXE_metaphor-schema")).args(["schema", "rules", ".", "-f", "json"]).current_dir(&module).env("NO_COLOR", "1"), "schema rules");
+    let mode = serde_json::from_slice::<Value>(&out.stdout).ok().and_then(|v| v["permissions"]["mode"].as_str().map(str::to_string)).unwrap_or_default();
+    let pretty = run(Command::new(env!("CARGO_BIN_EXE_metaphor-schema")).args(["schema", "rules", "."]).current_dir(&module).env("NO_COLOR", "1"), "schema rules");
+    let (_, doc) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Register",
+        "the register and the doctor label the mode RESOLVER when the service installs a grant resolver",
+        mode == "resolver" && String::from_utf8_lossy(&pretty.stdout).contains("Permissions: mode RESOLVER") && doc.contains("permissions: mode RESOLVER"),
+        "mention GrantResolver in the module's source and run rules and doctor",
+        "mode resolver; `Permissions: mode RESOLVER`",
+        &format!("mode {mode}"),
+        "metaphor-plugin-schema/src/commands/schema/permissions_check.rs (Mode)",
+    ));
+
+    // `requires:` renames a permission; an undeclared target is refused at generation.
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/ticket.model.yaml"), |t| t.replacen("    description: \"Conformance fixture: an org-scoped record with a state machine\"\n", "    description: \"Conformance fixture: an org-scoped record with a state machine\"\n    requires:\n      read: support:view\n", 1))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Declarations",
+        "`requires:` naming a permission the vocabulary does not declare fails generation, naming it",
+        !out.status.success() && text.contains("`Ticket` requires.read names `support:view`, which the authorization permissions do not declare"),
+        "add `requires: { read: support:view }` to Ticket and generate",
+        "generation fails naming support:view",
+        &one_line(text.lines().filter(|l| l.contains("requires")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rbac.rs (problems) via resolver/validator.rs",
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/ticket.model.yaml"), |t| t.replacen("    description: \"Conformance fixture: an org-scoped record with a state machine\"\n", "    description: \"Conformance fixture: an org-scoped record with a state machine\"\n    requires:\n      read: support:view\n", 1))
+        ;
+        edit(&m.join("schema/models/index.model.yaml"), |t| t.replace("    tickets: [escalate, archive_with_reason]\n", "    tickets: [escalate, archive_with_reason]\n    support: [view]\n"))
+    });
+    let handler = fs::read_to_string(module.join("src/presentation/http/ticket_handler.rs")).unwrap_or_default();
+    rows.push(gen_row(
+        "I",
+        "Declarations",
+        "a declared `requires:` renames the permission the entity's read routes need in the generated handler",
+        out.status.success() && handler.contains(".requiring(backbone_core::permission::Gate::Read, \"support:view\")") && handler.contains("pub fn ticket_permissions()"),
+        "declare support: [view], add `requires: { read: support:view }` to Ticket and generate",
+        "ticket_permissions() carries .requiring(Gate::Read, \"support:view\")",
+        &format!("generate exit {:?}; {}", out.status.code(), one_line(&handler.lines().filter(|l| l.contains("requiring")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/generators/handler.rs (write_route_config)",
+    ));
+
+    // A role granting something that is no permission is refused.
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/index.model.yaml"), |t| t.replace("[\"ticket:read\", \"projects.read\"]", "[\"ticket:read\", \"a:b:c\"]"))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Declarations",
+        "a system role that lists a malformed permission fails generation, naming the role and the entry",
+        !out.status.success() && text.contains("role `viewer` lists `a:b:c`, which is no permission"),
+        "give role viewer the grant a:b:c and generate",
+        "generation fails naming role viewer and a:b:c",
+        &one_line(text.lines().filter(|l| l.contains("role")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rbac.rs (problems)",
+    ));
+}
+
 #[test]
 #[ignore = "generates a module, builds it and drives it against a scratch Postgres database; run with --ignored"]
 fn every_backbone_feature_works_at_runtime_through_the_generator() {
@@ -681,6 +898,7 @@ fn every_backbone_feature_works_at_runtime_through_the_generator() {
     let runtime = rows.clone();
     register_probes(&module, &mut rows, &runtime);
     variant_probes(&skeleton, &fixture, &module, &output_text(&generate), &mut rows);
+    permission_variant_probes(&skeleton, &fixture, &mut rows);
     rows.sort_by_key(|r| AREAS.iter().position(|(k, _)| *k == r.area).unwrap_or(99));
 
     let header = format!(

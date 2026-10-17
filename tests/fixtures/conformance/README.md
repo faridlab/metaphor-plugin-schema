@@ -16,6 +16,12 @@ CARGO_TARGET_DIR=$HOME/startapp/.cargo-target \
 The run creates `conformance_<random>` and a login role `conformance_app_<random>` (NOSUPERUSER,
 NOBYPASSRLS), and drops both at the end, also when a probe panics. It touches nothing else.
 
+The identity module's tables (`public.permissions`, `public.roles`, `public.role_permissions`,
+`public.user_roles`, `public.user_permissions`, `sapiens.organization_users`,
+`sapiens.direct_permission_grants`) are created in the scratch database before the module's migrations
+run, as a composing service has them from the identity module, so the module's seed migration writes
+into them and the framework's `IdentityGrantSource` reads them.
+
 The probes of area D also drive the outbox: the module's tables are created with its generated
 `declared::migrate_outbox` (as a composing service does at startup), staged rows are read back as the
 owner, and the relay and inbox functions of `backbone-outbox` run against them.
@@ -38,9 +44,14 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
    grants the app role the way `rls_app_role.sql` does, and connects as that role.
 3. The module's routes (`all_crud_routes`, `transition_routes`, and the extension's
    `extension_routes`) are mounted behind `tenant_route` → `org_auth` (a verifier bound to the
-   tenant) → a bridge publishing the `AuthContext` the generated transition handlers read. Every
-   probe drives this router in-process with `tower::ServiceExt::oneshot` and records PASS, FAIL
-   or UNSUPPORTED with the request, the expectation, the answer and a diagnosis.
+   tenant) → a bridge publishing the `AuthContext` the generated routes read. Every probe drives
+   this router in-process with `tower::ServiceExt::oneshot` and records PASS, FAIL or UNSUPPORTED
+   with the request, the expectation, the answer and a diagnosis. The bridge is the default
+   stack, the host's own `AuthContext` with no grant resolver installed (`admin-*` holds `*:*`,
+   `reader-*` holds `ticket:read`, anyone else nothing), so every generic-route probe of areas A to H
+   runs fail-closed. Area I mounts three more stacks over the same routes: one behind the framework's
+   `resolve_grants` reading scratch identity tables, one with nothing producing an `AuthContext`, and
+   one behind a gate that attaches `PermissionWaiver`.
 4. Back in `tests/conformance.rs`: the rules register and the doctor are checked against the
    runtime answers, and a few variants of the fixture are generated (not built) to probe layouts
    the main fixture cannot carry without breaking the build.
@@ -49,7 +60,7 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 
 | File | Exercises |
 |---|---|
-| `module/schema/models/index.model.yaml` | module schema, `company_fence: strict`, `org_fence: strict`, the extension layout (`generators.extensions: true`) |
+| `module/schema/models/index.model.yaml` | module schema, `company_fence: strict`, `org_fence: strict`, the extension layout (`generators.extensions: true`), and the `authorization:` block: two custom ticket verbs (`escalate`, `archive_with_reason`) and two system roles, `ADMIN` (`*:*`) and `viewer` (`ticket:read` and the dotted, plural `projects.read`) |
 | `module/schema/models/project.model.yaml` | `Project`, company-fenced (`company_id`): string, `@email`/`@url` attributes on strings, `email?` and `url?` types, decimal, money, int with `@range` and a literal default, int64 with `@min`/`@max`, bool default, date, datetime, json, enum default, `@unique`, `@immutable`, `@private`, `@exclude_from_dto`, `@length(min,max)`, `@pattern`, `@non_negative`, `@positive`, audit metadata and soft delete |
 | `module/schema/models/ticket.model.yaml` | `Ticket`, org-fenced (`org_unit_id`): a foreign key to `Project`, a state field, a `projection` lifecycle field, nullable decimals and text, `@default(uuid)` on a non-id field, a composite `indexes: unique` |
 | `module/schema/models/approval.model.yaml` | `Approval`, company-fenced, a `hand_set` state bound to a machine |
@@ -60,11 +71,30 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 | `module/schema/rules.baseline.yaml` | the rule ratchet, accepting the one deliberately unenforced rule |
 | `module/src/application/service/project_service.ext.rs` | lifecycle hooks (`ServiceLifecycle`), an event publisher, a hand-written `WriteGuard` check composed with the generated one, and hand-written `WriteHooks` that stage an event and can fail after staging it |
 | `module/src/application/service/ticket_service.ext.rs` | a custom service method (`archive_with_reason`), the function the VERB rule names |
-| `module/src/presentation/http/ticket_handler.ext.rs` | custom routes: the custom method over HTTP, and an `escalate` flow that reads the org scope, moves the ticket through the generic service and stages the hand-declared `TicketEscalated` in the same transaction |
-| `module/src/lib.ext.rs` | builds the hooked project service and mounts `extension_routes()` |
+| `module/src/presentation/http/ticket_handler.ext.rs` | custom routes, each wrapped in `guarded(..)`: the custom method over HTTP (`ticket:archive_with_reason`), and an `escalate` flow (`ticket:escalate`) that reads the org scope, moves the ticket through the generic service and stages the hand-declared `TicketEscalated` in the same transaction |
+| `module/src/lib.ext.rs` | builds the hooked project service and mounts `extension_routes()`, the hooked service's generic routes through `routes_guarded` |
 | `module/src/**/mod.ext.rs` | the re-exports the extension files need |
 | `module/metaphor.codegen.yaml` | declares the runtime probe file `user_owned` |
-| `module/tests/conformance_runtime.rs` | the runtime probes (areas A–H) |
+| `module/tests/conformance_runtime.rs` | the runtime probes (areas A–I) |
+
+## Permissions (area I)
+
+The probes assert, for every generic verb (list, get, count, aggregate, history, trash, create, bulk
+create, upsert, put, patch, bulk put, bulk patch, bulk preview, delete, bulk delete, restore, bulk
+restore, restore all, purge, bulk purge, empty trash), every generated transition and every custom
+verb, that a caller who holds only another permission is refused `403` with the violation
+`permission_required` and `params.permission` naming exactly what the route requires, before the body is
+read and before a record is looked up. Each of those is paired with the fail-closed default: with no
+resolver installed, a caller whose `AuthContext` holds nothing is refused the same way, and a request
+with no `AuthContext` is `401`. They also drive wildcards (`ticket:*`, `*:read`, `*:*`), authority by
+role name, a tenant role created as rows after the service started (granting at the next request, and
+revoked the same way), the legacy spellings and their deprecation signal, an identity store that cannot
+be read (`503`, no table name in the body), a gate that waives the check for the requests it admits,
+and the seed migration: every permission and the system roles present, a re-run that changes nothing,
+and a tenant-edited role grant surviving a re-run. Generator variants prove that an unguarded hand
+route, a direct call of the unguarded generic routes, and a permission the vocabulary lacks fail
+`schema doctor`, that the register and the doctor label the mode, and that `requires:` renames a
+permission or is refused when it names an undeclared one.
 
 ## What it cannot cover
 

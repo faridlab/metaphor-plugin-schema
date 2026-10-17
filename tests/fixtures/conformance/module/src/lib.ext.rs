@@ -49,9 +49,10 @@ impl crate::ThisModule {
     /// The extension's routes: the hooked project service's generic routes at
     /// `/hooked-projects`, and the custom ticket routes.
     pub fn extension_routes(&self) -> Router {
-        BackboneCrudHandler::<ProjectService, Project, CreateProjectDto, UpdateProjectDto, ProjectResponseDto>::routes(
+        BackboneCrudHandler::<ProjectService, Project, CreateProjectDto, UpdateProjectDto, ProjectResponseDto>::routes_guarded(
             self.hooked_project_service.clone(),
             "/hooked-projects",
+            crate::presentation::http::project_permissions(),
         )
         .merge(crate::presentation::http::create_ticket_extension_routes(self.ticket_service_ext.clone()))
     }

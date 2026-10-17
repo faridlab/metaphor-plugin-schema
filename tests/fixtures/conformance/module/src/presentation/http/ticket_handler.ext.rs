@@ -17,7 +17,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use backbone_core::http::{service_error_response, ApiResponse};
+use backbone_core::http::{guarded, service_error_response, ApiResponse};
 use backbone_core::write_hooks::{DeclaredEvent, WriteCtx};
 use backbone_core::{CrudRepository, ServiceError};
 
@@ -94,10 +94,11 @@ async fn escalate(
     }
 }
 
-/// The custom ticket routes.
+/// The custom ticket routes, each guarded by the permission of its verb (declared under
+/// `authorization: permissions:` in the module index).
 pub fn create_ticket_extension_routes(service: Arc<TicketService>) -> Router {
     Router::new()
-        .route("/tickets/:id/archive-with-reason", post(archive_with_reason))
-        .route("/tickets/:id/escalate", post(escalate))
+        .route("/tickets/:id/archive-with-reason", guarded(post(archive_with_reason), "ticket:archive_with_reason"))
+        .route("/tickets/:id/escalate", guarded(post(escalate), "ticket:escalate"))
         .with_state(service)
 }

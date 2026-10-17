@@ -25,6 +25,7 @@ use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::Response;
 use axum::Router;
 use backbone_auth::org::{org_auth, OrgClaims, OrgContext, OrgIssuer, OrgVerifier};
+use backbone_auth::{resolve_grants, GrantResolver, IdentityGrantSource};
 use backbone_tenant::axum_router::{tenant_audience, tenant_route, TenantRouter};
 use backbone_tenant::resolve::HostResolver;
 use backbone_tenant::{TenantId, TenantRegistry, TenantRuntimeFactory};
@@ -238,17 +239,31 @@ impl TenantRuntimeFactory for Factory {
     }
 }
 
-/// Publishes the `AuthContext` the generated transition handlers read, from the proven
-/// `OrgContext` (the composing service's job; see serpa-service's auth_context middleware).
+/// The default stack's `AuthContext`: what a host with no grant resolver installed produces from its
+/// own authentication (`admin-*` holds `*:*`, `reader-*` holds `ticket:read`, anyone else nothing).
+/// Every probe outside area I runs behind it, so the generic-route probes run fail-closed: a caller
+/// holding no permission is refused.
 async fn auth_bridge(mut req: Request, next: Next) -> Response {
     if let Some(org) = req.extensions().get::<OrgContext>().cloned() {
-        let permissions = if org.user_id.starts_with("admin") { vec!["*".to_string()] } else { Vec::new() };
+        let permissions = if org.user_id.starts_with("admin") {
+            vec!["*:*".to_string()]
+        } else if org.user_id.starts_with("reader") {
+            vec!["ticket:read".to_string()]
+        } else {
+            Vec::new()
+        };
         req.extensions_mut().insert(backbone_auth::middleware::AuthContext {
             user_id: org.user_id,
             roles: Vec::new(),
             permissions,
         });
     }
+    next.run(req).await
+}
+
+/// A gate that admitted the request on a narrower rule than a permission says so.
+async fn waive(mut req: Request, next: Next) -> Response {
+    req.extensions_mut().insert(backbone_auth::PermissionWaiver);
     next.run(req).await
 }
 
@@ -339,6 +354,11 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     for stmt in SPINE {
         sqlx::raw_sql(stmt).execute(&owner).await.expect("org spine");
     }
+    // The identity module's tables, which the module's seed migration writes into (a composing
+    // service runs the identity migrations first).
+    for stmt in IDENTITY_DDL {
+        sqlx::raw_sql(stmt).execute(&owner).await.expect("identity tables");
+    }
 
     // The module's migrations, in file order, as the owner.
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
@@ -377,6 +397,8 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA conformance TO {role}"),
         format!("GRANT SELECT ON ALL TABLES IN SCHEMA organization TO {role}"),
         format!("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA conformance TO {role}"),
+        format!("GRANT USAGE ON SCHEMA sapiens TO {role}"),
+        format!("GRANT SELECT ON sapiens.organization_users, sapiens.direct_permission_grants, public.roles, public.permissions, public.role_permissions, public.user_roles, public.user_permissions TO {role}"),
     ] {
         sqlx::query(&stmt).execute(&owner).await.expect("grant");
     }
@@ -433,16 +455,28 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     );
 
     let module = Arc::new(ConformanceModule::builder().with_database(pool.clone()).build().expect("module builds"));
-    let tenant_router = TenantRouter::new(HostResolver::new("conf.test"), TenantRegistry::new(Factory { pool: pool.clone() }, 4));
     let verifier = OrgVerifier::hs256(SECRET).bind_audience(tenant_audience);
-    let router = module
-        .all_crud_routes()
-        .merge(module.transition_routes())
-        .merge(module.extension_routes())
-        .route_layer(from_fn(auth_bridge))
-        .route_layer(from_fn_with_state(verifier, org_auth))
-        .layer(from_fn_with_state(tenant_router, tenant_route));
-    let app = App { router, refusals: Arc::new(Mutex::new(Vec::new())) };
+    let routes = || module.all_crud_routes().merge(module.transition_routes()).merge(module.extension_routes());
+    let tenant_pool = pool.clone();
+    // The stack every variant shares: the tenant router outermost, then `org_auth`.
+    let stack = |inner: Router| {
+        let tenant_router = TenantRouter::new(HostResolver::new("conf.test"), TenantRegistry::new(Factory { pool: tenant_pool.clone() }, 4));
+        inner
+            .route_layer(from_fn_with_state(verifier.clone(), org_auth))
+            .layer(from_fn_with_state(tenant_router, tenant_route))
+    };
+    // The default stack: the host's own `AuthContext`, no grant resolver.
+    let router = stack(routes().route_layer(from_fn(auth_bridge)));
+    // A resolver installed: grants are read from the identity tables once per request.
+    let resolver = GrantResolver::new(IdentityGrantSource::new(pool.clone()));
+    let resolved = stack(routes().route_layer(from_fn_with_state(resolver, resolve_grants)));
+    // Nothing produces an `AuthContext`.
+    let bare = stack(routes());
+    // A gate that admits on a narrower rule marks the request.
+    let waived = stack(routes().route_layer(from_fn(waive)).route_layer(from_fn(auth_bridge)));
+    let new_app = |router: Router| App { router, refusals: Arc::new(Mutex::new(Vec::new())) };
+    let app = new_app(router);
+    let (rapp, bare, waived) = (new_app(resolved), new_app(bare), new_app(waived));
 
     let issuer = OrgIssuer::hs256(SECRET).for_audience(TENANT);
     let hour = Duration::from_secs(3600);
@@ -450,7 +484,7 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     let tb = issuer.issue_access("admin-b", org.company_b, &[], Some(org.company_b), hour).unwrap();
     let clerk = issuer.issue_access("clerk-a", org.company_a, &[], Some(org.company_a), hour).unwrap();
 
-    let ctx = Ctx { app, rec: rec.clone(), org, ta, tb, clerk, owner: owner.clone(), pool: pool.clone(), module: module.clone(), issuer };
+    let ctx = Ctx { app, rapp, bare, waived, rec: rec.clone(), org, ta, tb, clerk, owner: owner.clone(), pool: pool.clone(), module: module.clone(), issuer };
 
     // Each area runs isolated: a panic in one is recorded and the next still runs.
     for (name, fut) in [
@@ -461,6 +495,7 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         ("E", AssertUnwindSafe(area_e(&ctx)).boxed()),
         ("F", AssertUnwindSafe(area_f(&ctx)).boxed()),
         ("G", AssertUnwindSafe(area_g(&ctx)).boxed()),
+        ("I", AssertUnwindSafe(area_i(&ctx)).boxed()),
     ] {
         if let Err(panic) = AssertUnwindSafe(fut).catch_unwind().await {
             let msg = panic
@@ -479,6 +514,12 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
 
 struct Ctx {
     app: App,
+    /// The same routes behind a grant resolver reading the scratch identity tables.
+    rapp: App,
+    /// The same routes with nothing producing an `AuthContext`.
+    bare: App,
+    /// The same routes behind the default stack, with a gate that waives the permission check.
+    waived: App,
     rec: Rec,
     org: Org,
     ta: String,
@@ -1423,6 +1464,290 @@ async fn area_g(c: &Ctx) {
     r.check("G", "RLS", "the app role scoped to B reads none of A's rows even when asking for them", as_b == 0, "set app.company_id = B; SELECT ... WHERE company_id = A", "0", &as_b.to_string(), RLS);
     let forced: Vec<(String, bool, bool)> = sqlx::query_as("SELECT relname::text, relrowsecurity, relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'conformance' AND relname IN ('projects','tickets','approvals') ORDER BY 1").fetch_all(&c.owner).await.unwrap_or_default();
     r.check("G", "RLS", "every scoped table has RLS enabled and forced", forced.len() == 3 && forced.iter().all(|(_, e, f)| *e && *f), "pg_class relrowsecurity, relforcerowsecurity", "3 tables, all true", &format!("{forced:?}"), "generators/sql.rs:1170/1238");
+}
+
+// =============================================================================
+// I. Permissions
+// =============================================================================
+
+/// The identity tables a composing service has from the identity module, in the columns the
+/// framework's grant source and the generated seed read: a scratch copy for the harness.
+const IDENTITY_DDL: &[&str] = &[
+    "CREATE SCHEMA IF NOT EXISTS sapiens",
+    "CREATE TABLE public.roles (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, description text, is_default boolean NOT NULL DEFAULT false, metadata jsonb NOT NULL DEFAULT '{}')",
+    "CREATE TABLE public.permissions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, description text, resource text NOT NULL, action text NOT NULL, metadata jsonb NOT NULL DEFAULT '{}')",
+    "CREATE TABLE public.role_permissions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role_id uuid NOT NULL REFERENCES public.roles(id), permission_id uuid NOT NULL REFERENCES public.permissions(id), granted_at timestamptz NOT NULL DEFAULT now(), metadata jsonb NOT NULL DEFAULT '{}')",
+    "CREATE UNIQUE INDEX idx_role_permissions_role_id_permission_id ON public.role_permissions (role_id, permission_id)",
+    "CREATE TABLE public.user_roles (user_id uuid NOT NULL, role_id uuid NOT NULL, metadata jsonb NOT NULL DEFAULT '{}')",
+    "CREATE TABLE public.user_permissions (user_id uuid NOT NULL, permission_id uuid NOT NULL, status text NOT NULL DEFAULT 'active', revoked_at timestamptz, expires_at timestamptz, resource_id uuid, metadata jsonb NOT NULL DEFAULT '{}')",
+    "CREATE TABLE sapiens.organization_users (user_id uuid NOT NULL, org_unit_id uuid NOT NULL, role_id uuid, status text NOT NULL DEFAULT 'active', metadata jsonb NOT NULL DEFAULT '{}')",
+    "CREATE TABLE sapiens.direct_permission_grants (user_id uuid NOT NULL, permission_id uuid NOT NULL, status text NOT NULL DEFAULT 'active', revoked_at timestamptz, expires_at timestamptz, scope jsonb, conditions jsonb, metadata jsonb NOT NULL DEFAULT '{}')",
+];
+
+async fn permission_row(owner: &PgPool, name: &str) -> Uuid {
+    if let Some(id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM public.permissions WHERE name = $1 AND (metadata->>'deleted_at') IS NULL").bind(name).fetch_optional(owner).await.unwrap() {
+        return id;
+    }
+    let (resource, action) = name.split_once(|c| c == ':' || c == '.').unwrap_or((name, "*"));
+    sqlx::query_scalar("INSERT INTO public.permissions (name, resource, action) VALUES ($1, $2, $3) RETURNING id")
+        .bind(name)
+        .bind(resource)
+        .bind(action)
+        .fetch_one(owner)
+        .await
+        .unwrap()
+}
+
+/// A tenant role created as rows: the role, and a grant row for each permission.
+async fn tenant_role(owner: &PgPool, name: &str, permissions: &[&str]) -> Uuid {
+    let role: Uuid = sqlx::query_scalar("INSERT INTO public.roles (name) VALUES ($1) RETURNING id").bind(name).fetch_one(owner).await.unwrap();
+    for p in permissions {
+        let pid = permission_row(owner, p).await;
+        sqlx::query("INSERT INTO public.role_permissions (role_id, permission_id) VALUES ($1, $2)").bind(role).bind(pid).execute(owner).await.unwrap();
+    }
+    role
+}
+
+async fn assign_role(owner: &PgPool, user: Uuid, role: Uuid) {
+    sqlx::query("INSERT INTO public.user_roles (user_id, role_id) VALUES ($1, $2)").bind(user).bind(role).execute(owner).await.unwrap();
+}
+
+async fn assign_named_role(owner: &PgPool, user: Uuid, role: &str) {
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM public.roles WHERE name = $1 AND (metadata->>'deleted_at') IS NULL").bind(role).fetch_one(owner).await.unwrap();
+    assign_role(owner, user, id).await;
+}
+
+async fn direct_grant(owner: &PgPool, user: Uuid, permission: &str) {
+    let pid = permission_row(owner, permission).await;
+    sqlx::query("INSERT INTO public.user_permissions (user_id, permission_id) VALUES ($1, $2)").bind(user).bind(pid).execute(owner).await.unwrap();
+}
+
+/// A 403 naming the permission the route requires, in the framework's shape.
+fn denied(resp: &Resp, permission: &str) -> bool {
+    resp.status == 403
+        && resp.body["success"] == json!(false)
+        && resp.violations().iter().any(|v| v["code"] == json!("permission_required") && v["params"]["permission"] == json!(permission))
+}
+
+async fn area_i(c: &Ctx) {
+    let (r, app, rapp) = (&c.rec, &c.app, &c.rapp);
+    const P: &str = "backbone-core/src/permission.rs (the route layer), backbone-auth/src/grants.rs (matching), the generated <entity>_permissions() in presentation/http/*_handler.rs";
+    let ta = c.ta.as_str();
+    let hour = Duration::from_secs(3600);
+    let token = |user: Uuid| c.issuer.issue_access(&user.to_string(), c.org.company_a, &[], Some(c.org.company_a), hour).unwrap();
+
+    // Records to act on, made by the admin of the default stack.
+    let pid = c.project(ta, c.org.company_a, json!({})).await.id();
+    let tid = c.ticket(ta, c.org.company_a, &pid, json!({})).await.id();
+    let gone = c.ticket(ta, c.org.company_a, &pid, json!({})).await.id();
+    app.delete(&format!("/tickets/{gone}"), ta).await;
+
+    // ---- seeds -------------------------------------------------------------------------
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM public.permissions WHERE (metadata->>'deleted_at') IS NULL ORDER BY name").fetch_all(&c.owner).await.unwrap();
+    let want = [
+        "ticket:read", "ticket:create", "ticket:update", "ticket:delete", "ticket:restore", "ticket:purge",
+        "project:read", "approval:read", "ticket:start", "ticket:resolve", "approval:submit", "ticket:escalate", "ticket:archive_with_reason", "*:*",
+    ];
+    let missing: Vec<&str> = want.iter().copied().filter(|w| !names.iter().any(|n| n == w)).collect();
+    r.check("I", "Seeds", "the seed migration writes every permission the routes require, the declared custom verbs and the system roles' grants", missing.is_empty(), "SELECT name FROM public.permissions", "ticket:{read,create,update,delete,restore,purge}, project:read, approval:read, the verbs, ticket:escalate, *:*", &format!("missing {missing:?} of {} rows", names.len()), "generators/sql.rs (the seed migration), rbac.rs (seed)");
+    let viewer_grants: Vec<String> = sqlx::query_scalar(
+        "SELECT p.name FROM public.role_permissions rp JOIN public.roles r ON r.id = rp.role_id JOIN public.permissions p ON p.id = rp.permission_id WHERE r.name = 'viewer' AND (rp.metadata->>'deleted_at') IS NULL ORDER BY p.name",
+    ).fetch_all(&c.owner).await.unwrap();
+    r.check("I", "Seeds", "a declared system role is seeded with its baseline grants (the dotted spelling normalised: projects.read -> project:read)", viewer_grants == vec!["project:read", "ticket:read"], "SELECT the grants of role viewer", "[project:read, ticket:read]", &format!("{viewer_grants:?}"), "rbac.rs (system_roles, canonical)");
+    let admin_god: i64 = sqlx::query_scalar("SELECT count(*) FROM public.role_permissions rp JOIN public.roles r ON r.id = rp.role_id JOIN public.permissions p ON p.id = rp.permission_id WHERE r.name = 'ADMIN' AND p.name = '*:*'").fetch_one(&c.owner).await.unwrap();
+    r.check("I", "Seeds", "the ADMIN system role is declared with *:* in the seed", admin_god == 1, "SELECT the *:* grant of role ADMIN", "1", &admin_god.to_string(), "the module index's authorization: roles:");
+
+    // ---- the identity of the people the probes use -------------------------------------
+    let (viewer, nobody, starred, god, reader_all, legacy, dotted, boss) =
+        (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    assign_named_role(&c.owner, viewer, "viewer").await;
+    assign_named_role(&c.owner, boss, "ADMIN").await;
+    direct_grant(&c.owner, starred, "ticket:*").await;
+    direct_grant(&c.owner, god, "*:*").await;
+    direct_grant(&c.owner, reader_all, "*:read").await;
+    direct_grant(&c.owner, legacy, "*:transition:*").await;
+    direct_grant(&c.owner, dotted, "tickets.read").await;
+    let (tv, tn, ts, tg, tr_, tl, td, tb_) = (token(viewer), token(nobody), token(starred), token(god), token(reader_all), token(legacy), token(dotted), token(boss));
+
+    // ---- generic routes: each verb needs its permission --------------------------------
+    // The viewer holds ticket:read and project:read, nothing else.
+    for (what, path) in [("list", "/tickets".to_string()), ("get", format!("/tickets/{tid}")), ("count", "/tickets/count".to_string()), ("trash", "/tickets/trash".to_string()), ("trash count", "/tickets/trash/count".to_string())] {
+        let g = rapp.get(&path, &tv).await;
+        r.check("I", "Generic routes", &format!("a holder of ticket:read passes the permission layer on {what}"), g.status == 200, &g.request, "200", &g.got(), P);
+    }
+    let agg = rapp.get("/tickets/aggregate?group_by=status&agg=count", &tv).await;
+    r.check("I", "Generic routes", "a holder of ticket:read passes the permission layer on aggregate", agg.status != 403 && agg.status != 401, &agg.request, "not 401/403", &agg.got(), P);
+    let hist = rapp.get(&format!("/tickets/{tid}/history"), &tv).await;
+    r.check("I", "Generic routes", "a holder of ticket:read passes the permission layer on history", hist.status != 403 && hist.status != 401, &hist.request, "not 401/403", &hist.got(), P);
+    for (what, path) in [("list", "/tickets".to_string()), ("get", format!("/tickets/{tid}")), ("count", "/tickets/count".to_string()), ("aggregate", "/tickets/aggregate?group_by=status&agg=count".to_string()), ("history", format!("/tickets/{tid}/history")), ("trash", "/tickets/trash".to_string()), ("trash count", "/tickets/trash/count".to_string()), ("deleted get", format!("/tickets/{gone}/deleted"))] {
+        let g = rapp.get(&path, &tn).await;
+        r.check("I", "Generic routes", &format!("a caller without ticket:read is refused on {what}: 403 permission_required naming ticket:read"), denied(&g, "ticket:read"), &g.request, "403, params.permission ticket:read", &g.got(), P);
+    }
+    let body = json!({ "orgUnitId": c.org.company_a, "projectId": pid, "title": "Denied" });
+    let writes: Vec<(&str, &str, String, Option<Value>, &str)> = vec![
+        ("create", "POST", "/tickets".into(), Some(body.clone()), "ticket:create"),
+        ("bulk create", "POST", "/tickets/bulk".into(), Some(json!([body.clone()])), "ticket:create"),
+        ("upsert", "POST", "/tickets/upsert".into(), Some(body.clone()), "ticket:create"),
+        ("put", "PUT", format!("/tickets/{tid}"), Some(body.clone()), "ticket:update"),
+        ("patch", "PATCH", format!("/tickets/{tid}"), Some(json!({ "title": "x" })), "ticket:update"),
+        ("bulk put", "PUT", "/tickets/bulk".into(), Some(json!([{ "id": tid }])), "ticket:update"),
+        ("bulk patch", "PATCH", "/tickets/bulk".into(), Some(json!({ "ids": [tid], "changes": { "title": "x" } })), "ticket:update"),
+        ("bulk preview", "POST", "/tickets/bulk/preview".into(), Some(json!({ "ids": [tid], "changes": { "title": "x" } })), "ticket:update"),
+        ("delete", "DELETE", format!("/tickets/{tid}"), None, "ticket:delete"),
+        ("bulk delete", "POST", "/tickets/delete/bulk".into(), Some(json!({ "ids": [tid] })), "ticket:delete"),
+        ("restore", "POST", format!("/tickets/{gone}/restore"), None, "ticket:restore"),
+        ("bulk restore", "POST", "/tickets/restore/bulk".into(), Some(json!({ "ids": [gone] })), "ticket:restore"),
+        ("restore all", "POST", "/tickets/restore/all".into(), None, "ticket:restore"),
+        ("purge", "DELETE", format!("/tickets/trash/{gone}"), None, "ticket:purge"),
+        ("bulk purge", "DELETE", "/tickets/trash/bulk".into(), Some(json!({ "ids": [gone] })), "ticket:purge"),
+        ("empty trash", "DELETE", "/tickets/empty".into(), None, "ticket:purge"),
+    ];
+    for (what, method, path, payload, perm) in &writes {
+        let w = rapp.send(method, path, Some(&tv), payload.as_ref().map(|b| b.to_string()), &[]).await;
+        r.check("I", "Generic routes", &format!("{what} needs {perm}: a holder of read only is refused 403 naming it"), denied(&w, perm), &w.request, &format!("403, params.permission {perm}"), &w.got(), P);
+    }
+    let still = app.get(&format!("/tickets/{tid}"), ta).await;
+    r.check("I", "Generic routes", "no refused write changed anything", still.status == 200 && still.data()["title"] != json!("Denied") && still.data()["title"] != json!("x"), &still.request, "the record is untouched", &still.got(), P);
+
+    // The refusal comes before the body is read and before the record is looked up.
+    let unknown = Uuid::new_v4();
+    let blind = rapp.patch(&format!("/tickets/{unknown}"), &tv, json!({ "title": "x" })).await;
+    r.check("I", "Generic routes", "a caller without ticket:update learns nothing about an unknown id (403, not 404)", denied(&blind, "ticket:update"), &blind.request, "403", &blind.got(), P);
+    let bad_body = rapp.send("POST", "/tickets", Some(&tv), Some("{ not json".into()), &[]).await;
+    r.check("I", "Generic routes", "a malformed body from a caller without ticket:create is still 403, not 400", denied(&bad_body, "ticket:create"), &bad_body.request, "403", &bad_body.got(), P);
+
+    // Another entity needs its own permission: ticket permissions do not carry over.
+    let prj = rapp.get("/projects", &tv).await;
+    r.check("I", "Generic routes", "project:read (a seeded grant of the viewer role) opens the project list", prj.status == 200, &prj.request, "200", &prj.got(), P);
+    let apr = rapp.get("/approvals", &tv).await;
+    r.check("I", "Generic routes", "an entity the caller holds nothing for is refused: approval:read", denied(&apr, "approval:read"), &apr.request, "403 approval:read", &apr.got(), P);
+    let apr_w = rapp.post("/approvals", &tv, json!({})).await;
+    r.check("I", "Generic routes", "a read-only entity mounts no write route (405), whatever the caller holds", apr_w.status == 405, &apr_w.request, "405", &apr_w.got(), P);
+
+    // ---- transitions and custom verbs --------------------------------------------------
+    let tr = |verb: &str| format!("/tickets/{tid}/transitions/{verb}");
+    let t = rapp.post(&tr("start"), &tv, json!({})).await;
+    r.check("I", "Transitions", "a transition needs <model>:<verb>: 403 naming ticket:start", denied(&t, "ticket:start"), &t.request, "403, params.permission ticket:start", &t.got(), P);
+    let blind = rapp.post(&format!("/tickets/{unknown}/transitions/start"), &tv, json!({})).await;
+    r.check("I", "Transitions", "the permission is checked before the record is read: an unknown id is 403 for a caller without it", denied(&blind, "ticket:start"), &blind.request, "403", &blind.got(), P);
+    // The viewer never reached the record: the state is unchanged.
+    let st = app.get(&format!("/tickets/{tid}"), ta).await;
+    r.check("I", "Transitions", "a refused transition changed nothing", st.data()["status"] == json!("open"), &st.request, "status open", &st.got(), P);
+    let e = rapp.post(&format!("/tickets/{tid}/escalate"), &tv, json!({ "note": "x" })).await;
+    r.check("I", "Custom verbs", "a hand-written verb guarded by guarded(): 403 naming ticket:escalate", denied(&e, "ticket:escalate"), &e.request, "403, params.permission ticket:escalate", &e.got(), P);
+    let a = rapp.post(&format!("/tickets/{tid}/archive-with-reason"), &tv, json!({ "reason": "x" })).await;
+    r.check("I", "Custom verbs", "a second guarded verb names its own permission: ticket:archive_with_reason", denied(&a, "ticket:archive_with_reason"), &a.request, "403", &a.got(), P);
+    let hp = rapp.get("/hooked-projects", &tn).await;
+    r.check("I", "Custom verbs", "the extension's generic routes are guarded too: project:read", denied(&hp, "project:read"), &hp.request, "403 project:read", &hp.got(), P);
+
+    // ---- wildcards, authority by name ---------------------------------------------------
+    let fresh = || json!({ "orgUnitId": c.org.company_a, "projectId": pid, "title": format!("Permitted {}", uniq("")) });
+    let w = rapp.post("/tickets", &ts, fresh()).await;
+    r.check("I", "Wildcards", "ticket:* grants every action of the entity (create)", w.status == 201, &w.request, "201", &w.got(), P);
+    let ws = rapp.post(&format!("/tickets/{}/transitions/start", w.id()), &ts, json!({})).await;
+    r.check("I", "Wildcards", "ticket:* grants the entity's transitions", ws.status == 200, &ws.request, "200", &ws.got(), P);
+    let wp = rapp.get("/projects", &ts).await;
+    r.check("I", "Wildcards", "ticket:* does not reach another entity", denied(&wp, "project:read"), &wp.request, "403 project:read", &wp.got(), P);
+    let ra = rapp.get("/projects", &tr_).await;
+    let rc = rapp.post("/tickets", &tr_, body.clone()).await;
+    r.check("I", "Wildcards", "*:read grants every read and no write", ra.status == 200 && denied(&rc, "ticket:create"), &rc.request, "200 on read, 403 ticket:create on write", &format!("{} / {}", ra.got(), rc.got()), P);
+    let gd = rapp.post("/tickets", &tg, fresh()).await;
+    let gp = rapp.delete(&format!("/tickets/trash/{gone}"), &tg).await;
+    r.check("I", "Wildcards", "*:* grants everything (create and purge)", gd.status == 201 && gp.status != 403, &gp.request, "201 and not 403", &format!("{} / {}", gd.got(), gp.got()), P);
+    let bd = rapp.post("/tickets", &tb_, fresh()).await;
+    r.check("I", "Wildcards", "the ADMIN role grants everything by name, with no permission row of its own for the person", bd.status == 201, &bd.request, "201", &bd.got(), P);
+
+    // ---- legacy spellings --------------------------------------------------------------
+    let lv = rapp.post(&format!("/tickets/{}/transitions/start", c.ticket(ta, c.org.company_a, &pid, json!({})).await.id()), &tl, json!({})).await;
+    let lr = rapp.get("/tickets", &tl).await;
+    let lw = rapp.patch(&format!("/tickets/{tid}"), &tl, json!({ "title": "x" })).await;
+    r.check("I", "Legacy spellings", "*:transition:* still grants a verb, and opens no generic read or write", lv.status == 200 && denied(&lr, "ticket:read") && denied(&lw, "ticket:update"), &lr.request, "200 on the verb, 403 on read and update", &format!("{} / {} / {}", lv.got(), lr.got(), lw.got()), "backbone-auth/src/grants.rs (read_held: a transition name covers verbs only)");
+    let dr = rapp.get("/tickets", &td).await;
+    r.check("I", "Legacy spellings", "the dotted spelling tickets.read still grants the read (normalised)", dr.status == 200, &dr.request, "200", &dr.got(), "backbone-auth/src/grants.rs");
+    let seen = backbone_auth::grants::legacy_spellings_seen();
+    r.check("I", "Legacy spellings", "a legacy spelling that grants access raises the deprecation signal with the canonical form to rewrite to", seen.iter().any(|(k, _)| k == "tickets.read") && seen.iter().any(|(k, v)| k == "*:transition:*" && v == "*:<each verb>"), "legacy_spellings_seen()", "tickets.read and *:transition:* listed", &format!("{seen:?}"), "backbone-auth/src/grants.rs (note_legacy)");
+
+    // ---- a tenant role is data -----------------------------------------------------------
+    let triager = Uuid::new_v4();
+    let tt = token(triager);
+    let before = rapp.patch(&format!("/tickets/{tid}"), &tt, json!({ "title": "Triaged" })).await;
+    r.check("I", "Tenant roles as data", "before the role exists the person is refused", denied(&before, "ticket:update"), &before.request, "403", &before.got(), P);
+    let role = tenant_role(&c.owner, "triager", &["ticket:read", "ticket:update"]).await;
+    assign_role(&c.owner, triager, role).await;
+    let after = rapp.patch(&format!("/tickets/{tid}"), &tt, json!({ "title": "Triaged" })).await;
+    r.check("I", "Tenant roles as data", "a role created as rows grants access at the next request, with no regeneration and no restart", after.status == 200 && after.data()["title"] == json!("Triaged"), &after.request, "200", &after.got(), "backbone-auth/src/resolver.rs (IdentityGrantSource)");
+    let del = rapp.delete(&format!("/tickets/{tid}"), &tt).await;
+    r.check("I", "Tenant roles as data", "the role grants only what its rows say: ticket:delete is still refused", denied(&del, "ticket:delete"), &del.request, "403 ticket:delete", &del.got(), P);
+    let up = rapp.post("/tickets/upsert", &tt, body.clone()).await;
+    r.check("I", "Tenant roles as data", "an upsert needs create and update: a holder of update only is refused on create", denied(&up, "ticket:create"), &up.request, "403 ticket:create", &up.got(), P);
+    sqlx::query("UPDATE public.user_roles SET metadata = '{\"deleted_at\":\"2026-01-01\"}' WHERE user_id = $1").bind(triager).execute(&c.owner).await.unwrap();
+    let revoked = rapp.patch(&format!("/tickets/{tid}"), &tt, json!({ "title": "Again" })).await;
+    r.check("I", "Tenant roles as data", "removing the assignment removes the access at the next request", denied(&revoked, "ticket:update"), &revoked.request, "403", &revoked.got(), P);
+
+    // ---- the resolver is the source: the token's claims are not -----------------------
+    let admin_in_resolver_mode = rapp.get("/tickets", ta).await;
+    r.check("I", "Resolver mode", "with a resolver installed the token is not the source: a subject the identity tables do not know holds nothing", denied(&admin_in_resolver_mode, "ticket:read"), &admin_in_resolver_mode.request, "403", &admin_in_resolver_mode.got(), "backbone-auth/src/resolver.rs");
+    sqlx::query("ALTER TABLE public.user_permissions RENAME TO user_permissions_away").execute(&c.owner).await.unwrap();
+    let broken = rapp.get("/tickets", &tv).await;
+    sqlx::query("ALTER TABLE public.user_permissions_away RENAME TO user_permissions").execute(&c.owner).await.unwrap();
+    r.check("I", "Resolver mode", "a grant store that cannot be read refuses the request (503 grants_unavailable), never reads as no grants and carries on", broken.status == 503 && broken.has_code("grants_unavailable") && !broken.raw.contains("user_permissions"), &broken.request, "503 grants_unavailable, no table name", &broken.got(), "backbone-auth/src/resolver.rs");
+
+    // ---- fail closed with no resolver installed -------------------------------------------
+    // The default stack (the host's own AuthContext, no resolver): `admin-*` holds *:*, `clerk-*`
+    // holds nothing, `reader-*` holds ticket:read.
+    let reader = c.issuer.issue_access("reader-a", c.org.company_a, &[], Some(c.org.company_a), hour).unwrap();
+    for (what, method, path, payload, perm) in [
+        ("list", "GET", "/tickets".to_string(), None, "ticket:read"),
+        ("create", "POST", "/tickets".to_string(), Some(body.clone()), "ticket:create"),
+        ("patch", "PATCH", format!("/tickets/{tid}"), Some(json!({ "title": "x" })), "ticket:update"),
+        ("delete", "DELETE", format!("/tickets/{tid}"), None, "ticket:delete"),
+        ("a transition", "POST", format!("/tickets/{tid}/transitions/start"), Some(json!({})), "ticket:start"),
+        ("a custom verb", "POST", format!("/tickets/{tid}/escalate"), Some(json!({ "note": "x" })), "ticket:escalate"),
+        ("the extension's generic list", "GET", "/hooked-projects".to_string(), None, "project:read"),
+    ] {
+        let d = app.send(method, &path, Some(&c.clerk), payload.as_ref().map(|b| b.to_string()), &[]).await;
+        r.check("I", "Fail closed", &format!("no resolver and no permission on the AuthContext: {what} is 403 naming {perm}"), denied(&d, perm), &d.request, &format!("403, params.permission {perm}"), &d.got(), P);
+    }
+    let rd = app.get("/tickets", &reader).await;
+    let rw = app.post("/tickets", &reader, body.clone()).await;
+    r.check("I", "Fail closed", "no resolver: the permissions on the AuthContext are what counts (ticket:read reads, and only reads)", rd.status == 200 && denied(&rw, "ticket:create"), &rw.request, "200 on read, 403 ticket:create on write", &format!("{} / {}", rd.got(), rw.got()), P);
+    let bare = c.bare.get("/tickets", ta).await;
+    r.check("I", "Fail closed", "no AuthContext on the request at all is 401 authentication_required, never allowed", bare.status == 401 && bare.has_code("authentication_required"), &bare.request, "401 authentication_required", &bare.got(), P);
+    let bare_tr = c.bare.post(&format!("/tickets/{tid}/transitions/start"), ta, json!({})).await;
+    r.check("I", "Fail closed", "a transition with no AuthContext is 401 too", bare_tr.status == 401, &bare_tr.request, "401", &bare_tr.got(), P);
+    let waived = c.waived.get("/tickets", &c.clerk).await;
+    let waived_tr = c.waived.post(&format!("/tickets/{}/transitions/start", c.ticket(ta, c.org.company_a, &pid, json!({})).await.id()), &c.clerk, json!({})).await;
+    r.check("I", "Fail closed", "a request an outer gate admitted on a narrower rule (PermissionWaiver) passes the layer, and only that request", waived.status == 200 && waived_tr.status == 200, &waived.request, "200 on a read and a transition", &format!("{} / {}", waived.got(), waived_tr.got()), "backbone-auth/src/grants.rs (PermissionWaiver)");
+
+    // ---- seeds are idempotent and never undo a tenant's edits -----------------------------
+    let seed_files: Vec<std::path::PathBuf> = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"))
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.contains("_seed_conformance_permissions_") && n.ends_with(".up.sql")))
+        .collect();
+    r.check("I", "Seeds", "the generator wrote one seed migration, named by a digest of its content", seed_files.len() == 1, "ls migrations/*_seed_conformance_permissions_*.up.sql", "1 file", &format!("{seed_files:?}"), "generators/sql.rs");
+    let counts = |owner: PgPool| async move {
+        let p: i64 = sqlx::query_scalar("SELECT count(*) FROM public.permissions").fetch_one(&owner).await.unwrap();
+        let ro: i64 = sqlx::query_scalar("SELECT count(*) FROM public.roles WHERE name IN ('ADMIN','viewer')").fetch_one(&owner).await.unwrap();
+        let g: i64 = sqlx::query_scalar("SELECT count(*) FROM public.role_permissions rp JOIN public.roles r ON r.id = rp.role_id WHERE r.name IN ('ADMIN','viewer')").fetch_one(&owner).await.unwrap();
+        (p, ro, g)
+    };
+    let before = counts(c.owner.clone()).await;
+    let sql = std::fs::read_to_string(&seed_files[0]).unwrap();
+    let rerun = sqlx::raw_sql(&sql).execute(&c.owner).await;
+    let after = counts(c.owner.clone()).await;
+    r.check("I", "Seeds", "re-running the seed migration changes nothing", rerun.is_ok() && before == after, "run the seed migration again as the owner", &format!("{before:?}"), &format!("{after:?} {:?}", rerun.err().map(|e| e.to_string())), "generators/sql.rs (every statement inserts what is missing)");
+    // A tenant edits the baseline: revokes ticket:read from viewer, grants ticket:create instead.
+    let viewer_role: Uuid = sqlx::query_scalar("SELECT id FROM public.roles WHERE name = 'viewer'").fetch_one(&c.owner).await.unwrap();
+    sqlx::query("UPDATE public.role_permissions SET metadata = '{\"deleted_at\":\"2026-01-01\"}' WHERE role_id = $1 AND permission_id = (SELECT id FROM public.permissions WHERE name = 'ticket:read')").bind(viewer_role).execute(&c.owner).await.unwrap();
+    let create_id = permission_row(&c.owner, "ticket:create").await;
+    sqlx::query("INSERT INTO public.role_permissions (role_id, permission_id) VALUES ($1, $2)").bind(viewer_role).bind(create_id).execute(&c.owner).await.unwrap();
+    let rerun = sqlx::raw_sql(&sql).execute(&c.owner).await;
+    let live: Vec<String> = sqlx::query_scalar("SELECT p.name FROM public.role_permissions rp JOIN public.permissions p ON p.id = rp.permission_id WHERE rp.role_id = $1 AND (rp.metadata->>'deleted_at') IS NULL ORDER BY p.name").bind(viewer_role).fetch_all(&c.owner).await.unwrap();
+    let revoked_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM public.role_permissions rp JOIN public.permissions p ON p.id = rp.permission_id WHERE rp.role_id = $1 AND p.name = 'ticket:read'").bind(viewer_role).fetch_one(&c.owner).await.unwrap();
+    r.check("I", "Seeds", "a tenant-edited role grant survives a re-run: the revoked baseline grant stays revoked (no duplicate row) and the added grant stays", rerun.is_ok() && live == vec!["project:read", "ticket:create"] && revoked_rows == 1, "revoke viewer's ticket:read, add ticket:create, re-run the seed", "live grants [project:read, ticket:create]; one (revoked) ticket:read row", &format!("{live:?}; {revoked_rows} ticket:read row(s); {:?}", rerun.err().map(|e| e.to_string())), "generators/sql.rs (NOT EXISTS over every row, soft-deleted included)");
+    let tenant_view = rapp.get("/tickets", &tv).await;
+    r.check("I", "Seeds", "and the edit is what the next request sees: the viewer lost the read and gained the create", denied(&tenant_view, "ticket:read"), &tenant_view.request, "403 ticket:read", &tenant_view.got(), "backbone-auth/src/resolver.rs");
 }
 
 // =============================================================================

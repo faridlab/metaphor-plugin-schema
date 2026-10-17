@@ -5,7 +5,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.36.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 1s; whole run: 64s
+- Generation: 1s; whole run: 99s
 
 ## Summary
 
@@ -19,7 +19,8 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | F. Extension | 12 | 0 | 1 |
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 23 | 0 | 0 |
-| **Total** | **246** | **0** | **3** |
+| I. Permissions | 89 | 0 | 0 |
+| **Total** | **335** | **0** | **3** |
 
 ## Matrix
 
@@ -274,6 +275,95 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | H | Rules register | machine `Approval.state` (hand_set) is labelled MOVES REFUSED and its verbs refuse a wrong-state move | PASS |
 | H | Schema doctor | `schema doctor .` accepts the freshly generated module with its extension files | PASS |
 | H | Diagnostics | a hook file with an `assert:` rule (no message) beside its `states:` generates, or names the offending rule | PASS |
+| I | Seeds | the seed migration writes every permission the routes require, the declared custom verbs and the system roles' grants | PASS |
+| I | Seeds | a declared system role is seeded with its baseline grants (the dotted spelling normalised: projects.read -> project:read) | PASS |
+| I | Seeds | the ADMIN system role is declared with *:* in the seed | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on list | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on get | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on count | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on trash | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on trash count | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on aggregate | PASS |
+| I | Generic routes | a holder of ticket:read passes the permission layer on history | PASS |
+| I | Generic routes | a caller without ticket:read is refused on list: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on get: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on count: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on aggregate: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on history: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on trash: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on trash count: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | a caller without ticket:read is refused on deleted get: 403 permission_required naming ticket:read | PASS |
+| I | Generic routes | create needs ticket:create: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk create needs ticket:create: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | upsert needs ticket:create: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | put needs ticket:update: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | patch needs ticket:update: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk put needs ticket:update: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk patch needs ticket:update: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk preview needs ticket:update: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | delete needs ticket:delete: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk delete needs ticket:delete: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | restore needs ticket:restore: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk restore needs ticket:restore: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | restore all needs ticket:restore: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | purge needs ticket:purge: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | bulk purge needs ticket:purge: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | empty trash needs ticket:purge: a holder of read only is refused 403 naming it | PASS |
+| I | Generic routes | no refused write changed anything | PASS |
+| I | Generic routes | a caller without ticket:update learns nothing about an unknown id (403, not 404) | PASS |
+| I | Generic routes | a malformed body from a caller without ticket:create is still 403, not 400 | PASS |
+| I | Generic routes | project:read (a seeded grant of the viewer role) opens the project list | PASS |
+| I | Generic routes | an entity the caller holds nothing for is refused: approval:read | PASS |
+| I | Generic routes | a read-only entity mounts no write route (405), whatever the caller holds | PASS |
+| I | Transitions | a transition needs <model>:<verb>: 403 naming ticket:start | PASS |
+| I | Transitions | the permission is checked before the record is read: an unknown id is 403 for a caller without it | PASS |
+| I | Transitions | a refused transition changed nothing | PASS |
+| I | Custom verbs | a hand-written verb guarded by guarded(): 403 naming ticket:escalate | PASS |
+| I | Custom verbs | a second guarded verb names its own permission: ticket:archive_with_reason | PASS |
+| I | Custom verbs | the extension's generic routes are guarded too: project:read | PASS |
+| I | Wildcards | ticket:* grants every action of the entity (create) | PASS |
+| I | Wildcards | ticket:* grants the entity's transitions | PASS |
+| I | Wildcards | ticket:* does not reach another entity | PASS |
+| I | Wildcards | *:read grants every read and no write | PASS |
+| I | Wildcards | *:* grants everything (create and purge) | PASS |
+| I | Wildcards | the ADMIN role grants everything by name, with no permission row of its own for the person | PASS |
+| I | Legacy spellings | *:transition:* still grants a verb, and opens no generic read or write | PASS |
+| I | Legacy spellings | the dotted spelling tickets.read still grants the read (normalised) | PASS |
+| I | Legacy spellings | a legacy spelling that grants access raises the deprecation signal with the canonical form to rewrite to | PASS |
+| I | Tenant roles as data | before the role exists the person is refused | PASS |
+| I | Tenant roles as data | a role created as rows grants access at the next request, with no regeneration and no restart | PASS |
+| I | Tenant roles as data | the role grants only what its rows say: ticket:delete is still refused | PASS |
+| I | Tenant roles as data | an upsert needs create and update: a holder of update only is refused on create | PASS |
+| I | Tenant roles as data | removing the assignment removes the access at the next request | PASS |
+| I | Resolver mode | with a resolver installed the token is not the source: a subject the identity tables do not know holds nothing | PASS |
+| I | Resolver mode | a grant store that cannot be read refuses the request (503 grants_unavailable), never reads as no grants and carries on | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: list is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: create is 403 naming ticket:create | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: patch is 403 naming ticket:update | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: delete is 403 naming ticket:delete | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: a transition is 403 naming ticket:start | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: a custom verb is 403 naming ticket:escalate | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: the extension's generic list is 403 naming project:read | PASS |
+| I | Fail closed | no resolver: the permissions on the AuthContext are what counts (ticket:read reads, and only reads) | PASS |
+| I | Fail closed | no AuthContext on the request at all is 401 authentication_required, never allowed | PASS |
+| I | Fail closed | a transition with no AuthContext is 401 too | PASS |
+| I | Fail closed | a request an outer gate admitted on a narrower rule (PermissionWaiver) passes the layer, and only that request | PASS |
+| I | Seeds | the generator wrote one seed migration, named by a digest of its content | PASS |
+| I | Seeds | re-running the seed migration changes nothing | PASS |
+| I | Seeds | a tenant-edited role grant survives a re-run: the revoked baseline grant stays revoked (no duplicate row) and the added grant stays | PASS |
+| I | Seeds | and the edit is what the next request sees: the viewer lost the read and gained the create | PASS |
+| I | Register | `schema rules` lists the permission every generic route, generated verb and declared verb requires | PASS |
+| I | Register | a declared system role's grants are normalised to the canonical spelling (projects.read -> project:read) | PASS |
+| I | Register | `schema rules` labels each route group PERMISSION REQUIRED <permission> and says the mode (no resolver installed: AUTHCONTEXT) | PASS |
+| I | Schema doctor | doctor says the mode, and warns (without failing) on the dotted spelling a role uses | PASS |
+| I | Schema doctor | an unguarded hand-written route fails `schema doctor`, naming the file, the line and the fix | PASS |
+| I | Schema doctor | a route marked `// unguarded: <why>` is accepted, and the doctor prints the reason | PASS |
+| I | Schema doctor | a guarded verb whose permission the vocabulary does not hold fails `schema doctor` | PASS |
+| I | Schema doctor | a hand-written call of the unguarded generic routes (BackboneCrudHandler::routes) fails `schema doctor` | PASS |
+| I | Register | the register and the doctor label the mode RESOLVER when the service installs a grant resolver | PASS |
+| I | Declarations | `requires:` naming a permission the vocabulary does not declare fails generation, naming it | PASS |
+| I | Declarations | a declared `requires:` renames the permission the entity's read routes need in the generated handler | PASS |
+| I | Declarations | a system role that lists a malformed permission fails generation, naming the role and the entry | PASS |
 
 ## Failures (0)
 

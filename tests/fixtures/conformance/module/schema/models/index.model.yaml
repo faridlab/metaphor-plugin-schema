@@ -22,6 +22,20 @@ config:
       - grpc
       - proto
 
+# The permission vocabulary beyond what the routes imply (the custom ticket verbs) and the system
+# roles the seed migration writes. `projects.read` is the older dotted spelling, kept to prove it is
+# normalised (and that `schema doctor` reports it).
+authorization:
+  permissions:
+    tickets: [escalate, archive_with_reason]
+  roles:
+    ADMIN:
+      description: "Holds every permission"
+      permissions: ["*:*"]
+    viewer:
+      description: "Reads tickets and projects"
+      permissions: ["ticket:read", "projects.read"]
+
 shared_types:
   Timestamps:
     created_at:
