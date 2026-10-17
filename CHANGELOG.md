@@ -31,6 +31,12 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   `transition`, `from` and `to` params, when the machine has no such edge from the current state,
   and `transition_guard_failed`, with `transition` and `guard`, when the edge's guard does not hold.
   The edge refusal was a bare 400 sentence and the guard refusal a 422 with no code.
+- The org kind guard refuses with a SQLSTATE, the table, `COLUMN = 'org_unit_id'` and a
+  `tg_<table>__<code>` constraint, as the state-transition trigger does, so the service answers a
+  coded 422 on `org_unit_id` instead of a 500: `org_kind_refused` (`check_violation`) for a node of
+  another kind, `reference_missing` (`foreign_key_violation`) for an id naming no node. A module
+  whose `enable_org_fence` migration is already applied gets the functions again from a new
+  `refresh_org_kind_guards_<digest>` migration; the old migration is left as it is.
 
 ## [0.35.0] - 2026-10-17
 

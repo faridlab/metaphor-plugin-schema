@@ -483,19 +483,7 @@ pub fn org_unit_fill_sql(table_ref: &str) -> (String, String) {
 /// `table_ref` is the qualified `schema.table`; the function is created in the
 /// table's own schema (mirrors the hand-proven pilot migration's naming).
 pub fn org_kind_guard_sql(table_ref: &str, allow_root: bool) -> (String, String) {
-    let bare = table_ref.rsplit('.').next().unwrap_or(table_ref);
-    let fn_name = format!("{bare}_org_unit_kind_guard");
-    // Locate the function in the module's own schema, whatever the migration's
-    // search_path: split the qualified ref, or fall back to the bare name.
-    let fn_ref = match table_ref.rsplit_once('.') {
-        Some((schema, _)) => format!("{schema}.{fn_name}"),
-        None => fn_name.clone(),
-    };
-    let kinds = if allow_root {
-        "('company', 'branch', 'root')"
-    } else {
-        "('company', 'branch')"
-    };
+    let (fn_name, fn_ref) = org_kind_guard_names(table_ref);
     let mut up = String::new();
     writeln!(
         up,
@@ -508,6 +496,52 @@ pub fn org_kind_guard_sql(table_ref: &str, allow_root: bool) -> (String, String)
     )
     .unwrap();
     writeln!(up, "-- wrong-kind nodes are rejected at write time.").unwrap();
+    up.push_str(&org_kind_guard_function_sql(table_ref, allow_root));
+    writeln!(up).unwrap();
+    writeln!(up, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
+    writeln!(up, "CREATE TRIGGER {fn_name}").unwrap();
+    writeln!(
+        up,
+        "    BEFORE INSERT OR UPDATE OF org_unit_id ON {table_ref}"
+    )
+    .unwrap();
+    writeln!(up, "    FOR EACH ROW EXECUTE FUNCTION {fn_ref}();").unwrap();
+
+    let mut down = String::new();
+    writeln!(down, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
+    writeln!(down, "DROP FUNCTION IF EXISTS {fn_ref}();").unwrap();
+    (up, down)
+}
+
+/// The kind guard's trigger and function names for `table_ref`: `<table>_org_unit_kind_guard`,
+/// the function in the table's own schema whatever the migration's search_path.
+fn org_kind_guard_names(table_ref: &str) -> (String, String) {
+    let bare = table_ref.rsplit('.').next().unwrap_or(table_ref);
+    let fn_name = format!("{bare}_org_unit_kind_guard");
+    let fn_ref = match table_ref.rsplit_once('.') {
+        Some((schema, _)) => format!("{schema}.{fn_name}"),
+        None => fn_name.clone(),
+    };
+    (fn_name, fn_ref)
+}
+
+/// The kind guard's trigger function, `CREATE OR REPLACE`d.
+///
+/// A refusal carries what the service maps to a coded violation on `org_unit_id`, as the
+/// generated state-transition trigger does: an unknown id raises `foreign_key_violation` with
+/// constraint `tg_<table>__reference_missing` (the code a missing foreign-key target answers), a
+/// node of another kind raises `check_violation` with constraint `tg_<table>__org_kind_refused`;
+/// both name `COLUMN = 'org_unit_id'` and the table. A bare `RAISE EXCEPTION` (P0001) maps to
+/// nothing and answered a 500.
+pub fn org_kind_guard_function_sql(table_ref: &str, allow_root: bool) -> String {
+    let bare = table_ref.rsplit('.').next().unwrap_or(table_ref);
+    let (_, fn_ref) = org_kind_guard_names(table_ref);
+    let (kinds, kind_list) = if allow_root {
+        ("('company', 'branch', 'root')", "company, branch or root")
+    } else {
+        ("('company', 'branch')", "company or branch")
+    };
+    let mut up = String::new();
     writeln!(
         up,
         "CREATE OR REPLACE FUNCTION {fn_ref}() RETURNS trigger AS $$"
@@ -524,39 +558,21 @@ pub fn org_kind_guard_sql(table_ref: &str, allow_root: bool) -> (String, String)
     writeln!(up, "    IF v_kind IS NULL THEN").unwrap();
     writeln!(
         up,
-        "        RAISE EXCEPTION '{bare}.org_unit_id % does not reference an organization.org_units node', NEW.org_unit_id;",
+        "        RAISE EXCEPTION '{bare}.org_unit_id % does not reference an organization.org_units node', NEW.org_unit_id\n            USING ERRCODE = 'foreign_key_violation', TABLE = '{bare}', COLUMN = 'org_unit_id', CONSTRAINT = 'tg_{bare}__reference_missing';",
     )
     .unwrap();
     writeln!(up, "    END IF;").unwrap();
     writeln!(up, "    IF v_kind NOT IN {kinds} THEN").unwrap();
-    let kind_list = if allow_root {
-        "company, branch or root"
-    } else {
-        "company or branch"
-    };
     writeln!(
         up,
-        "        RAISE EXCEPTION '{bare}.org_unit_id must reference a {kind_list} node, got a % node', v_kind;"
+        "        RAISE EXCEPTION '{bare}.org_unit_id must reference a {kind_list} node, got a % node', v_kind\n            USING ERRCODE = 'check_violation', TABLE = '{bare}', COLUMN = 'org_unit_id', CONSTRAINT = 'tg_{bare}__org_kind_refused';"
     )
     .unwrap();
     writeln!(up, "    END IF;").unwrap();
     writeln!(up, "    RETURN NEW;").unwrap();
     writeln!(up, "END;").unwrap();
     writeln!(up, "$$ LANGUAGE plpgsql;").unwrap();
-    writeln!(up).unwrap();
-    writeln!(up, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
-    writeln!(up, "CREATE TRIGGER {fn_name}").unwrap();
-    writeln!(
-        up,
-        "    BEFORE INSERT OR UPDATE OF org_unit_id ON {table_ref}"
-    )
-    .unwrap();
-    writeln!(up, "    FOR EACH ROW EXECUTE FUNCTION {fn_ref}();").unwrap();
-
-    let mut down = String::new();
-    writeln!(down, "DROP TRIGGER IF EXISTS {fn_name} ON {table_ref};").unwrap();
-    writeln!(down, "DROP FUNCTION IF EXISTS {fn_ref}();").unwrap();
-    (up, down)
+    up
 }
 
 // ── Composition-installed tenancy decorator (ADR-0029) ───────────────────────
@@ -2600,6 +2616,36 @@ impl SqlGenerator {
                 PathBuf::from(format!("migrations/{}_enable_org_fence.down.sql", ts)),
                 down,
             );
+
+            // The kind guards' functions again, on their own: `enable_org_fence` is immutable
+            // once applied, so a module migrated before the guards raised coded refusals gets
+            // them from this file. Named by a digest of its content, so a later change to the
+            // functions lands as a new file too; on a fresh database it replaces each function
+            // with itself.
+            let functions: Vec<String> = schema
+                .schema
+                .models
+                .iter()
+                .filter(|m| Self::org_fence_column(m).is_some() && module_org_fence.is_some_and(|f| !matches!(f, OrgFence::None)))
+                .map(|m| org_kind_guard_function_sql(&m.qualified_table_name(), Self::org_fence_column(m).is_some_and(|f| f.has_attribute("org_root_shared"))))
+                .collect();
+            if !functions.is_empty() {
+                let digest = format!("{:08x}", fnv1a(&functions.concat()));
+                // After `enable_org_fence`, which takes `counter` itself.
+                let ts = Self::timestamp_for(counter + 1);
+                let mut up = String::new();
+                writeln!(up, "-- Org kind guards for {} module: refusals the service maps to coded violations", module_name).unwrap();
+                writeln!(up, "-- Generated by metaphor-schema").unwrap();
+                writeln!(up).unwrap();
+                for f in &functions {
+                    writeln!(up, "{f}").unwrap();
+                }
+                let mut down = String::new();
+                writeln!(down, "-- Down: the kind guards keep their coded refusals; reversing enable_org_fence drops them").unwrap();
+                writeln!(down, "DO $$ BEGIN END $$;").unwrap();
+                output.add_file(PathBuf::from(format!("migrations/{}_refresh_org_kind_guards_{}.up.sql", ts, digest)), up);
+                output.add_file(PathBuf::from(format!("migrations/{}_refresh_org_kind_guards_{}.down.sql", ts, digest)), down);
+            }
         }
 
         Ok(())
@@ -3400,6 +3446,33 @@ mod tests {
             org_up.to_string_lossy() > table_up.to_string_lossy(),
             "org fence migration must run after the table exists"
         );
+    }
+
+    /// The kind guard refuses with what the service maps to a coded violation on `org_unit_id`
+    /// (a SQLSTATE, the column, and a `tg_<table>__<code>` constraint), never a bare
+    /// `RAISE EXCEPTION`; a module whose fence is already applied gets the functions again from
+    /// a refresh migration sorted after the fence.
+    #[test]
+    fn the_org_kind_guard_raises_coded_refusals_and_refreshes_applied_fences() {
+        let f = org_kind_guard_function_sql("inventory.warehouses", false);
+        assert!(f.contains("USING ERRCODE = 'check_violation', TABLE = 'warehouses', COLUMN = 'org_unit_id', CONSTRAINT = 'tg_warehouses__org_kind_refused';"), "{f}");
+        assert!(f.contains("USING ERRCODE = 'foreign_key_violation', TABLE = 'warehouses', COLUMN = 'org_unit_id', CONSTRAINT = 'tg_warehouses__reference_missing';"), "{f}");
+        assert!(f.starts_with("CREATE OR REPLACE FUNCTION inventory.warehouses_org_unit_kind_guard() RETURNS trigger AS $$"), "{f}");
+        let (up, _) = org_kind_guard_sql("inventory.warehouses", false);
+        assert!(up.contains(&f), "the fence installs the same function: {up}");
+
+        let mut schema = ModuleSchema::new("inventory");
+        schema.models.push(org_scoped_model());
+        schema.org_fence = Some(OrgFence::Strict);
+        let output = SqlGenerator::new().with_split(true).generate(&ResolvedSchema { schema }).unwrap();
+        let name = |suffix: &str| {
+            output.files.keys().map(|p| p.to_string_lossy().to_string()).find(|p| p.contains(suffix)).unwrap_or_else(|| panic!("no {suffix}"))
+        };
+        let (fence, refresh) = (name("_enable_org_fence.up.sql"), name("_refresh_org_kind_guards_"));
+        assert!(refresh > fence, "the refresh runs after the fence: {refresh} vs {fence}");
+        assert_ne!(refresh.split('_').next(), fence.split('_').next(), "a version of its own");
+        let body = output.files.iter().find(|(p, _)| p.to_string_lossy().contains("_refresh_org_kind_guards_") && p.to_string_lossy().ends_with(".up.sql")).unwrap().1;
+        assert!(body.contains("tg_warehouses__org_kind_refused") && !body.contains("CREATE TRIGGER"), "{body}");
     }
 
     /// ADR-0014: an undeclared module fence must produce byte-identical output
