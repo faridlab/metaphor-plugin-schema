@@ -142,6 +142,13 @@ impl Model {
         self.read_only || self.has_attribute("read_only")
     }
 
+    /// Whether the composer mounts the generic write routes for this model. A read-only model
+    /// and one with a hand-set lifecycle mount only their reads (list, one, trash), so nothing
+    /// that documents the routes may offer more.
+    pub fn mounts_writes(&self) -> bool {
+        !(self.has_read_only() || self.has_hand_set_lifecycle())
+    }
+
     /// Whether any field declares a `hand_set` lifecycle (ADR-0016): the field's
     /// value moves only through the module's validated verbs — a declared state
     /// machine or a recorded declaration-of-record — so a generic CRUD write
@@ -188,7 +195,7 @@ impl Model {
     /// site.
     pub fn default_route_fn(&self) -> String {
         let snake = to_snake_case(&self.name);
-        if self.has_read_only() || self.has_hand_set_lifecycle() {
+        if !self.mounts_writes() {
             format!("create_{}_read_routes", snake)
         } else {
             format!("create_{}_routes", snake)

@@ -8,6 +8,44 @@ use crate::resolver::ResolvedSchema;
 use std::fmt::Write;
 use std::path::PathBuf;
 
+/// The read operations of a block of path items, for a model mounted read-only: each item keeps
+/// its `get` and its `parameters`, and an item left without a `get` goes whole.
+fn reads_only(paths: &str) -> String {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let mut out = String::new();
+    let mut items: Vec<Vec<&str>> = Vec::new();
+    for line in paths.lines() {
+        if !line.trim().is_empty() && indent(line) == 2 {
+            items.push(vec![line]);
+        } else if let Some(item) = items.last_mut() {
+            item.push(line);
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    for item in items {
+        let (mut kept, mut keep, mut has_get) = (vec![item[0]], true, false);
+        for line in &item[1..] {
+            if !line.trim().is_empty() && indent(line) == 4 {
+                let key = line.trim();
+                keep = key == "get:" || key == "parameters:";
+                has_get |= key == "get:";
+            }
+            if keep {
+                kept.push(line);
+            }
+        }
+        if has_get {
+            for line in kept {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 /// Generates OpenAPI 3.0 specification
 pub struct OpenApiGenerator {
     /// API title
@@ -118,7 +156,13 @@ impl OpenApiGenerator {
         // Paths
         writeln!(output, "paths:").unwrap();
         for model in &schema.schema.models {
-            self.write_model_paths(&mut output, model)?;
+            let mut paths = String::new();
+            self.write_model_paths(&mut paths, model)?;
+            output.push_str(&if model.mounts_writes() {
+                paths
+            } else {
+                reads_only(&paths)
+            });
         }
 
         // Components
@@ -130,7 +174,7 @@ impl OpenApiGenerator {
         // the model schemas after it would nest them under `requestBodies` instead
         // of `schemas` — leaving every `#/components/schemas/{Model}` $ref dangling.
         for model in &schema.schema.models {
-            self.write_model_schemas(&mut output, model)?;
+            self.write_model_schemas(&mut output, model, &schema.schema)?;
         }
 
         // Common schemas (PaginationMeta, Error) + shared parameters/responses/
@@ -975,7 +1019,12 @@ impl OpenApiGenerator {
         Ok(())
     }
 
-    fn write_model_schemas(&self, output: &mut String, model: &Model) -> Result<(), GenerateError> {
+    fn write_model_schemas(
+        &self,
+        output: &mut String,
+        model: &Model,
+        module: &crate::ast::ModuleSchema,
+    ) -> Result<(), GenerateError> {
         // Main entity schema
         writeln!(output, "    {}:", model.name).unwrap();
         writeln!(output, "      type: object").unwrap();
@@ -1011,79 +1060,64 @@ impl OpenApiGenerator {
         writeln!(output, "          items: {{ type: string }}").unwrap();
         writeln!(output).unwrap();
 
-        // Create request schema
-        writeln!(output, "    Create{}Request:", model.name).unwrap();
-        writeln!(output, "      type: object").unwrap();
-        writeln!(output, "      required:").unwrap();
-        for field in &model.fields {
-            if field.name == "id"
-                || field.name == "created_at"
-                || field.name == "updated_at"
-                || field.name == "deleted_at"
-            {
-                continue;
+        // Request schemas: the fields the Create, Update and Patch DTOs take, by the same filters.
+        let born = super::dto::born_values(module, model);
+        let create: Vec<&crate::ast::Field> = model
+            .fields
+            .iter()
+            .filter(|f| !super::dto::excluded_from_create(f, &born))
+            .collect();
+        let update: Vec<&crate::ast::Field> = model
+            .fields
+            .iter()
+            .filter(|f| !super::dto::excluded_from_update(f))
+            .collect();
+        // A create may leave out an optional field and one with a literal default; a full update
+        // states every field but the optional ones.
+        let create_required: Vec<&str> = create
+            .iter()
+            .filter(|f| {
+                !f.type_ref.is_optional()
+                    && !f.has_attribute("audit_metadata")
+                    && super::dto::create_default(&module.enums, f).is_none()
+            })
+            .map(|f| f.name.as_str())
+            .collect();
+        let update_required: Vec<&str> = update
+            .iter()
+            .filter(|f| !f.type_ref.is_optional() && !f.has_attribute("audit_metadata"))
+            .map(|f| f.name.as_str())
+            .collect();
+        for (name, fields, required) in [
+            (
+                format!("Create{}Request", model.name),
+                &create,
+                Some(&create_required),
+            ),
+            (
+                format!("Update{}Request", model.name),
+                &update,
+                Some(&update_required),
+            ),
+            (format!("Patch{}Request", model.name), &update, None),
+        ] {
+            writeln!(output, "    {name}:").unwrap();
+            writeln!(output, "      type: object").unwrap();
+            if let Some(required) = required.filter(|r| !r.is_empty()) {
+                writeln!(output, "      required:").unwrap();
+                for field in required {
+                    writeln!(output, "        - {field}").unwrap();
+                }
             }
-            if !field.type_ref.is_optional() {
-                writeln!(output, "        - {}", field.name).unwrap();
+            writeln!(output, "      properties:").unwrap();
+            if fields.is_empty() {
+                writeln!(output, "        {{}}").unwrap();
             }
+            for field in fields.iter() {
+                self.write_field_schema(output, field, 8)?;
+            }
+            writeln!(output).unwrap();
         }
-        writeln!(output, "      properties:").unwrap();
-        for field in &model.fields {
-            if field.name == "id"
-                || field.name == "created_at"
-                || field.name == "updated_at"
-                || field.name == "deleted_at"
-            {
-                continue;
-            }
-            self.write_field_schema(output, field, 8)?;
-        }
-        writeln!(output).unwrap();
-
-        // Update request schema (same as create but might include id)
-        writeln!(output, "    Update{}Request:", model.name).unwrap();
-        writeln!(output, "      type: object").unwrap();
-        writeln!(output, "      required:").unwrap();
-        for field in &model.fields {
-            if field.name == "id"
-                || field.name == "created_at"
-                || field.name == "updated_at"
-                || field.name == "deleted_at"
-            {
-                continue;
-            }
-            if !field.type_ref.is_optional() {
-                writeln!(output, "        - {}", field.name).unwrap();
-            }
-        }
-        writeln!(output, "      properties:").unwrap();
-        for field in &model.fields {
-            if field.name == "id"
-                || field.name == "created_at"
-                || field.name == "updated_at"
-                || field.name == "deleted_at"
-            {
-                continue;
-            }
-            self.write_field_schema(output, field, 8)?;
-        }
-        writeln!(output).unwrap();
-
-        // Patch request schema (all optional)
-        writeln!(output, "    Patch{}Request:", model.name).unwrap();
-        writeln!(output, "      type: object").unwrap();
-        writeln!(output, "      properties:").unwrap();
-        for field in &model.fields {
-            if field.name == "id"
-                || field.name == "created_at"
-                || field.name == "updated_at"
-                || field.name == "deleted_at"
-            {
-                continue;
-            }
-            self.write_field_schema(output, field, 8)?;
-        }
-        writeln!(output).unwrap();
 
         // List response schema
         writeln!(output, "    {}List:", model.name).unwrap();
@@ -1274,98 +1308,36 @@ impl OpenApiGenerator {
             let model_plural = pluralize(&model_snake);
             let base_path = mounted_base_path(model, &model_plural);
 
-            // Reference to entity file for collection endpoints
-            writeln!(output, "  {}:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // Reference for single item endpoints
-            writeln!(output, "  {}/{{id}}:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1{{id}}'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // Reference for bulk endpoints
-            writeln!(output, "  {}/bulk:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1bulk'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // Reference for upsert endpoints
-            writeln!(output, "  {}/upsert:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1upsert'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // Reference for trash endpoints
-            writeln!(output, "  {}/trash:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1trash'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // Reference for restore endpoints
-            writeln!(output, "  {}/{{id}}/restore:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1{{id}}~1restore'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // Reference for empty trash endpoints
-            writeln!(output, "  {}/empty:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1empty'",
-                model_snake, model_plural
-            )
-            .unwrap();
-
-            // References for batch endpoints
-            writeln!(output, "  {}/delete/bulk:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1delete~1bulk'",
-                model_snake, model_plural
-            )
-            .unwrap();
-            writeln!(output, "  {}/restore/bulk:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1restore~1bulk'",
-                model_snake, model_plural
-            )
-            .unwrap();
-            writeln!(output, "  {}/restore/all:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1restore~1all'",
-                model_snake, model_plural
-            )
-            .unwrap();
-            writeln!(output, "  {}/trash/bulk:", base_path).unwrap();
-            writeln!(
-                output,
-                "    $ref: './{}.openapi.yaml#/paths/~1api~1v1~1{}~1trash~1bulk'",
-                model_snake, model_plural
-            )
-            .unwrap();
+            // One reference per path the entity file lists: only the reads for a model mounted
+            // read-only. A JSON pointer spells each `/` of the path as `~1`.
+            let suffixes: &[&str] = if model.mounts_writes() {
+                &[
+                    "",
+                    "/{id}",
+                    "/bulk",
+                    "/upsert",
+                    "/trash",
+                    "/{id}/restore",
+                    "/empty",
+                    "/delete/bulk",
+                    "/restore/bulk",
+                    "/restore/all",
+                    "/trash/bulk",
+                ]
+            } else {
+                &["", "/{id}", "/trash"]
+            };
+            for suffix in suffixes {
+                let path = format!("{base_path}{suffix}");
+                writeln!(output, "  {path}:").unwrap();
+                writeln!(
+                    output,
+                    "    $ref: './{}.openapi.yaml#/paths/{}'",
+                    model_snake,
+                    path.replace('/', "~1")
+                )
+                .unwrap();
+            }
         }
         writeln!(output).unwrap();
 
@@ -1395,7 +1367,7 @@ impl OpenApiGenerator {
     fn generate_model_spec(
         &self,
         model: &Model,
-        _schema: &ResolvedSchema,
+        schema: &ResolvedSchema,
     ) -> Result<String, GenerateError> {
         let mut output = String::new();
         let model_snake = to_snake_case(&model.name);
@@ -1432,6 +1404,7 @@ impl OpenApiGenerator {
 
         // Paths
         writeln!(output, "paths:").unwrap();
+        let paths_start = output.len();
 
         // Collection endpoints
         writeln!(output, "  {}:", base_path).unwrap();
@@ -1826,13 +1799,17 @@ impl OpenApiGenerator {
         writeln!(output).unwrap();
 
         self.write_bulk_trash_paths(&mut output, model, &base_path, &tag);
+        if !model.mounts_writes() {
+            let paths = output.split_off(paths_start);
+            output.push_str(&reads_only(&paths));
+        }
 
         // Components
         writeln!(output, "components:").unwrap();
         writeln!(output, "  schemas:").unwrap();
 
         // Model-specific schemas
-        self.write_model_schemas(&mut output, model)?;
+        self.write_model_schemas(&mut output, model, &schema.schema)?;
 
         // Common schemas (shared)
         self.write_common_schemas(&mut output)?;
@@ -1951,6 +1928,102 @@ mod tests {
         });
 
         ResolvedSchema { schema }
+    }
+
+    fn parsed(spec: &str) -> serde_yaml::Value {
+        serde_yaml::from_str(spec).unwrap_or_else(|e| panic!("{e}\n{spec}"))
+    }
+
+    fn keys(v: &serde_yaml::Value) -> Vec<String> {
+        v.as_mapping()
+            .map(|m| {
+                m.keys()
+                    .filter_map(|k| k.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The request schemas list what the Create, Update and Patch DTOs take, from the same
+    /// filters: no server-filled `metadata`, no `@exclude_from_dto` field, no hand-set or
+    /// projected field on create, no `@immutable` one on update; a field with a literal default
+    /// is not required on create.
+    #[test]
+    fn request_schemas_offer_what_the_dtos_take() {
+        let yaml = "models:\n  - name: Job\n    collection: jobs\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      title:\n        type: string\n      code:\n        type: string\n        attributes: [\"@immutable\"]\n      filled:\n        type: int\n        attributes: [\"@default(0)\"]\n      secret:\n        type: string\n        attributes: [\"@exclude_from_dto\"]\n      total:\n        type: int\n        attributes: [\"@default(0)\"]\n        lifecycle:\n          shape: projection\n      metadata:\n        type: json\n";
+        let mut module = ModuleSchema::new("hiring");
+        module.models = crate::parser::yaml_parser::parse_model_yaml_str(yaml)
+            .unwrap()
+            .into_models()
+            .unwrap();
+        let out = OpenApiGenerator::new()
+            .generate(&ResolvedSchema { schema: module })
+            .unwrap();
+        let doc = parsed(&out.files[&PathBuf::from("schema/openapi/openapi.yaml")]);
+        let schemas = &doc["components"]["schemas"];
+        assert_eq!(
+            keys(&schemas["CreateJobRequest"]["properties"]),
+            ["title", "code", "filled"]
+        );
+        let required: Vec<&str> = schemas["CreateJobRequest"]["required"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(required, ["title", "code"]);
+        assert_eq!(
+            keys(&schemas["UpdateJobRequest"]["properties"]),
+            ["title", "filled", "total"]
+        );
+        assert_eq!(
+            keys(&schemas["PatchJobRequest"]["properties"]),
+            ["title", "filled", "total"]
+        );
+    }
+
+    /// A read-only or hand-set model mounts only its read routes, so the document lists only
+    /// those, in the combined and the split form alike.
+    #[test]
+    fn a_model_mounted_read_only_documents_only_its_reads() {
+        let mut schema = create_test_schema();
+        schema.schema.models[0].read_only = true;
+        let out = OpenApiGenerator::new().generate(&schema).unwrap();
+        let doc = parsed(&out.files[&PathBuf::from("schema/openapi/openapi.yaml")]);
+        assert_eq!(
+            keys(&doc["paths"]),
+            ["/api/v1/users", "/api/v1/users/{id}", "/api/v1/users/trash"]
+        );
+        for (path, item) in doc["paths"].as_mapping().unwrap() {
+            let ops: Vec<String> = keys(item)
+                .into_iter()
+                .filter(|k| k != "parameters")
+                .collect();
+            assert_eq!(ops, ["get"], "{path:?}");
+        }
+
+        let split = OpenApiGenerator::new()
+            .with_split(true)
+            .generate(&schema)
+            .unwrap();
+        let model = parsed(&split.files[&PathBuf::from("schema/openapi/user.openapi.yaml")]);
+        assert_eq!(
+            keys(&model["paths"]),
+            ["/api/v1/users", "/api/v1/users/{id}", "/api/v1/users/trash"]
+        );
+        let index = parsed(&split.files[&PathBuf::from("schema/openapi/index.openapi.yaml")]);
+        assert_eq!(
+            keys(&index["paths"]),
+            ["/api/v1/users", "/api/v1/users/{id}", "/api/v1/users/trash"]
+        );
+
+        // A writable model keeps its write routes.
+        let full = OpenApiGenerator::new()
+            .generate(&create_test_schema())
+            .unwrap();
+        let doc = parsed(&full.files[&PathBuf::from("schema/openapi/openapi.yaml")]);
+        assert!(keys(&doc["paths"]["/api/v1/users"]).contains(&"post".to_string()));
+        assert!(keys(&doc["paths"]).contains(&"/api/v1/users/bulk".to_string()));
     }
 
     #[test]
