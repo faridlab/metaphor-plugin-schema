@@ -7,6 +7,45 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- The webapp API client treats an empty `VITE_API_BASE_URL` as same origin. It used to fall back to
+  `'/api'` and then append `/api/v1/...`, so every request went to `/api/api/v1/...`.
+- Webapp client base paths mount under the module's Postgres `schema:`, the same segment the
+  OpenAPI document and the service use, and fall back to `module:` only when the schema is
+  missing, empty or `public`. Where the two names differ (`assets`/`asset`,
+  `payment-gateway`/`payment_gateway`), the clients used to call routes nothing serves.
+- Every field of a webapp entity schema takes its checks from the service's write guard. A field
+  the guard does not check (filled by the service, projected, hand-set, or written by no form)
+  no longer falls back to uncoded attribute checks such as `Must be zero or positive`. A text
+  field keeps its declared maximum, counted in characters, including an optional one.
+- The webapp create and update schemas offer the fields the Rust Create and Update DTOs take:
+  server-filled, `@exclude_from_dto`, hand-set and projected fields leave the create schema, and
+  `@immutable` and `@exclude_from_dto` fields leave the update schema.
+
+### Added
+
+- Every check in a webapp entity schema answers with one of the service's violation codes. A
+  refinement carries it in `params.code`. The Zod checks screens read (`.uuid()`, `.date()`,
+  `.datetime()`, a text field's `.max`, `z.enum`) carry the service's wording, and the new
+  `shared/validation` `violationOf(issue)` reads their code off the issue.
+- Each webapp entity schema exports `<entity>WriteProtectedFields`, the fields a generic write
+  may not change.
+- `schema generate:webapp` removes the files it generated earlier for entities the schema no
+  longer declares. It removes only files carrying the generator's mark, only in directories the
+  run wrote into, never after a run filtered to one entity, and it keeps a stale file whose
+  CUSTOM block holds authored code. `--no-prune` turns this off. Every generated file now
+  carries the mark.
+- `schema doctor` flags a schema index whose `module:` and `schema:` name different route
+  segments.
+- A generated entity's `PersistentEntity` implementation lists `state_fields()`, the fields its
+  state machines move, so a write-protected field bound to a machine (a hand-set status) is moved
+  by its generated transition. The webapp's `<entity>StateFields` comes from the same function.
+  Needs the backbone-core release that adds `PersistentEntity::state_fields`.
+- A generated transition handler answers a refused write through
+  `backbone_core::http::service_error_response` (422 with violations, 400, 404, 409) instead of
+  always 500. Needs the backbone-core release that adds it.
+
 ## [0.33.7] — 2026-10-17
 
 ### Added

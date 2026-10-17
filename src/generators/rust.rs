@@ -1055,9 +1055,8 @@ impl RustGenerator {
         // Generate Entity trait implementation
         self.generate_entity_trait_impl(model, output);
 
-        // Generate backbone_core::PersistentEntity implementation
-        self.generate_persistent_entity_impl(model, output);
-        // Note: EntityRepoMeta is generated in generate_model() where schema is available
+        // The PersistentEntity implementation follows, from generate_model(), where the schema
+        // (and so the entity's state machines) is available; EntityRepoMeta is generated there too.
     }
 
     /// Generate builder struct and implementation for an entity
@@ -1393,7 +1392,7 @@ impl RustGenerator {
     }
 
     /// Generate backbone_core::PersistentEntity implementation for a model
-    fn generate_persistent_entity_impl(&self, model: &Model, output: &mut String) {
+    fn generate_persistent_entity_impl(&self, model: &Model, state_fields: &[String], output: &mut String) {
         let name = &model.name;
         let pk_field = self.get_pk_field(model);
         let has_audit = self.has_audit_metadata(model);
@@ -1418,6 +1417,16 @@ impl RustGenerator {
         if !protected.is_empty() {
             let list = protected.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
             writeln!(output, "    fn write_protected_fields() -> &'static [&'static str] {{").unwrap();
+            writeln!(output, "        &[{list}]").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
+        // The fields the entity's state machines move. Inside a transition the generic service
+        // lets these through its write protection, so a machine-bound field that is also
+        // write-protected (a hand-set status) is moved by its generated verb and by nothing else.
+        if !state_fields.is_empty() {
+            let list = state_fields.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+            writeln!(output, "    fn state_fields() -> &'static [&'static str] {{").unwrap();
             writeln!(output, "        &[{list}]").unwrap();
             writeln!(output, "    }}").unwrap();
         }
@@ -2110,6 +2119,9 @@ impl RustGenerator {
                 .as_deref(),
             &mut output,
         );
+        // Generate backbone_core::PersistentEntity implementation
+        let state_fields = crate::rules::compile::model_state_fields(&schema.schema, model);
+        self.generate_persistent_entity_impl(model, &state_fields, &mut output);
 
         // Generate backbone_orm::EntityRepoMeta implementation (needs schema for enum detection)
         {
@@ -3255,6 +3267,40 @@ mod tests {
             "hashed, immutable, hand_set and projection fields are protected, in schema order; \
              a plain field and a label are not:\n{section}"
         );
+    }
+
+    /// A hand-set status bound to a state machine (the digest shape): write-protected, so no
+    /// generic write moves it, and a state field, so its generated transition can.
+    #[test]
+    fn a_machine_bound_hand_set_field_is_a_state_field_too() {
+        let mut resolved = make_schema_with_write_protected_fields();
+        resolved.schema.rule_register.machines.push(crate::rules::DeclaredMachine {
+            source: Default::default(),
+            target: "Account".into(),
+            alternatives: vec![],
+            bound_model: Some("Account".into()),
+            field: "status".into(),
+            initial: Some("draft".into()),
+            states: vec!["draft".into(), "sent".into()],
+            transitions: vec![],
+            guards: vec![],
+            effects: vec![],
+            verbs: Some("generated".into()),
+        });
+        let output = RustGenerator::new().generate(&resolved).unwrap();
+        let file = output.files.get(&PathBuf::from("src/domain/entity/account.rs")).expect("account.rs");
+        let section = persistent_entity_impl(file, "Account");
+        assert!(section.contains(r#"&["password_hash", "code", "status", "balance"]"#), "still write-protected:\n{section}");
+        assert!(
+            section.contains("fn state_fields() -> &'static [&'static str] {\n        &[\"status\"]"),
+            "the machine's field is a state field:\n{section}"
+        );
+        // The webapp's `<entity>StateFields` list comes from the same function.
+        let model = resolved.schema.models.iter().find(|m| m.name == "Account").unwrap();
+        assert_eq!(crate::rules::compile::model_state_fields(&resolved.schema, model), vec!["status".to_string()]);
+        // A model with no machine keeps its impl unchanged.
+        let plain = RustGenerator::new().generate(&make_schema_with_write_protected_fields()).unwrap();
+        assert!(!persistent_entity_impl(plain.files.get(&PathBuf::from("src/domain/entity/account.rs")).unwrap(), "Account").contains("state_fields"));
     }
 
     #[test]

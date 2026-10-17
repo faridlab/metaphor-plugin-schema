@@ -1009,7 +1009,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             .unwrap();
             writeln!(output, "        Ok(Some(e)) => e,").unwrap();
             writeln!(output, "        Ok(None) => return (StatusCode::NOT_FOUND, Json(ApiResponse::<{}>::not_found(\"{}\", &id))),", body_type, model.name).unwrap();
-            writeln!(output, "        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<{}>::error(e.to_string()))),", body_type).unwrap();
+            writeln!(output, "        Err(e) => return backbone_core::http::service_error_response::<{}>(&e),", body_type).unwrap();
             writeln!(output, "    }};").unwrap();
             writeln!(output).unwrap();
 
@@ -1196,7 +1196,9 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             }
             writeln!(output, "        }}").unwrap();
             writeln!(output, "        Ok(None) => (StatusCode::NOT_FOUND, Json(ApiResponse::<{}>::not_found(\"{}\", &id))),", body_type, model.name).unwrap();
-            writeln!(output, "        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<{}>::error(e.to_string()))),", body_type).unwrap();
+            // A refused write is the caller's to fix (422 with its violations, 400, 404, 409), not
+            // a server fault: the service's error says which.
+            writeln!(output, "        Err(e) => backbone_core::http::service_error_response::<{}>(&e),", body_type).unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output, "}}").unwrap();
             writeln!(output).unwrap();
@@ -1528,6 +1530,10 @@ mod tests {
         assert!(out.contains("serde_json::Value::String(\"on_hold\".to_string())"), "{out}");
         assert!(!out.contains("\"OnHold\""), "{out}");
         assert!(out.contains("backbone_core::write_guard::as_transition(\"put_on_hold\", service.partial_update(&id, fields))"), "{out}");
+        // A refused transition answers with the service's status (422 with its violations, 404,
+        // 409), not a blanket 500.
+        assert!(out.contains("Err(e) => backbone_core::http::service_error_response::<TicketResponseDto>(&e),"), "{out}");
+        assert!(!out.contains("Err(e) => (StatusCode::INTERNAL_SERVER_ERROR"), "{out}");
         // An unreadable stored state is refused, never read as the initial state.
         assert!(out.contains("StatusCode::CONFLICT") && !out.contains("unwrap_or(TicketState::default())"), "{out}");
         // The caller's permission is checked whatever the module's features, and an unknown
