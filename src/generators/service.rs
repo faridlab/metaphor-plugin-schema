@@ -203,8 +203,17 @@ impl Generator for ServiceGenerator {
             .map(|m| m.name.clone())
             .collect();
 
+        let enums: std::collections::HashSet<String> =
+            schema.schema.enums.iter().map(|e| e.name.clone()).collect();
         for model in &schema.schema.models {
             let model_snake = to_snake_case(&model.name);
+            // The write hooks that stage the model's declared events (`events:` with `on:`).
+            if let Some(hooks) = super::declared_events::model_write_hooks(&schema.schema, model, &enums) {
+                output.add_file(
+                    PathBuf::from(format!("src/application/service/{model_snake}_write_hooks.rs")),
+                    hooks,
+                );
+            }
             if schema.schema.hand_owned_services.contains(&model.name)
                 && crate::rules::compile::model_has_guard(&schema.schema, model)
             {
@@ -285,6 +294,7 @@ impl Generator for ServiceGenerator {
                         writeln!(mod_content, "pub use {}::{}RowRules;", to_snake_case(&model.name), model.name).unwrap();
                     }
                 }
+                push_write_hooks_mods(&mut mod_content, &schema.schema);
                 for model in &schema.schema.models {
                     if model_names.contains(&model.name) {
                         mod_content.push_str(&guarded_constructor(&schema.schema, model));
@@ -324,6 +334,7 @@ impl Generator for ServiceGenerator {
                         writeln!(mod_content, "pub use {snake}_service::{}RowRules;", model.name).unwrap();
                     }
                 }
+                push_write_hooks_mods(&mut mod_content, &schema.schema);
                 for model in &schema.schema.models {
                     mod_content.push_str(&guarded_constructor(&schema.schema, model));
                 }
@@ -355,10 +366,31 @@ fn guarded_constructor(schema: &crate::ast::ModuleSchema, model: &crate::ast::Mo
     } else {
         String::new()
     };
-    let attached = if guard.is_empty() { "" } else { " with its write guard attached" };
+    let hooks = if super::declared_events::model_has_write_hooks(schema, model) {
+        format!(".with_write_hooks(std::sync::Arc::new({name}WriteHooks))")
+    } else {
+        String::new()
+    };
+    let attached = match (guard.is_empty(), hooks.is_empty()) {
+        (true, true) => "",
+        (false, true) => " with its write guard attached",
+        (true, false) => " with its write hooks attached",
+        (false, false) => " with its write guard and write hooks attached",
+    };
     format!(
-        "\n/// A `{name}Service` over `repository`{attached}: the way to build it, so its writes are\n/// served only with the rules the schema declares.\npub fn build_{snake}_service(\n    repository: std::sync::Arc<crate::infrastructure::persistence::{name}Repository>,\n) -> {name}Service {{\n    {name}Service::with_repository(repository){guard}\n}}\n"
+        "\n/// A `{name}Service` over `repository`{attached}: the way to build it, so its writes are\n/// served only with the rules the schema declares.\npub fn build_{snake}_service(\n    repository: std::sync::Arc<crate::infrastructure::persistence::{name}Repository>,\n) -> {name}Service {{\n    {name}Service::with_repository(repository){guard}{hooks}\n}}\n"
     )
+}
+
+/// The `mod` and `use` lines of every model's generated write hooks.
+fn push_write_hooks_mods(mod_content: &mut String, schema: &crate::ast::ModuleSchema) {
+    for model in &schema.models {
+        if super::declared_events::model_has_write_hooks(schema, model) {
+            let snake = to_snake_case(&model.name);
+            writeln!(mod_content, "pub mod {snake}_write_hooks;").unwrap();
+            writeln!(mod_content, "pub use {snake}_write_hooks::{}WriteHooks;", model.name).unwrap();
+        }
+    }
 }
 
 #[cfg(test)]

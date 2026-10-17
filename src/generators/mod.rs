@@ -10,6 +10,7 @@ pub mod computed;
 pub mod config;
 pub mod cqrs;
 pub mod data_change_audit;
+pub mod declared_events;
 pub mod state_transition_check;
 pub mod domain_service;
 pub mod events;

@@ -93,6 +93,15 @@ pub(super) fn execute_rules(
                 "readiness": register.readiness(),
                 "rules": register.rules,
                 "machines": register.machines,
+                "events": register.events.iter().map(|e| serde_json::json!({
+                    "name": e.name,
+                    "source": e.source.to_string(),
+                    "aggregate": e.bound_model,
+                    "status": event_label(e),
+                    "on": e.on.iter().map(|t| t.text()).collect::<Vec<_>>(),
+                    "if": e.condition,
+                    "problems": e.problems,
+                })).collect::<Vec<_>>(),
                 "warnings": register.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
                 "proposals": proposals(register),
             });
@@ -106,11 +115,15 @@ pub(super) fn execute_rules(
 /// One line for `schema validate`: how many rules, how many enforced.
 pub(super) fn summary_line(register: &RuleRegister) -> String {
     let r = register.readiness();
+    let staged = register.events.iter().filter(|e| e.status() == crate::rules::events::EventStatus::Staged).count();
     format!(
-        "{} rule(s) and {} state machine(s) declared; {} rule(s) not enforced by generated code; \
+        "{} rule(s), {} state machine(s) and {} event(s) ({} staged by the write hooks, {} by hand) declared; {} rule(s) not enforced by generated code; \
          expressions: {} ready, {} unresolved, {} unparsed (`schema rules` lists them)",
         register.rules.len(),
         register.machines.len(),
+        register.events.len(),
+        staged,
+        register.events.len() - staged,
         register.unenforced_rules(),
         r.ready,
         r.unresolved,
@@ -132,6 +145,17 @@ fn proposals(register: &RuleRegister) -> Vec<serde_json::Value> {
             _ => None,
         })
         .collect()
+}
+
+/// The label of a declared event: staged by the generated write hooks (and when), or by hand.
+fn event_label(event: &crate::rules::events::DeclaredEvent) -> String {
+    match event.status() {
+        crate::rules::events::EventStatus::Staged => {
+            let on: Vec<String> = event.on_text.clone();
+            format!("EVENT STAGED (on {}, in tx)", on.join(" | "))
+        }
+        crate::rules::events::EventStatus::HandStaged => "EVENT HAND-STAGED".to_string(),
+    }
 }
 
 /// The check state of an expression, with what stands in its way.
@@ -258,6 +282,33 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
                     t.guard.as_deref().unwrap_or(""),
                     describe(&t.guard_check)
                 );
+            }
+        }
+    }
+    if !register.events.is_empty() {
+        println!("{}", "Events:".bold());
+        for e in &register.events {
+            let label = event_label(e);
+            let label = if e.status() == crate::rules::events::EventStatus::Staged && e.problems.is_empty() {
+                label.green()
+            } else if e.problems.is_empty() {
+                label.yellow()
+            } else {
+                label.red()
+            };
+            println!(
+                "  {}  {}  → {}  v{}  {}",
+                e.source.to_string().dimmed(),
+                e.name.bold(),
+                e.bound_model.as_deref().unwrap_or("-"),
+                e.version,
+                label
+            );
+            if let Some(condition) = &e.condition {
+                println!("      if: {}  {}", condition.dimmed(), describe(&e.condition_check));
+            }
+            for problem in &e.problems {
+                println!("      {} {problem}", "problem:".red());
             }
         }
     }

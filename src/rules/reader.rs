@@ -15,6 +15,7 @@ use super::{DeclaredMachine, DeclaredRule, DeclaredTransition, EnforcementStatus
 pub struct ReadHookFile {
     pub rules: Vec<DeclaredRule>,
     pub machines: Vec<DeclaredMachine>,
+    pub events: Vec<super::events::DeclaredEvent>,
     pub warnings: Vec<RegisterWarning>,
 }
 
@@ -74,6 +75,14 @@ pub fn read_hook_file(file: &str, content: &str) -> ReadHookFile {
         .iter()
         .filter_map(|k| str_at(&root, k))
         .collect();
+    // The events of a file that names no model are declared all the same; each one names its
+    // own `aggregate:` or stays hand-staged.
+    out.events = super::events::read_events(
+        file,
+        &root,
+        names.first().map(String::as_str),
+        names.get(1..).unwrap_or_default(),
+    );
     let Some((file_target, file_alternatives)) = names.split_first() else {
         return out;
     };

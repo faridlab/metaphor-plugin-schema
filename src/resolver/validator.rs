@@ -46,6 +46,9 @@ impl<'a> SchemaValidator<'a> {
             errors.extend(self.validate_hook(hook));
         }
 
+        // A declared event the write hooks stage must name real fields, verbs and states
+        errors.extend(event_problems(self.schema).into_iter().map(ResolveError::validation));
+
         // Hook triggers are not generated, so a module may not declare them
         if !legacy_triggers(self.schema) {
             errors.extend(trigger_problems(self.schema).into_iter().map(ResolveError::validation));
@@ -1009,14 +1012,15 @@ fn job_posture_name(posture: crate::ast::JobPosture) -> &'static str {
 /// by hand) and `schema/workflows` (parsed and validated; no generated code runs them). Said on
 /// every generation so nobody takes a declaration for behaviour.
 pub fn declaration_only_warnings(schema: &ModuleSchema) -> Vec<String> {
+    use crate::rules::events::EventStatus;
     let mut out = Vec::new();
     let mut by_file: indexmap::IndexMap<&str, Vec<&str>> = indexmap::IndexMap::new();
-    for (file, event) in &schema.declared_events {
-        by_file.entry(file.as_str()).or_default().push(event.as_str());
+    for event in schema.rule_register.events.iter().filter(|e| e.status() == EventStatus::HandStaged) {
+        by_file.entry(event.source.file.as_str()).or_default().push(event.name.as_str());
     }
     for (file, events) in by_file {
         out.push(format!(
-            "{file} declares event(s) {} under `events:`: declaration-only — nothing is generated from them and no generated code publishes them; the module publishes them by hand",
+            "{file} declares event(s) {} under `events:` with no `on:`: a typed payload is generated, but no generated code stages them; hand code does (add `on:` to have the write hooks stage one)",
             events.join(", ")
         ));
     }
@@ -1025,6 +1029,24 @@ pub fn declaration_only_warnings(schema: &ModuleSchema) -> Vec<String> {
             "workflow '{}' (schema/workflows) is declaration-only: it is parsed and validated, and no generated code runs it; write the flow as a service method or a custom route",
             workflow.name
         ));
+    }
+    out
+}
+
+/// The problems of the declared events the write hooks stage (`on:`): each is an error, since
+/// a declaration that cannot be generated would promise an event nothing stages.
+pub fn event_problems(schema: &ModuleSchema) -> Vec<String> {
+    use crate::rules::events::EventStatus;
+    let mut out = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for event in &schema.rule_register.events {
+        if !seen.insert(event.name.as_str()) && event.status() == EventStatus::Staged {
+            out.push(format!(
+                "{}: event `{}` is declared more than once; the staged declaration must be the only one",
+                event.source, event.name
+            ));
+        }
+        out.extend(event.problems.iter().map(|p| format!("{}: {p}", event.source)));
     }
     out
 }

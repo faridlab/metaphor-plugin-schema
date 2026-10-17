@@ -312,6 +312,12 @@ impl Generator for EventsGenerator {
                 )
                 .unwrap();
             }
+            // The typed payloads of the events the module declares (`events:` in a schema file).
+            if let Some(declared) = super::declared_events::declared_module(&schema.schema) {
+                writeln!(mod_content).unwrap();
+                writeln!(mod_content, "pub mod declared;").unwrap();
+                output.add_file(PathBuf::from("src/domain/event/declared.rs"), declared);
+            }
             writeln!(mod_content).unwrap();
             writeln!(mod_content, "// <<< CUSTOM").unwrap();
             writeln!(mod_content, "// END CUSTOM").unwrap();

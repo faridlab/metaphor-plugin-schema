@@ -224,8 +224,45 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         println!("  {} {warning}", "!".yellow().bold());
     }
     // Declared events no hand-written source names: advisory, never a gate.
-    for warning in super::events_check::unpublished_events(&consumer_root) {
+    let staged: std::collections::BTreeSet<String> = module_schema
+        .rule_register
+        .events
+        .iter()
+        .filter(|e| e.status() == crate::rules::events::EventStatus::Staged)
+        .map(|e| e.name.clone())
+        .collect();
+    for warning in super::events_check::unpublished_events(&consumer_root, &staged) {
         println!("  {} {warning}", "!".yellow().bold());
+    }
+    // Declared event keys nothing enforces, and payload fields of no known type: advisory.
+    for event in &module_schema.rule_register.events {
+        if !event.not_enforced.is_empty() {
+            println!(
+                "  {} {}: event `{}` declares {}: kept as documentation, not enforced",
+                "!".yellow().bold(),
+                event.source,
+                event.name,
+                event.not_enforced.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+    for warning in crate::generators::declared_events::untyped_payload_fields(&module_schema) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
+    // A service of a model with staged events, built without its write hooks: a gate, since the
+    // events it declares are then never sent.
+    let hooked: std::collections::BTreeSet<String> = module_schema
+        .models
+        .iter()
+        .filter(|m| crate::generators::declared_events::model_has_write_hooks(&module_schema, m))
+        .map(|m| m.name.clone())
+        .collect();
+    let unhooked = super::events_check::services_built_without_write_hooks(&consumer_root, &hooked);
+    for line in &unhooked {
+        println!("  {} {line}", "✗".red().bold());
+    }
+    if !unhooked.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} service(s) with staged events are built without their write hooks", unhooked.len());
     }
     // Declared fields no migration gives a column: advisory, never a gate.
     for warning in super::events_check::fields_without_columns(&module_schema, &consumer_root) {

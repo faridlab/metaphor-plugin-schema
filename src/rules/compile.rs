@@ -145,6 +145,31 @@ pub fn compile_row_rule(rule: &DeclaredRule, model: &Model, enums: &HashSet<Stri
     })
 }
 
+/// A declared event's `if:` condition, compiled to the Rust expression the generated write hooks
+/// evaluate against the row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledEventCondition {
+    /// A `r::Val` expression over `row` (the row the write stored), `old_row` when `reads_old`,
+    /// and `ctx.actor` / `ctx.at` when `reads_actor` / `reads_time`.
+    pub rust: String,
+    pub reads_old: bool,
+    pub reads_actor: bool,
+    pub reads_time: bool,
+}
+
+/// Compile the `if:` of a declared event against `model`: the rule expression language, over the
+/// row as stored, `$old` (the row before; absent on a create), `$actor` and `now()`.
+pub fn compile_event_condition(
+    source: &str,
+    model: &Model,
+    enums: &HashSet<String>,
+) -> Result<CompiledEventCondition, String> {
+    let ast = expr::parse(source)?;
+    let mut c = Compiler { model, enums, fields: Vec::new(), row_var: "row", reads_old: false, reads_actor: false, reads_time: false };
+    let (rust, _sql, _) = c.emit(&ast)?;
+    Ok(CompiledEventCondition { rust, reads_old: c.reads_old, reads_actor: c.reads_actor, reads_time: c.reads_time })
+}
+
 /// A stable snake_case code from a rule's name: `Name Length` and `nameLength` both read `name_length`.
 fn code_of(name: &str) -> String {
     let mut out = String::new();

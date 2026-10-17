@@ -107,6 +107,7 @@ pub(super) fn build_module_schema(
             for event in declared_event_names(&content) {
                 module_schema.declared_events.push((filename.to_string(), event));
             }
+            module_schema.rule_register.read_events_file(filename, &content);
             continue;
         }
 
@@ -346,6 +347,30 @@ pub(super) fn build_module_schema(
         }
     }
 
+    // A module config file (`_module.config.yaml`) is no schema file the passes above read, but
+    // it declares events too: read them so the module's whole event contract is known.
+    if let Some(schema_dir) = schema_files
+        .first()
+        .and_then(|f| f.ancestors().find(|a| a.file_name().is_some_and(|n| n == "schema")))
+    {
+        let mut configs: Vec<PathBuf> = walkdir::WalkDir::new(schema_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .map(|e| e.into_path())
+            .filter(|p| p.to_string_lossy().ends_with(".config.yaml"))
+            .collect();
+        configs.sort();
+        for path in configs {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                for event in declared_event_names(&content) {
+                    module_schema.declared_events.push((name.to_string(), event));
+                }
+                module_schema.rule_register.read_events_file(name, &content);
+            }
+        }
+    }
+
     // Bind once every model is known: hook files may load before model files.
     let models = module_schema.models.clone();
     module_schema.rule_register.bind(&models);
@@ -529,10 +554,30 @@ mod tests {
     }
 
 
-    /// Declared events and workflows run nothing; generation says so instead of dropping them
-    /// without a word.
+    /// Events declared in the model index and in a module config file are read, not only those of
+    /// hook files, and each is bound to the aggregate it names.
     #[test]
-    fn declared_events_and_workflows_are_reported_as_declaration_only() {
+    fn events_of_the_index_and_the_config_file_are_declared_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema_dir = dir.path().join("schema");
+        std::fs::create_dir_all(schema_dir.join("hooks")).unwrap();
+        std::fs::create_dir_all(schema_dir.join("models")).unwrap();
+        let index = schema_dir.join("models/index.model.yaml");
+        std::fs::write(&index, "module: m\nevents:\n  FromIndex:\n    aggregate: Ticket\n    on: create\n    fields: [id]\n").unwrap();
+        let model = schema_dir.join("models/ticket.model.yaml");
+        std::fs::write(&model, "models:\n  - name: Ticket\n    fields:\n      id: { type: uuid, attributes: [\"@id\"] }\n").unwrap();
+        std::fs::write(schema_dir.join("hooks/_module.config.yaml"), "events:\n  FromConfig:\n    fields: { user_id: uuid }\n").unwrap();
+        let (schema, errors) = build_module_schema("m", &[index, model]).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        let events: Vec<_> = schema.rule_register.events.iter().map(|e| (e.name.as_str(), e.bound_model.as_deref())).collect();
+        assert_eq!(events, vec![("FromIndex", Some("Ticket")), ("FromConfig", None)]);
+        assert!(schema.rule_register.events[0].problems.is_empty(), "{:?}", schema.rule_register.events[0].problems);
+    }
+
+    /// A declared event with no `on:` is staged by hand and a workflow runs nothing; generation
+    /// says so instead of dropping them without a word.
+    #[test]
+    fn hand_staged_events_and_workflows_are_reported() {
         let dir = tempfile::tempdir().unwrap();
         let hook = dir.path().join("ticket.hook.yaml");
         std::fs::write(&hook, "name: Ticket\nmodel: Ticket\nevents:\n  - name: TicketOpened\n    fields: [id]\n").unwrap();
@@ -541,7 +586,7 @@ mod tests {
         assert_eq!(schema.declared_events, vec![("ticket.hook.yaml".to_string(), "TicketOpened".to_string())]);
         schema.workflows.push(crate::ast::Workflow { name: "escalation".into(), ..Default::default() });
         let warnings = crate::resolver::declaration_warnings(&schema);
-        assert!(warnings.iter().any(|w| w.contains("TicketOpened") && w.contains("declaration-only")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("TicketOpened") && w.contains("no generated code stages")), "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("workflow 'escalation'") && w.contains("declaration-only")), "{warnings:?}");
     }
 

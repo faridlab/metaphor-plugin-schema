@@ -14,6 +14,7 @@
 pub mod baseline;
 pub mod catalog;
 pub mod compile;
+pub mod events;
 pub mod expr;
 pub mod fields;
 pub mod reader;
@@ -21,6 +22,7 @@ pub mod rewrite;
 pub mod writers;
 
 use serde::{Deserialize, Serialize};
+use serde_yaml::Value;
 
 use crate::ast::Model;
 use crate::utils::{to_pascal_case, to_snake_case};
@@ -30,6 +32,9 @@ use crate::utils::{to_pascal_case, to_snake_case};
 pub struct RuleRegister {
     pub rules: Vec<DeclaredRule>,
     pub machines: Vec<DeclaredMachine>,
+    /// The events the module's schema files declare, in file order ([`events`]).
+    #[serde(default)]
+    pub events: Vec<events::DeclaredEvent>,
     pub warnings: Vec<RegisterWarning>,
 }
 
@@ -235,7 +240,17 @@ impl RuleRegister {
         let read = reader::read_hook_file(file, content);
         self.rules.extend(read.rules);
         self.machines.extend(read.machines);
+        self.events.extend(read.events);
         self.warnings.extend(read.warnings);
+    }
+
+    /// Add the events a schema file that is not a hook file declares (the model index, a module
+    /// config file): such a file has no rules or machines, and no model of its own to bind an
+    /// event to, so an event there names its `aggregate:`.
+    pub fn read_events_file(&mut self, file: &str, content: &str) {
+        if let Ok(Value::Mapping(root)) = serde_yaml::from_str::<Value>(content) {
+            self.events.extend(events::read_events(file, &root, None, &[]));
+        }
     }
 
     /// Match every declaration to the model it governs, warning for each one
@@ -268,6 +283,13 @@ impl RuleRegister {
                     ),
                 });
             }
+        }
+        for event in &mut self.events {
+            event.bound_model = match &event.aggregate {
+                Some(aggregate) => bind_target(aggregate, models),
+                None if event.target.is_empty() => None,
+                None => bind_first(&event.target, &event.alternatives, models, &event.source, &mut warnings),
+            };
         }
         warnings.dedup();
         self.warnings.extend(warnings);
@@ -344,6 +366,9 @@ impl RuleRegister {
     /// Mark every rule the row-rule compiler takes as compiled into its
     /// entity's write guard, the same set the generator emits.
     pub fn mark_compiled(&mut self, models: &[Model], enums: &std::collections::HashSet<String>) {
+        // Declared events are checked here, with the rules: a staged event's `if:` compiles
+        // through the same compiler, which needs the module's enums.
+        events::check_events(self, models, enums);
         // A delete guard counts rows of another model of the module, so it sees them all.
         let mut module = crate::ast::ModuleSchema::new("");
         module.models = models.to_vec();
