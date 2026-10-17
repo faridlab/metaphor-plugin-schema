@@ -1115,7 +1115,18 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 to_pascal_case(&transition.name)
             )
             .unwrap();
-            writeln!(output, "        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<{}>::error(\"Transition not allowed from current state\")));", body_type).unwrap();
+            // A refusal is the framework's error envelope with a violation on the state field: a
+            // stable code, and the states it was asked to move between.
+            writeln!(output, "        let refusal = backbone_core::service::ServiceError::Violations(vec![backbone_core::Violation::new({:?}, \"transition_not_allowed\", {:?})", status_field, format!("{} is not allowed from the current state", transition.name)).unwrap();
+            writeln!(output, "            .with_param(\"transition\", {:?})", transition.name).unwrap();
+            writeln!(output, "            .with_param(\"from\", serde_json::to_value(&entity.{}).unwrap_or_default())", status_field).unwrap();
+            let to_param = if transition.to == crate::ast::NULL_STATE {
+                "serde_json::Value::Null".to_string()
+            } else {
+                format!("{:?}", crate::utils::enum_label(&transition.to))
+            };
+            writeln!(output, "            .with_param(\"to\", {to_param})]);").unwrap();
+            writeln!(output, "        return backbone_core::http::service_error_response::<{}>(&refusal);", body_type).unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
@@ -1139,7 +1150,11 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                     };
                     writeln!(output, "        // Guard: {}", g.text.replace('\n', " ")).unwrap();
                     writeln!(output, "        if {applies} && !r::holds(&{rust}) {{").unwrap();
-                    writeln!(output, "            return (StatusCode::UNPROCESSABLE_ENTITY, Json(ApiResponse::<{}>::error({:?})));", body_type, format!("The {} transition's guard does not hold: {}", transition.name, g.text)).unwrap();
+                    let guard_text = g.text.replace('\n', " ");
+                    writeln!(output, "            let refusal = backbone_core::service::ServiceError::Violations(vec![backbone_core::Violation::new({:?}, \"transition_guard_failed\", {:?})", status_field, format!("The {} transition's guard does not hold: {}", transition.name, guard_text)).unwrap();
+                    writeln!(output, "                .with_param(\"transition\", {:?})", transition.name).unwrap();
+                    writeln!(output, "                .with_param(\"guard\", {:?})]);", guard_text).unwrap();
+                    writeln!(output, "            return backbone_core::http::service_error_response::<{}>(&refusal);", body_type).unwrap();
                     writeln!(output, "        }}").unwrap();
                 }
                 writeln!(output, "    }}").unwrap();
@@ -1505,6 +1520,43 @@ mod tests {
         let plain = Model { name: "Ticket".into(), fields: vec![state()], ..Default::default() };
         let out = render(&plain);
         assert!(!out.contains("without_secrets") && out.contains("ApiResponse::<TicketResponseDto>::not_found"), "unchanged output without secrets");
+    }
+
+    /// A refused transition answers with the framework's error envelope: a violation on the
+    /// state field coded `transition_not_allowed` (with the verb and the states it was asked to
+    /// move between) or `transition_guard_failed` (with the guard), never a bare sentence.
+    #[test]
+    fn a_refused_transition_names_a_stable_code() {
+        use crate::ast::hook::{StateMachine, Transition};
+        let model = Model {
+            name: "Ticket".into(),
+            fields: vec![
+                Field { name: "status".into(), type_ref: TypeRef::Custom("TicketStatus".into()), ..Default::default() },
+                Field { name: "amount".into(), type_ref: TypeRef::Primitive(crate::ast::PrimitiveType::Int), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let mut schema = crate::ast::ModuleSchema::new("helpdesk");
+        schema.models.push(model.clone());
+        schema.rule_register.read_file(
+            "ticket.hook.yaml",
+            "name: Ticket\nmodel: Ticket\nstates:\n  field: status\n  values:\n    open:\n      initial: true\n    resolved: {}\n  transitions:\n    resolve:\n      from: open\n      to: resolved\n      guard: \"amount <= 1000\"\n",
+        );
+        schema.rule_register.bind(&schema.models.clone());
+        let sm = StateMachine {
+            field: "status".to_string(),
+            transitions: vec![Transition { name: "resolve".into(), from: vec!["open".into()], to: "resolved".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut out = String::new();
+        HandlerGenerator::new().write_transition_handlers(&mut out, &model, "TicketState", &sm, Some(&schema)).unwrap();
+        assert!(!out.contains("Transition not allowed from current state"), "{out}");
+        assert!(out.contains("backbone_core::Violation::new(\"status\", \"transition_not_allowed\", \"resolve is not allowed from the current state\")"), "{out}");
+        assert!(out.contains(".with_param(\"from\", serde_json::to_value(&entity.status).unwrap_or_default())"), "{out}");
+        assert!(out.contains(".with_param(\"to\", \"resolved\")]);"), "{out}");
+        assert!(out.contains("backbone_core::Violation::new(\"status\", \"transition_guard_failed\", \"The resolve transition's guard does not hold: amount <= 1000\")"), "{out}");
+        assert!(out.contains(".with_param(\"guard\", \"amount <= 1000\")]);"), "{out}");
+        assert_eq!(out.matches("return backbone_core::http::service_error_response::<TicketResponseDto>(&refusal);").count(), 2, "{out}");
     }
 
     #[test]

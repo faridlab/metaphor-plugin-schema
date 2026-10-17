@@ -26,6 +26,11 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   hook at load time, in the service and the webapp generators alike, so the generated transition
   routes are emitted and mounted whichever file loads first; they were silently dropped when the
   rules file came first. Generators look a model's hook up through `ModuleSchema::hook_for`.
+- A generated transition refuses with the framework's error envelope (422, through
+  `service_error_response`): a violation on the state field coded `transition_not_allowed`, with
+  `transition`, `from` and `to` params, when the machine has no such edge from the current state,
+  and `transition_guard_failed`, with `transition` and `guard`, when the edge's guard does not hold.
+  The edge refusal was a bare 400 sentence and the guard refusal a 422 with no code.
 
 ## [0.35.0] - 2026-10-17
 
