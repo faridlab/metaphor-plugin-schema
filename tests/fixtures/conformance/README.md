@@ -16,6 +16,10 @@ CARGO_TARGET_DIR=$HOME/startapp/.cargo-target \
 The run creates `conformance_<random>` and a login role `conformance_app_<random>` (NOSUPERUSER,
 NOBYPASSRLS), and drops both at the end, also when a probe panics. It touches nothing else.
 
+The probes of area D also drive the outbox: the module's tables are created with its generated
+`declared::migrate_outbox` (as a composing service does at startup), staged rows are read back as the
+owner, and the relay and inbox functions of `backbone-outbox` run against them.
+
 The framework crates come from `../modules/backbone-framework` through `[patch.crates-io]` when
 that checkout exists, or from `METAPHOR_FRAMEWORK_PATH`; set it to `crates.io` to test the
 released crates. `CONFORMANCE_KEEP=1` keeps the generated module and prints where it is.
@@ -50,13 +54,13 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 | `module/schema/models/ticket.model.yaml` | `Ticket`, org-fenced (`org_unit_id`): a foreign key to `Project`, a state field, a `projection` lifecycle field, nullable decimals and text, `@default(uuid)` on a non-id field, a composite `indexes: unique` |
 | `module/schema/models/approval.model.yaml` | `Approval`, company-fenced, a `hand_set` state bound to a machine |
 | `module/schema/hooks/project.hook.yaml` | a declared uniqueness rule (`count(...) == 0` → coded partial unique index) and a row rule |
-| `module/schema/hooks/ticket.hook.yaml` | the `Ticket.status` machine (a final state, a guarded edge, a `from: "*"` edge, `verbs: generated`) and one rule per register label: GUARD, SHADOW, VERB (`enforced_by`), UNENFORCED; declared `events:` |
+| `module/schema/hooks/ticket.hook.yaml` | the `Ticket.status` machine (a final state, a guarded edge, a `from: "*"` edge, `verbs: generated`) and one rule per register label: GUARD, SHADOW, VERB (`enforced_by`), UNENFORCED; declared `events:`: five staged by the generated write hooks (`on: create`, `transition(resolve)` with an `if:`, `enter(archived)`, `update(title)`, `delete`) and one staged by hand (`TicketEscalated`) |
 | `module/schema/hooks/approval_state.hook.yaml` | the `Approval.state` machine (`verbs: generated`) over the hand_set field |
 | `module/schema/workflows/ticket_escalation.workflow.yaml` | a workflow declaration, to prove it is declaration-only |
 | `module/schema/rules.baseline.yaml` | the rule ratchet, accepting the one deliberately unenforced rule |
-| `module/src/application/service/project_service.ext.rs` | lifecycle hooks (`ServiceLifecycle`), an event publisher, a hand-written `WriteGuard` check composed with the generated one |
+| `module/src/application/service/project_service.ext.rs` | lifecycle hooks (`ServiceLifecycle`), an event publisher, a hand-written `WriteGuard` check composed with the generated one, and hand-written `WriteHooks` that stage an event and can fail after staging it |
 | `module/src/application/service/ticket_service.ext.rs` | a custom service method (`archive_with_reason`), the function the VERB rule names |
-| `module/src/presentation/http/ticket_handler.ext.rs` | custom routes: the custom method over HTTP, and an `escalate` flow that reads the org scope and moves the ticket through the generic service |
+| `module/src/presentation/http/ticket_handler.ext.rs` | custom routes: the custom method over HTTP, and an `escalate` flow that reads the org scope, moves the ticket through the generic service and stages the hand-declared `TicketEscalated` in the same transaction |
 | `module/src/lib.ext.rs` | builds the hooked project service and mounts `extension_routes()` |
 | `module/src/**/mod.ext.rs` | the re-exports the extension files need |
 | `module/metaphor.codegen.yaml` | declares the runtime probe file `user_owned` |
@@ -68,8 +72,9 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
   from backbone-auditlog, which a standalone module does not compose.
 - The ADR-0029 acting-unit decorator: it is installed by a composing service's `tenancy.yaml`
   (`metaphor schema tenancy`), not declared in a module.
-- Outbox staging: the generator emits none, and the generic service publishes outside the
-  write's transaction.
+- Delivery to a real broker or in-process bus: the relay is driven with test sinks (success, a
+  failing publish, an exhausted one); `relay::drain_once`, `reemit` and `inbox::once` are the
+  framework's own and run against the scratch database.
 
 ## Adding a probe
 

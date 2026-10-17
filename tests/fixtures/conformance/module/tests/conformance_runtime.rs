@@ -366,6 +366,10 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         "the failing migration file (generators/sql.rs)",
     );
 
+    // The outbox and inbox tables of the module's staged events, created as the composing service
+    // does at startup with a role that may create tables.
+    backbone_module_skeleton::domain::event::declared::migrate_outbox(&owner).await.expect("migrate the outbox");
+
     // The app role, as scripts/rls_app_role.sql grants it.
     for stmt in [
         format!("GRANT CONNECT ON DATABASE {db} TO {role}"),
@@ -998,8 +1002,190 @@ async fn area_d(c: &Ctx) {
     let e = log.entries();
     r.check("D", "Lifecycle hooks", "bulk patch fires the update hooks once per item", bp.status == 200 && count(&e, "before_update:") == 2 && count(&e, "after_update:") == 2, &bp.request, "2 before_update, 2 after_update", &format!("{e:?}"), "backbone-core/src/service.rs:882 (bulk_partial_update)");
 
-    c.rec.unsupported("D", "Declared events", "`events:` in a hook file produce publishing code", "nothing is generated: generation and schema doctor say the declared events are declaration-only (resolver/validator.rs declaration_only_warnings), and doctor warns about a declared event no hand code names (commands/schema/events_check.rs); the generic service publishes CrudEvents through the publisher the module attaches, proven above");
-    c.rec.unsupported("D", "Outbox", "an event staged in the write's transaction (outbox)", "the generic service publishes fire-and-forget after the write, outside its transaction (backbone-core/src/service.rs, `let _ = self.event_publisher.publish(..)`); staging is hand code with backbone_outbox::outbox::stage, which the generator never emits");
+    area_d_events(c).await;
+}
+
+// =============================================================================
+// D (continued). Declared events: staged in the write's transaction
+// =============================================================================
+
+/// One staged outbox row, as the probes read it.
+#[derive(Debug, Clone)]
+struct Staged {
+    event_type: String,
+    correlation_id: Option<String>,
+    version: i32,
+    payload: Value,
+    published: bool,
+}
+
+async fn staged(c: &Ctx, aggregate_id: &str) -> Vec<Staged> {
+    let rows: Vec<(String, Option<String>, i32, Value, bool)> = sqlx::query_as(
+        "SELECT event_type, correlation_id, version, payload, published_at IS NOT NULL FROM conformance.outbox_events \
+         WHERE aggregate_id = $1 ORDER BY created_at, event_type",
+    )
+    .bind(aggregate_id)
+    .fetch_all(&c.owner)
+    .await
+    .unwrap();
+    rows.into_iter()
+        .map(|(event_type, correlation_id, version, payload, published)| Staged { event_type, correlation_id, version, payload, published })
+        .collect()
+}
+
+async fn staged_total(c: &Ctx) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events").fetch_one(&c.owner).await.unwrap()
+}
+
+fn kinds(rows: &[Staged]) -> Vec<&str> {
+    rows.iter().map(|r| r.event_type.as_str()).collect()
+}
+
+async fn ticket_count(c: &Ctx, title: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM conformance.tickets WHERE title = $1").bind(title).fetch_one(&c.owner).await.unwrap()
+}
+
+async fn area_d_events(c: &Ctx) {
+    use backbone_outbox::{inbox, outbox, relay, OutboxError};
+    let (r, app, ta) = (&c.rec, &c.app, c.ta.as_str());
+    const HOOKS: &str = "generated ticket_write_hooks.rs (generators/declared_events.rs) over backbone-core write_hooks.rs and service.rs";
+    let unit = c.org.company_a;
+    let pid = c.project(ta, unit, json!({})).await.id();
+    let new_ticket = |title: &str, extra: Value| {
+        let mut body = json!({ "orgUnitId": unit, "projectId": pid, "title": title });
+        if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                b.insert(k.clone(), v.clone());
+            }
+        }
+        body
+    };
+
+    // 1. a create stages exactly one TicketOpened, under the request's correlation id
+    let cid = format!("conf-{}", &Uuid::new_v4().simple().to_string()[..10]);
+    let title = uniq("EV");
+    let cr = app.send("POST", "/tickets", Some(ta), Some(new_ticket(&title, json!({})).to_string()), &[("x-correlation-id", cid.as_str())]).await;
+    let tid = cr.id();
+    let rows = staged(c, &tid).await;
+    r.check("D", "Declared events", "a create stages exactly one TicketOpened row", cr.status == 201 && kinds(&rows) == ["TicketOpened"], &cr.request, "201; one outbox row, TicketOpened", &format!("{} {:?}", cr.status, kinds(&rows)), HOOKS);
+    r.check("D", "Declared events", "the staged row carries the request's correlation id", rows.first().and_then(|x| x.correlation_id.as_deref()) == Some(cid.as_str()), &cr.request, &format!("correlation_id {cid}"), &format!("{:?}", rows.first().map(|x| x.correlation_id.clone())), "backbone-core/src/write_hooks.rs (WriteCtx::current) and the org request scope's audit attribution");
+    r.check("D", "Declared events", "the staged row carries the declared version and the payload read from the stored row", rows.first().is_some_and(|x| x.version == 2 && x.payload["id"] == json!(tid) && x.payload["project_id"] == json!(pid) && x.payload.as_object().map(|o| o.len()) == Some(2)), &cr.request, "version 2, payload {id, project_id}", &format!("{:?}", rows.first().map(|x| (x.version, x.payload.clone()))), HOOKS);
+    let minted = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({}))).await;
+    let minted_rows = staged(c, &minted.id()).await;
+    r.check("D", "Declared events", "a create with no correlation header still stages one, under an id minted for the request", minted_rows.first().and_then(|x| x.correlation_id.as_deref()).is_some_and(|x| Uuid::parse_str(x).is_ok()), &minted.request, "a uuid correlation id", &format!("{:?}", minted_rows.first().map(|x| x.correlation_id.clone())), "backbone-auth/src/org.rs (the audit attribution mints one)");
+
+    // 2. a create the guard or the database refuses stages nothing
+    let before = staged_total(c).await;
+    let by_guard = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({ "amount": -5 }))).await;
+    let dup = app.post("/tickets", ta, new_ticket(&title, json!({}))).await;
+    let after = staged_total(c).await;
+    r.check("D", "Declared events", "a create the guard refuses stages no event", by_guard.status == 422 && after == before, &by_guard.request, "422; the outbox row count is unchanged", &format!("{} {before}->{after}", by_guard.status), HOOKS);
+    r.check("D", "Declared events", "a create the database refuses (a duplicate title) stages no event", dup.status == 422 && after == before, &dup.request, "422; the outbox row count is unchanged", &format!("{} {before}->{after}", dup.status), HOOKS);
+
+    // 3. an event that cannot be staged takes the write with it
+    sqlx::raw_sql("ALTER TABLE conformance.outbox_events ADD CONSTRAINT ck_conf_poison CHECK (event_type <> 'TicketOpened') NOT VALID").execute(&c.owner).await.unwrap();
+    let poisoned_title = uniq("EV");
+    let before = staged_total(c).await;
+    let poisoned = app.post("/tickets", ta, new_ticket(&poisoned_title, json!({}))).await;
+    let kept = ticket_count(c, &poisoned_title).await;
+    sqlx::raw_sql("ALTER TABLE conformance.outbox_events DROP CONSTRAINT ck_conf_poison").execute(&c.owner).await.unwrap();
+    r.check("D", "Declared events", "when staging the event fails the create fails and no ticket row exists", poisoned.status == 500 && kept == 0 && staged_total(c).await == before, &poisoned.request, "500; no ticket row; no outbox row", &format!("{} tickets {kept}", poisoned.got()), "backbone-core/src/write_hooks.rs (WriteCtx::stage) and service.rs (atomically)");
+    r.check("D", "Declared events", "the failed staging does not leak the outbox error to the client", !poisoned.raw.contains("ck_conf_poison") && !poisoned.raw.contains("outbox"), &poisoned.request, "a generic internal error", &poisoned.got(), "backbone-core/src/http.rs (a 500 answers INTERNAL_ERROR_MESSAGE)");
+
+    // 4. transitions: staged when they happen, nothing when refused
+    let big = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({ "amount": 500 }))).await.id();
+    let small = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({ "amount": 50 }))).await.id();
+    let over = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({ "amount": 2000 }))).await.id();
+    for id in [&big, &small, &over] {
+        app.post(&format!("/tickets/{id}/transitions/start"), ta, json!({})).await;
+    }
+    let verb = |id: &str, v: &str| format!("/tickets/{id}/transitions/{v}");
+    let tcid = format!("conf-{}", &Uuid::new_v4().simple().to_string()[..10]);
+    let res = app.send("POST", &verb(&big, "resolve"), Some(ta), Some("{}".into()), &[("x-correlation-id", tcid.as_str())]).await;
+    let rows = staged(c, &big).await;
+    r.check("D", "Declared events", "a transition stages its event (resolve stages TicketResolved)", res.status == 200 && kinds(&rows) == ["TicketOpened", "TicketResolved"], &res.request, "200; TicketOpened, TicketResolved", &format!("{} {:?}", res.status, kinds(&rows)), HOOKS);
+    r.check("D", "Declared events", "a transition's event carries the request's correlation id and the stored row's values", rows.iter().find(|x| x.event_type == "TicketResolved").is_some_and(|x| x.correlation_id.as_deref() == Some(tcid.as_str()) && num(&x.payload["amount"]) == Some(500.0)), &res.request, "correlation id and amount 500", &format!("{:?}", rows.iter().find(|x| x.event_type == "TicketResolved")), HOOKS);
+    let res = app.post(&verb(&small, "resolve"), ta, json!({})).await;
+    r.check("D", "Declared events", "an event whose `if:` does not hold is not staged (amount 50 < 100)", res.status == 200 && kinds(&staged(c, &small).await) == ["TicketOpened"], &res.request, "200; only TicketOpened", &format!("{} {:?}", res.status, kinds(&staged(c, &small).await)), HOOKS);
+    let before = staged_total(c).await;
+    let guard_refused = app.post(&verb(&over, "resolve"), ta, json!({})).await;
+    let wrong_state = app.post(&verb(&over, "archive"), ta, json!({})).await;
+    r.check("D", "Declared events", "a refused transition stages nothing (a failing guard, a wrong state)", guard_refused.status == 422 && (400..500).contains(&wrong_state.status) && staged_total(c).await == before, &guard_refused.request, "422 and 4xx; the outbox row count is unchanged", &format!("{} {} {before}->{}", guard_refused.status, wrong_state.status, staged_total(c).await), HOOKS);
+    let ar = app.post(&verb(&big, "archive"), ta, json!({})).await;
+    let rows = staged(c, &big).await;
+    r.check("D", "Declared events", "entering a state stages its event (archive enters archived: TicketArchived)", ar.status == 200 && kinds(&rows) == ["TicketOpened", "TicketResolved", "TicketArchived"], &ar.request, "200; TicketOpened, TicketResolved, TicketArchived", &format!("{} {:?}", ar.status, kinds(&rows)), HOOKS);
+
+    // 5. update(title) fires only when the title changed
+    let up = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({}))).await;
+    let (uid, utitle) = (up.id(), up.data()["title"].as_str().unwrap_or_default().to_string());
+    let same = app.patch(&format!("/tickets/{uid}"), ta, json!({ "title": utitle })).await;
+    let other = app.patch(&format!("/tickets/{uid}"), ta, json!({ "note": "unrelated" })).await;
+    let n_before = kinds(&staged(c, &uid).await).iter().filter(|k| **k == "TicketRetitled").count();
+    let changed = app.patch(&format!("/tickets/{uid}"), ta, json!({ "title": uniq("NEW") })).await;
+    let n_after = kinds(&staged(c, &uid).await).iter().filter(|k| **k == "TicketRetitled").count();
+    r.check("D", "Declared events", "update(title) fires only when the title changed", same.status == 200 && other.status == 200 && n_before == 0 && changed.status == 200 && n_after == 1, &changed.request, "no TicketRetitled for the same title or another field; one for a new title", &format!("{} {} {} before {n_before} after {n_after}", same.status, other.status, changed.status), HOOKS);
+
+    // 6. delete
+    let del = app.delete(&format!("/tickets/{uid}"), ta).await;
+    r.check("D", "Declared events", "a delete stages its event in the same transaction", del.status == 200 && kinds(&staged(c, &uid).await).contains(&"TicketDeleted"), &del.request, "200; TicketDeleted staged", &format!("{} {:?}", del.status, kinds(&staged(c, &uid).await)), HOOKS);
+
+    // 7. a hand-staged event joins the flow's transaction
+    let esc_ticket = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({}))).await.id();
+    let esc = app.post(&format!("/tickets/{esc_ticket}/escalate"), ta, json!({ "note": "waiting" })).await;
+    let rows = staged(c, &esc_ticket).await;
+    r.check("D", "Hand-staged events", "a hand-staged declared event is staged by hand code inside the flow's transaction (TicketEscalated)", esc.status == 200 && kinds(&rows) == ["TicketOpened", "TicketEscalated"], &esc.request, "200; TicketOpened, TicketEscalated", &format!("{} {:?}", esc.status, kinds(&rows)), "ticket_handler.ext.rs (escalate) with backbone-orm in_write_tx_result");
+    let before = staged_total(c).await;
+    let missing = app.post(&format!("/tickets/{}/escalate", Uuid::new_v4()), ta, json!({ "note": "x" })).await;
+    r.check("D", "Hand-staged events", "an escalation of an unknown ticket stages nothing", missing.status == 404 && staged_total(c).await == before, &missing.request, "404; the outbox row count is unchanged", &format!("{} {before}->{}", missing.status, staged_total(c).await), "ticket_handler.ext.rs (escalate)");
+
+    // 8. a write hook that fails takes the write and what it staged down together
+    let before = staged_total(c).await;
+    let boom = app.post("/hooked-projects", ta, c.project_body(unit, &uniq("B"), "boom")).await;
+    let boom_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.projects WHERE name = 'boom'").fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Write hooks", "a hook that fails after staging rolls back the write and its event", boom.status == 422 && boom_rows == 0 && staged_total(c).await == before, &boom.request, "422; no project row; no outbox row", &format!("{} projects {boom_rows} outbox {before}->{}", boom.status, staged_total(c).await), "backbone-core/src/service.rs (atomically over the hooks)");
+    let calm = app.send("POST", "/hooked-projects", Some(ta), Some(c.project_body(unit, &uniq("B"), "Calm").to_string()), &[("x-correlation-id", cid.as_str())]).await;
+    let calm_rows = staged(c, &calm.data()["id"].as_str().unwrap_or_default().to_string()).await;
+    r.check("D", "Write hooks", "a hand-written WriteHooks stages its event with the write, under the correlation id", calm.status == 201 && kinds(&calm_rows) == ["ProjectNoted"] && calm_rows[0].correlation_id.as_deref() == Some(cid.as_str()), &calm.request, "201; ProjectNoted with the correlation id", &format!("{} {:?}", calm.status, calm_rows.iter().map(|x| (&x.event_type, &x.correlation_id)).collect::<Vec<_>>()), "backbone-core/src/write_hooks.rs");
+
+    // 9. bulk: the rows and their events are all-or-nothing
+    let dup_title = uniq("BK");
+    let before = staged_total(c).await;
+    let refused = app.post("/tickets/bulk", ta, json!([new_ticket(&dup_title, json!({})), new_ticket(&uniq("BK"), json!({})), new_ticket(&dup_title, json!({}))])).await;
+    r.check("D", "Declared events", "a bulk create refused partway commits no row and no event", (400..500).contains(&refused.status) && ticket_count(c, &dup_title).await == 0 && staged_total(c).await == before, &refused.request, "4xx; no ticket; the outbox row count is unchanged", &format!("{} tickets {} outbox {before}->{}", refused.status, ticket_count(c, &dup_title).await, staged_total(c).await), "backbone-core/src/service.rs (bulk_create inside the write transaction)");
+    let ok = app.post("/tickets/bulk", ta, json!([new_ticket(&uniq("BK"), json!({})), new_ticket(&uniq("BK"), json!({})), new_ticket(&uniq("BK"), json!({}))])).await;
+    let bulk_ids: Vec<String> = ok.data()["items"].as_array().cloned().unwrap_or_default().iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
+    let opened: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events WHERE event_type = 'TicketOpened' AND aggregate_id = ANY($1)").bind(&bulk_ids).fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Declared events", "a bulk create stages one event per row with the rows", ok.status == 201 && bulk_ids.len() == 3 && opened == 3, &ok.request, "201; three tickets, three TicketOpened", &format!("{} ids {} events {opened}", ok.status, bulk_ids.len()), HOOKS);
+    // two tickets of one project cannot share a title: the bulk patch fails on the second, whole
+    let (a, b) = (bulk_ids[0].clone(), bulk_ids[1].clone());
+    let same_project = app.patch("/tickets/bulk", ta, json!({ "ids": [a, b], "patch": { "title": uniq("SAME") } })).await;
+    let retitled: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events WHERE event_type = 'TicketRetitled' AND aggregate_id = ANY($1)").bind(&bulk_ids).fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Declared events", "a bulk patch refused partway changes no row and stages no event", (400..500).contains(&same_project.status) && retitled == 0, &same_project.request, "4xx; no TicketRetitled", &format!("{} retitled {retitled}", same_project.status), "backbone-core/src/service.rs (bulk_partial_update inside the write transaction)");
+    let p2 = c.project(ta, unit, json!({})).await.id();
+    let t2 = app.post("/tickets", ta, json!({ "orgUnitId": unit, "projectId": p2, "title": uniq("BK") })).await.id();
+    let shared = uniq("SHARED");
+    let ok = app.patch("/tickets/bulk", ta, json!({ "ids": [bulk_ids[0].clone(), t2.clone()], "patch": { "title": shared } })).await;
+    let retitled: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events WHERE event_type = 'TicketRetitled' AND aggregate_id = ANY($1)").bind(vec![bulk_ids[0].clone(), t2.clone()]).fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Declared events", "a bulk patch stages one event per changed row", ok.status == 200 && retitled == 2, &ok.request, "200; two TicketRetitled", &format!("{} retitled {retitled}", ok.got()), HOOKS);
+
+    // 10. delivery: the relay drains, dead-letters and re-emits; a consumer dedupes a replay
+    let drain_ticket = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({}))).await.id();
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM conformance.outbox_events WHERE aggregate_id = $1 AND event_type = 'TicketOpened'").bind(&drain_ticket).fetch_one(&c.owner).await.unwrap();
+    let published = relay::drain_once(&c.owner, "conformance", 1000, |_rec| async { Ok(()) }).await;
+    r.check("D", "Relay", "a relay drain marks the staged row published", published.is_ok() && staged(c, &drain_ticket).await.iter().all(|x| x.published) && outbox::pending_count(&c.owner, "conformance").await.unwrap() == 0, "relay::drain_once", "published, nothing pending", &format!("{published:?}"), "backbone-outbox/src/relay.rs");
+    let retry_ticket = app.post("/tickets", ta, new_ticket(&uniq("EV"), json!({}))).await.id();
+    let retry_id: Uuid = sqlx::query_scalar("SELECT id FROM conformance.outbox_events WHERE aggregate_id = $1 AND event_type = 'TicketOpened'").bind(&retry_ticket).fetch_one(&c.owner).await.unwrap();
+    let failed = relay::drain_once(&c.owner, "conformance", 1000, |_rec| async { Err(OutboxError::Publish("the bus is down".into())) }).await;
+    let still_pending = !staged(c, &retry_ticket).await[0].published && outbox::dead_count(&c.owner, "conformance").await.unwrap() == 0;
+    let dead = relay::drain_once(&c.owner, "conformance", 1000, |_rec| async { Err(OutboxError::Exhausted("gave up".into())) }).await;
+    let dead_count = outbox::dead_count(&c.owner, "conformance").await.unwrap();
+    r.check("D", "Relay", "a failing publish leaves the row pending, an exhausted one makes it dead", failed.is_ok() && still_pending && dead.is_ok() && dead_count == 1, "relay::drain_once with a failing sink", "pending, then dead (dead_count 1)", &format!("pending-after-failure {still_pending}, dead_count {dead_count}"), "backbone-outbox/src/relay.rs");
+    let revived = relay::reemit(&c.owner, "conformance", retry_id).await;
+    let redelivered = relay::drain_once(&c.owner, "conformance", 1000, |_rec| async { Ok(()) }).await;
+    r.check("D", "Relay", "re-emitting a dead row delivers it again", revived.as_ref().is_ok_and(|b| *b) && redelivered.is_ok() && staged(c, &retry_ticket).await[0].published && outbox::dead_count(&c.owner, "conformance").await.unwrap() == 0, "relay::reemit then drain_once", "revived, published, no dead rows", &format!("{revived:?} {redelivered:?}"), "backbone-outbox/src/relay.rs");
+    let first = inbox::once(&c.owner, "conformance", "conf-consumer", id).await;
+    let replay = inbox::once(&c.owner, "conformance", "conf-consumer", id).await;
+    r.check("D", "Relay", "a consumer's inbox::once dedupes a replay of the same event", first.as_ref().is_ok_and(|b| *b) && replay.as_ref().is_ok_and(|b| !*b), "inbox::once twice for one event id", "true then false", &format!("{first:?} {replay:?}"), "backbone-outbox/src/inbox.rs");
 }
 
 // =============================================================================

@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use backbone_core::violation::Violation;
 use backbone_core::write_guard::{GuardOutcome, WriteCtx, WriteGuard, WriteKind};
-use backbone_core::{ServiceLifecycle, ServiceResult};
+use backbone_core::write_hooks::{Change, OutboxRecord, WriteCtx as HookCtx, WriteHooks};
+use backbone_core::{PersistentEntity, ServiceError, ServiceLifecycle, ServiceResult};
 use backbone_messaging::crud_event::{CrudEvent, CrudEventPublisher};
 use backbone_messaging::EventError;
 
@@ -136,7 +137,41 @@ impl WriteGuard<Project> for ProjectGuards {
     }
 }
 
-/// A `ProjectService` with the hooks, the event publisher and both guards attached.
+/// Write hooks written by hand: a created project stages a `ProjectNoted` event in the write's
+/// transaction, and a project named `boom` makes the hook fail after it staged it, so the probes
+/// can see the write and the event leave together.
+pub struct ProjectWriteHooks;
+
+#[async_trait::async_trait]
+impl WriteHooks<Project> for ProjectWriteHooks {
+    fn outbox_schema(&self) -> Option<&str> {
+        Some("conformance")
+    }
+
+    async fn after(&self, ctx: &HookCtx, change: &Change<'_, Project>) -> ServiceResult<()> {
+        if let Change::Created { after } = change {
+            let record = OutboxRecord::new(
+                "ProjectNoted",
+                "Project",
+                after.entity_id(),
+                after.company_id,
+                serde_json::json!({ "name": after.name }),
+                chrono::Utc::now(),
+            );
+            ctx.stage(record).await?;
+            if after.name == "boom" {
+                return Err(ServiceError::Violations(vec![Violation::new(
+                    "name",
+                    "name_boom",
+                    "a write hook refused the project after staging its event",
+                )]));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A `ProjectService` with the hooks, the event publisher, both guards and the write hooks attached.
 pub fn build_hooked_project_service(repository: Arc<ProjectRepository>, log: HookLog) -> super::ProjectService {
     super::ProjectService::new(
         repository,
@@ -144,4 +179,5 @@ pub fn build_hooked_project_service(repository: Arc<ProjectRepository>, log: Hoo
         Arc::new(ProjectEvents { log }),
     )
     .with_guard(Arc::new(ProjectGuards))
+    .with_write_hooks(Arc::new(ProjectWriteHooks))
 }

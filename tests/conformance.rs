@@ -129,11 +129,12 @@ fn patch_manifest(module: &Path, framework: Option<&Path>) {
                  backbone-tenant = { version = \"3.0.0\", features = [\"axum\"] }\n\
                  tower = { version = \"0.4\", features = [\"util\"] }\n\
                  http-body-util = \"0.1\"\n\
-                 futures = \"0.3\"\n";
+                 futures = \"0.3\"\n\
+                 backbone-outbox = \"3.0.0\"\n";
     text = text.replacen(marker, &format!("{marker}{extra}"), 1);
     if let Some(fw) = framework {
         text.push_str("\n[patch.crates-io]\n");
-        for krate in ["backbone-core", "backbone-orm", "backbone-auth", "backbone-tenant", "backbone-messaging"] {
+        for krate in ["backbone-core", "backbone-orm", "backbone-auth", "backbone-tenant", "backbone-messaging", "backbone-outbox"] {
             text.push_str(&format!("{krate} = {{ path = \"{}\" }}\n", fw.join(krate).display()));
         }
     }
@@ -300,6 +301,36 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
             &format!("label {label}; runtime answers {status} (`{phrase}`)"),
             &format!("label {got_label}; runtime answers {}", seen.unwrap_or_else(|| "nothing (probe missing)".into())),
             "metaphor-plugin-schema/src/rules/mod.rs (mark_compiled) vs the generated guard",
+        ));
+    }
+
+    // Declared events: the register labels each as staged by the write hooks or by hand, and the
+    // runtime agrees.
+    let events = register.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
+    let event_status = |name: &str| {
+        events
+            .iter()
+            .find(|e| e.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|e| e.get("status").and_then(Value::as_str))
+            .unwrap_or("absent")
+            .to_string()
+    };
+    let passed_probe = |phrase: &str| runtime.iter().any(|r| r.probe.contains(phrase) && r.status == "PASS");
+    for (name, label, phrase) in [
+        ("TicketOpened", "EVENT STAGED (on create, in tx)", "a create stages exactly one TicketOpened row"),
+        ("TicketResolved", "EVENT STAGED (on transition(resolve), in tx)", "a transition stages its event"),
+        ("TicketEscalated", "EVENT HAND-STAGED", "a hand-staged declared event is staged by hand code"),
+    ] {
+        let got = event_status(name);
+        rows.push(gen_row(
+            "H",
+            "Rules register",
+            &format!("event `{name}` is labelled {label} and the runtime agrees"),
+            got == label && passed_probe(phrase),
+            "metaphor-schema schema rules . -f json; the runtime probe",
+            &format!("label {label}; the probe `{phrase}` passes"),
+            &format!("label {got}"),
+            "metaphor-plugin-schema/src/commands/schema/rules.rs (event_label) vs the generated write hooks",
         ));
     }
 
@@ -484,6 +515,25 @@ fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, main_output: &st
         "metaphor-plugin-schema/src/parser/yaml_parser/parsers.rs:154-166 swallows the map-format parse error (YamlRule at parser/yaml_parser/types.rs requires `condition` and `message`) and falls back to the list-format parser, which reads no map-format states; the validator then reports \"State machine in workflow 'Ticket' has no states\" (resolver/validator.rs:817), naming neither the rule nor the hook",
     ));
 
+    // A staged event that names a field, verb or state the model lacks is refused.
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/hooks/ticket.hook.yaml"), |t| {
+            t.replace("    on: update(title)\n", "    on: [update(nope), transition(shut), enter(void)]\n    if: \"colour == 'red'\"\n")
+        })
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "D",
+        "Declared events",
+        "an `on:` or `if:` naming a field, verb or state the model lacks fails generation, naming each",
+        !out.status.success() && ["no field `nope`", "verb `shut`", "state `void`", "`if:`"].iter().all(|n| text.contains(n)),
+        "set TicketRetitled to `on: [update(nope), transition(shut), enter(void)]` with `if: colour == 'red'` and generate",
+        "generation fails; the error names the field, the verb, the state and the condition",
+        &one_line(text.lines().filter(|l| l.contains("event `")).take(4).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rules/events.rs (check_events) and resolver/validator.rs (event_problems)",
+    ));
+
     // Lifecycle hooks declared in the schema.
     let dir = tempfile::tempdir().unwrap();
     let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
@@ -507,15 +557,31 @@ fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, main_output: &st
 
     // Declarations nothing runs are said to be declaration-only on generation.
     let said = |needle: &str| main_output.lines().find(|l| l.contains(needle) && l.contains("declaration-only")).map(|l| one_line(l.trim()));
+    let hand = main_output.lines().find(|l| l.contains("TicketEscalated") && l.contains("no `on:`")).map(|l| one_line(l.trim()));
     rows.push(gen_row(
         "D",
         "Declared events",
-        "generation says the hook file's declared events are declaration-only",
-        said("TicketOpened").is_some(),
-        "generate the fixture (ticket.hook.yaml declares `events: [TicketOpened]`)",
-        "a warning naming TicketOpened as declaration-only",
-        &said("TicketOpened").unwrap_or_else(|| "no such warning".into()),
-        "metaphor-plugin-schema/src/resolver/validator.rs (declaration_only_warnings) and commands/schema/module_loader.rs (declared_events)",
+        "generation says a declared event with no `on:` is staged by hand, and names it",
+        hand.is_some() && !main_output.lines().any(|l| l.contains("TicketOpened") && l.contains("no `on:`")),
+        "generate the fixture (ticket.hook.yaml declares TicketEscalated without `on:`, TicketOpened with it)",
+        "a warning naming TicketEscalated (only) as staged by hand code",
+        &hand.unwrap_or_else(|| "no such warning".into()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (declaration_only_warnings)",
+    ));
+    let generated = |rel: &str| main.join(rel).exists();
+    rows.push(gen_row(
+        "D",
+        "Declared events",
+        "events with `on:` generate their typed payloads and the write hooks that stage them",
+        generated("src/domain/event/declared.rs") && generated("src/application/service/ticket_write_hooks.rs"),
+        "generate the fixture",
+        "src/domain/event/declared.rs and src/application/service/ticket_write_hooks.rs exist",
+        &format!(
+            "declared.rs: {}; ticket_write_hooks.rs: {}",
+            generated("src/domain/event/declared.rs"),
+            generated("src/application/service/ticket_write_hooks.rs")
+        ),
+        "metaphor-plugin-schema/src/generators/declared_events.rs",
     ));
     rows.push(gen_row(
         "F",

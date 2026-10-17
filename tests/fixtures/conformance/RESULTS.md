@@ -3,9 +3,9 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.35.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.36.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 1s; whole run: 42s
+- Generation: 1s; whole run: 64s
 
 ## Summary
 
@@ -14,12 +14,12 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A. Generic routes | 57 | 0 | 1 |
 | B. Validation | 42 | 0 | 0 |
 | C. Custom validation | 15 | 0 | 0 |
-| D. Hooks and events | 12 | 0 | 3 |
+| D. Hooks and events | 41 | 0 | 1 |
 | E. State machine | 20 | 0 | 0 |
 | F. Extension | 12 | 0 | 1 |
 | G. Scoping | 36 | 0 | 0 |
-| H. Debuggability | 20 | 0 | 0 |
-| **Total** | **214** | **0** | **5** |
+| H. Debuggability | 23 | 0 | 0 |
+| **Total** | **246** | **0** | **3** |
 
 ## Matrix
 
@@ -151,10 +151,37 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | D | Lifecycle hooks | permanent delete fires before_hard_delete and a hard_deleted event once each | PASS |
 | D | Lifecycle hooks | bulk create fires before_create and after_create once per item | PASS |
 | D | Lifecycle hooks | bulk patch fires the update hooks once per item | PASS |
-| D | Declared events | `events:` in a hook file produce publishing code | UNSUPPORTED |
-| D | Outbox | an event staged in the write's transaction (outbox) | UNSUPPORTED |
+| D | Declared events | a create stages exactly one TicketOpened row | PASS |
+| D | Declared events | the staged row carries the request's correlation id | PASS |
+| D | Declared events | the staged row carries the declared version and the payload read from the stored row | PASS |
+| D | Declared events | a create with no correlation header still stages one, under an id minted for the request | PASS |
+| D | Declared events | a create the guard refuses stages no event | PASS |
+| D | Declared events | a create the database refuses (a duplicate title) stages no event | PASS |
+| D | Declared events | when staging the event fails the create fails and no ticket row exists | PASS |
+| D | Declared events | the failed staging does not leak the outbox error to the client | PASS |
+| D | Declared events | a transition stages its event (resolve stages TicketResolved) | PASS |
+| D | Declared events | a transition's event carries the request's correlation id and the stored row's values | PASS |
+| D | Declared events | an event whose `if:` does not hold is not staged (amount 50 < 100) | PASS |
+| D | Declared events | a refused transition stages nothing (a failing guard, a wrong state) | PASS |
+| D | Declared events | entering a state stages its event (archive enters archived: TicketArchived) | PASS |
+| D | Declared events | update(title) fires only when the title changed | PASS |
+| D | Declared events | a delete stages its event in the same transaction | PASS |
+| D | Hand-staged events | a hand-staged declared event is staged by hand code inside the flow's transaction (TicketEscalated) | PASS |
+| D | Hand-staged events | an escalation of an unknown ticket stages nothing | PASS |
+| D | Write hooks | a hook that fails after staging rolls back the write and its event | PASS |
+| D | Write hooks | a hand-written WriteHooks stages its event with the write, under the correlation id | PASS |
+| D | Declared events | a bulk create refused partway commits no row and no event | PASS |
+| D | Declared events | a bulk create stages one event per row with the rows | PASS |
+| D | Declared events | a bulk patch refused partway changes no row and stages no event | PASS |
+| D | Declared events | a bulk patch stages one event per changed row | PASS |
+| D | Relay | a relay drain marks the staged row published | PASS |
+| D | Relay | a failing publish leaves the row pending, an exhausted one makes it dead | PASS |
+| D | Relay | re-emitting a dead row delivers it again | PASS |
+| D | Relay | a consumer's inbox::once dedupes a replay of the same event | PASS |
+| D | Declared events | an `on:` or `if:` naming a field, verb or state the model lacks fails generation, naming each | PASS |
 | D | Schema lifecycle hooks | before/after create/update/delete declared as hook `triggers:` produce runtime hooks | UNSUPPORTED |
-| D | Declared events | generation says the hook file's declared events are declaration-only | PASS |
+| D | Declared events | generation says a declared event with no `on:` is staged by hand, and names it | PASS |
+| D | Declared events | events with `on:` generate their typed payloads and the write hooks that stage them | PASS |
 | E | Transitions | an allowed transition (start: open → in_progress) answers 200 and moves the state | PASS |
 | E | Transitions | a disallowed transition (archive from in_progress) is refused with 4xx | PASS |
 | E | Transitions | a disallowed transition names a stable code | PASS |
@@ -239,6 +266,9 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | H | Rules register | rule `note_shadowed` is labelled SHADOW and the runtime agrees | PASS |
 | H | Rules register | rule `archive_reason_verb` is labelled VERB and the runtime agrees | PASS |
 | H | Rules register | rule `aspiration_unenforced` is labelled UNENFORCED and the runtime agrees | PASS |
+| H | Rules register | event `TicketOpened` is labelled EVENT STAGED (on create, in tx) and the runtime agrees | PASS |
+| H | Rules register | event `TicketResolved` is labelled EVENT STAGED (on transition(resolve), in tx) and the runtime agrees | PASS |
+| H | Rules register | event `TicketEscalated` is labelled EVENT HAND-STAGED and the runtime agrees | PASS |
 | H | Rules register | machine `Ticket.status` is labelled MOVES REFUSED and the transition trigger refuses a raw UPDATE | PASS |
 | H | Rules register | machine `Ticket.status` is labelled GUARDS IN GENERATED VERBS and the generated verb refuses a failing guard | PASS |
 | H | Rules register | machine `Approval.state` (hand_set) is labelled MOVES REFUSED and its verbs refuse a wrong-state move | PASS |
@@ -247,10 +277,8 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 ## Failures (0)
 
-## Unsupported (5)
+## Unsupported (3)
 
 - **A / History / row history of an `audited: true` model** — needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither
-- **D / Declared events / `events:` in a hook file produce publishing code** — nothing is generated: generation and schema doctor say the declared events are declaration-only (resolver/validator.rs declaration_only_warnings), and doctor warns about a declared event no hand code names (commands/schema/events_check.rs); the generic service publishes CrudEvents through the publisher the module attaches, proven above
-- **D / Outbox / an event staged in the write's transaction (outbox)** — the generic service publishes fire-and-forget after the write, outside its transaction (backbone-core/src/service.rs, `let _ = self.event_publisher.publish(..)`); staging is hand code with backbone_outbox::outbox::stage, which the generator never emits
 - **D / Schema lifecycle hooks / before/after create/update/delete declared as hook `triggers:` produce runtime hooks** — generation fails —   Error: Validation error: Hook 'Ticket' declares trigger 'after_create' with 1 action(s); hook triggers are not generated, so nothing runs them: move the behaviour into the service and declare the events it publishes under `events:` \\| Error: Schema validation failed with 1 error(s); the trigger target is retired (generators/mod.rs:621) and resolver/validator.rs:1916 refuses t…
 - **F / Workflow / schema/workflows/ticket_escalation.workflow.yaml does something at runtime** — declaration-only: it is parsed and validated (resolver/validator.rs:55) and no generated file mentions it; the flow target is retired (generators/mod.rs:621) — the hand-written escalate route is the executable flow (proven in F)

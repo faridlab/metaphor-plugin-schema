@@ -18,8 +18,11 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use backbone_core::http::{service_error_response, ApiResponse};
+use backbone_core::write_hooks::{DeclaredEvent, WriteCtx};
+use backbone_core::{CrudRepository, ServiceError};
 
 use crate::application::service::{TicketService, TicketServiceExt};
+use crate::domain::event::declared;
 use crate::presentation::dto::TicketResponseDto;
 
 /// The body of the archive verb.
@@ -60,16 +63,34 @@ async fn escalate(
     let Some(scope) = backbone_orm::org_scope::current_org_scope() else {
         return (StatusCode::UNAUTHORIZED, Json(ApiResponse::error("escalation needs an org-scoped session")));
     };
+    let Some(pool) = service.repository().write_pool() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("the service has no database pool")));
+    };
     let mut fields = HashMap::new();
     fields.insert("status".to_string(), serde_json::json!("in_progress"));
     fields.insert(
         "note".to_string(),
         serde_json::json!(format!("escalated at {}: {}", scope.acting_unit_id(), body.note)),
     );
-    match backbone_core::write_guard::as_transition("start", service.partial_update(&id, fields)).await {
+    // The flow is one transaction: the verb's write, the generated hooks' events, and the event
+    // this hand code stages. The service's own transaction joins it as a savepoint.
+    let outcome = backbone_orm::in_write_tx_result(pool, async {
+        let moved = backbone_core::write_guard::as_transition("start", service.partial_update(&id, fields)).await?;
+        if let Some(ticket) = &moved {
+            let ctx = WriteCtx::current(Some("conformance"));
+            let event = declared::TicketEscalated { id: ticket.id, project_id: ticket.project_id };
+            ctx.stage(event.record(&ticket.id.to_string(), &ctx)).await?;
+        }
+        Ok::<_, ServiceError>(moved)
+    })
+    .await;
+    match outcome {
         Ok(Some(t)) => (StatusCode::OK, Json(ApiResponse::ok(TicketResponseDto::from(t)))),
         Ok(None) => (StatusCode::NOT_FOUND, Json(ApiResponse::not_found("Ticket", &id))),
-        Err(e) => service_error_response(&e),
+        Err(backbone_orm::WriteTxFailure::Inner(e)) => service_error_response(&e),
+        Err(backbone_orm::WriteTxFailure::Db(_)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("the escalation could not be committed")))
+        }
     }
 }
 

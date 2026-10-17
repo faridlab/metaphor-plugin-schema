@@ -67,7 +67,37 @@ rules:
     justification: "a judgement no expression can hold"
 
 
-# Declared events: nothing is generated for them; hand code publishes them.
+# Declared events. Those with `on:` are staged by the generated write hooks, in the write's own
+# transaction; `TicketEscalated` has none and is staged by hand code (the escalate route).
 events:
-  - name: TicketOpened
+  TicketOpened:
+    aggregate: Ticket
+    on: create
+    version: 2
+    fields: [id, project_id]
+
+  TicketResolved:
+    aggregate: Ticket
+    on: transition(resolve)
+    if: "amount >= 100"
+    fields: [id, amount]
+
+  TicketArchived:
+    aggregate: Ticket
+    on: enter(archived)
+    fields: [id, archive_reason]
+
+  TicketRetitled:
+    aggregate: Ticket
+    on: update(title)
+    fields: [id, title]
+
+  TicketDeleted:
+    aggregate: Ticket
+    on: delete
+    fields: [id]
+
+  TicketEscalated:
+    aggregate: Ticket
+    description: "A ticket was escalated: staged by the escalate route, in its transaction"
     fields: [id, project_id]
