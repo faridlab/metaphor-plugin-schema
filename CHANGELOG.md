@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-17
+
 ### Fixed
 
 - The webapp API client treats an empty `VITE_API_BASE_URL` as same origin. It used to fall back to
