@@ -1076,16 +1076,22 @@ impl SqlGenerator {
             .map(|idx| idx.fields[0].as_str())
             .collect();
 
+        let unique_names = model_unique_indexes(&table_name, model);
         for field in &model.fields {
             if field.is_unique()
                 && !field.is_primary_key()
                 && !explicit_unique_fields.contains(field.name.as_str())
             {
+                let name = unique_names
+                    .iter()
+                    .find(|u| u.keys.len() == 1 && u.keys[0] == field.name)
+                    .map(|u| u.name.clone())
+                    .unwrap_or_else(|| unique_index_name(&table_name, std::slice::from_ref(&field.name), "unique"));
                 writeln!(output).unwrap();
                 writeln!(
                     output,
                     "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({});",
-                    index_name(&format!("idx_{}_{}", table_name, field.name)),
+                    name,
                     qualified,
                     quote_ident(&field.name)
                 )
@@ -1528,16 +1534,7 @@ impl SqlGenerator {
         // but NOT inside an unquoted identifier — so each field is reduced to a
         // valid identifier segment before it goes into the name. Otherwise the
         // generated `CREATE INDEX` is a syntax error at the first `(`.
-        let index_name = index.name.clone().unwrap_or_else(|| {
-            let slug = index
-                .fields
-                .iter()
-                .map(|f| sanitize_ident_segment(f))
-                .collect::<Vec<_>>()
-                .join("_");
-            format!("idx_{}_{}", table_name, slug)
-        });
-        let index_name = self::index_name(&index_name);
+        let index_name = declared_index_name(table_name, model, index);
 
         let index_type = match index.index_type {
             IndexType::Unique => "UNIQUE INDEX",
@@ -2417,18 +2414,54 @@ impl SqlGenerator {
         for model in &schema.schema.models {
             let table = model.qualified_table_name();
             let bare = model.collection_name();
-            let mut rules = crate::rules::fields::model_field_rules(&schema.schema, model);
-            rules.extend(crate::rules::compile::model_row_rules(&schema.schema, model));
-            for rule in rules.iter().filter(|r| r.refuse && r.layer == "row" && !r.reads_old) {
+            // Unique indexes the table's migration created under their `idx_` name before the
+            // `uq_` convention: renamed, so a duplicate maps to its code and field.
+            for u in model_unique_indexes(&bare, model).into_iter().filter(|u| u.legacy != u.name) {
+                checks.push(rename_index_sql(&table, &u.legacy, &u.name));
+                check_drops.push(rename_index_sql(&table, &u.name, &u.legacy));
+            }
+            let field_rules = crate::rules::fields::model_field_rules(&schema.schema, model);
+            let row_rules = crate::rules::compile::model_row_rules(&schema.schema, model);
+            let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // A field check is named `ck_<table>_<field>_<code>__<code>` (its rule name is
+            // `<field>_<code>`); a row rule `ck_<table>_<field>__<code>`, after the field its
+            // violation names, so a database refusal maps back to that field. Two row rules
+            // naming the same field and code keep the rule's name, as before.
+            let named: Vec<(&crate::rules::compile::CompiledRowRule, String, String)> = field_rules
+                .iter()
+                .map(|r| (r, r.name.clone(), r.name.clone()))
+                .chain(row_rules.iter().map(|r| {
+                    let segment = if r.path.is_empty() { r.name.clone() } else { r.path.clone() };
+                    (r, segment, r.name.clone())
+                }))
+                .collect();
+            for (rule, segment, legacy_segment) in named.into_iter().filter(|(r, _, _)| r.refuse && r.layer == "row" && !r.reads_old) {
                 let Some(sql) = rule.sql.as_ref() else { continue };
-                let name = constraint_name("ck", &bare, &rule.name, &rule.code);
+                let mut name = constraint_name("ck", &bare, &segment, &rule.code);
+                if !taken.insert(name.clone()) {
+                    name = constraint_name("ck", &bare, &legacy_segment, &rule.code);
+                    taken.insert(name.clone());
+                }
+                let legacy = constraint_name("ck", &bare, &legacy_segment, &rule.code);
+                if legacy != name {
+                    checks.push(format!(
+                        "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL\n       AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('{table}') AND conname = '{legacy}')\n       AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('{table}') AND conname = '{name}') THEN\n        ALTER TABLE {table} RENAME CONSTRAINT {legacy} TO {name};\n    END IF;\nEND $$;\n"
+                    ));
+                }
                 checks.push(format!(
                     "DO $$\nBEGIN\n    IF to_regclass('{table}') IS NOT NULL\n       AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('{table}') AND conname = '{name}') THEN\n        IF EXISTS (SELECT 1 FROM {table} WHERE NOT ({sql})) THEN\n            RAISE NOTICE '{name} not added: stored rows of {table} break it';\n        ELSE\n            ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({sql});\n        END IF;\n    END IF;\nEXCEPTION WHEN undefined_column THEN\n    RAISE NOTICE '{name} not added: {table} lacks a column it reads';\nEND $$;\n"
                 ));
                 check_drops.push(format!("ALTER TABLE IF EXISTS {table} DROP CONSTRAINT IF EXISTS {name};"));
             }
             for unique in crate::rules::compile::model_uniqueness_rules(&schema.schema, model) {
-                let name = constraint_name("uq", &bare, &unique.name, &unique.code);
+                // Named after its keys (`uq_<table>_[<tenant keys>_]<field>__<code>`), so a
+                // duplicate maps back to the field it is reported on; an index created under the
+                // rule's name before is renamed.
+                let name = unique_index_name(&bare, &unique.keys, &unique.code);
+                let legacy = constraint_name("uq", &bare, &unique.name, &unique.code);
+                if legacy != name {
+                    checks.push(rename_index_sql(&table, &legacy, &name));
+                }
                 let keys: Vec<String> = unique.keys.iter().map(|k| format!("\"{k}\"")).collect();
                 // An index predicate takes only immutable expressions: an enum compared to a
                 // literal as itself, not through its `::text` cast.
@@ -2994,10 +3027,24 @@ fn fnv1a(s: &str) -> u32 {
     h
 }
 
-/// A generated constraint's name: `<prefix>_<table>_<rule>__<code>`, the code after `__` being
+/// A generated constraint's name: `<prefix>_<table>_<segment>__<code>`, the code after `__` being
 /// what a database refusal maps back to (`backbone_core::violation::code_from_constraint`).
 /// Postgres keeps 63 bytes of a name, so a longer one shortens its middle to a digest, keeping
-/// the code whole.
+/// the code whole: its head then ends in `_<8 hex digits>`, which names no field.
+///
+/// The segment names the field a refusal is reported on, so the service can read it back when
+/// Postgres reports no column (a CHECK never does, nor a unique violation on a table with
+/// row-level security):
+///
+/// - a field check: `ck_<table>_<field>_<code>__<code>` (its rule name is `<field>_<code>`);
+/// - a row rule: `ck_<table>_<field>__<code>`, the field its violation names (the first one the
+///   rule reads); two row rules naming the same field and code fall back to the rule's name;
+/// - a unique index: `uq_<table>_[<tenant keys>_]<field>__<code>` ([`unique_index_name`]).
+///
+/// Reading the field back: take the part between the prefix and the first `__`, strip
+/// `<table>_`, give up on a trailing `_<8 hex digits>`, strip a trailing `_<code>`, then strip
+/// leading tenant keys (`company_id_`, `tenant_id_`, `org_unit_id_`, `organization_id_`) while
+/// something remains.
 fn constraint_name(prefix: &str, table: &str, rule: &str, code: &str) -> String {
     // An identifier holds letters, digits and `_`: a rule named `G-MAIL-3` reads `g_mail_3`.
     let ident = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' }).collect::<String>();
@@ -3011,6 +3058,118 @@ fn constraint_name(prefix: &str, table: &str, rule: &str, code: &str) -> String 
     let keep = 63usize.saturating_sub(tail.len()).max(prefix.len() + 1);
     let head: String = format!("{prefix}_{table}_{rule}").chars().take(keep).collect();
     format!("{head}{tail}")
+}
+
+/// Key columns that scope a unique key to a tenant: they lead a generated unique index's name,
+/// after the table, so a key re-scoped from `company_id` to `org_unit_id` gets a name of its own.
+const TENANCY_KEYS: &[&str] = &["company_id", "tenant_id", "org_unit_id", "organization_id"];
+
+/// The column a key names: the innermost identifier of an expression (`lower(code::text)` reads
+/// `code`), the key itself otherwise.
+fn key_column(key: &str) -> String {
+    let inner = key.rsplit('(').next().unwrap_or(key).trim().trim_matches('"');
+    let ident: String = inner.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+    if ident.is_empty() { sanitize_ident_segment(key) } else { ident.to_ascii_lowercase() }
+}
+
+/// The field a refusal of a unique key over `keys` names: the last key that is not a tenant
+/// scope or the soft-delete marker, else the last key — the column the service reads out of the
+/// key's `DETAIL` when Postgres gives one.
+pub(crate) fn unique_key_path(keys: &[String]) -> String {
+    let scoped = |k: &String| TENANCY_KEYS.contains(&key_column(k).as_str()) || k.contains("deleted_at");
+    keys.iter().rev().find(|k| !scoped(k)).or(keys.last()).map(|k| key_column(k)).unwrap_or_default()
+}
+
+/// A generated unique index's name: `uq_<table>_[<tenant keys>_]<path>__<code>`.
+///
+/// `<path>` is the field a duplicate is reported on ([`unique_key_path`]); the tenant keys among
+/// `keys` (`company_id`, `tenant_id`, `org_unit_id`, `organization_id`) lead it, in key order;
+/// `<code>` is the violation code (`unique` for `@unique` and `indexes: unique`, the rule's code
+/// for a declared uniqueness rule). Postgres reports no column for a unique violation on a table
+/// with row-level security, so the service reads the path out of this name. A name longer than
+/// 63 bytes ends its head in an 8-hex digest (`…_1a2b3c4d__<code>`), which names no path.
+pub(crate) fn unique_index_name(table: &str, keys: &[String], code: &str) -> String {
+    let path = unique_key_path(keys);
+    let mut segments: Vec<String> = keys.iter().map(|k| key_column(k)).filter(|k| TENANCY_KEYS.contains(&k.as_str()) && *k != path).collect();
+    segments.push(path);
+    constraint_name("uq", table, &segments.join("_"), code)
+}
+
+/// Rename index `from` of `table` to `to` when `from` is there and `to` is not: a no-op on a
+/// database that never had the old name, and on a re-run.
+fn rename_index_sql(table: &str, from: &str, to: &str) -> String {
+    let at = |name: &str| match table.split_once('.') {
+        Some((schema, _)) => format!("{schema}.{name}"),
+        None => name.to_string(),
+    };
+    format!(
+        "DO $$\nBEGIN\n    IF to_regclass('{from_ref}') IS NOT NULL AND to_regclass('{to_ref}') IS NULL THEN\n        ALTER INDEX {from_ref} RENAME TO {to};\n    END IF;\nEND $$;\n",
+        from_ref = at(from),
+        to_ref = at(to),
+    )
+}
+
+/// One unique index a model's table carries: from `indexes: unique` or a `@unique` field.
+pub(crate) struct UniqueIndexName {
+    pub keys: Vec<String>,
+    /// The name it is created under.
+    pub name: String,
+    /// The `idx_…` name generations before the `uq_` convention gave it; equal to `name` for an
+    /// index the schema names itself.
+    pub legacy: String,
+}
+
+/// The unique indexes of `model` (bare table `table`), in the order the table's migration
+/// creates them: `indexes: unique` first, then `@unique` fields no single-field unique index
+/// already covers. Two keys whose names would coincide (same tenant keys and path) keep the
+/// second apart with a digest of its keys, which names no path.
+pub(crate) fn model_unique_indexes(table: &str, model: &Model) -> Vec<UniqueIndexName> {
+    let mut out: Vec<UniqueIndexName> = Vec::new();
+    let mut push = |keys: Vec<String>, explicit: Option<&String>, legacy: String| {
+        let name = match explicit {
+            Some(n) => index_name(n),
+            None => {
+                let name = unique_index_name(table, &keys, "unique");
+                if out.iter().any(|u: &UniqueIndexName| u.name == name) {
+                    let tag = format!("{}_{:08x}", unique_key_path(&keys), fnv1a(&keys.join(",")));
+                    constraint_name("uq", table, &tag, "unique")
+                } else {
+                    name
+                }
+            }
+        };
+        let legacy = explicit.map(|n| index_name(n)).unwrap_or(legacy);
+        out.push(UniqueIndexName { keys, name, legacy });
+    };
+    for index in model.indexes.iter().filter(|i| matches!(i.index_type, IndexType::Unique)) {
+        let slug = index.fields.iter().map(|f| sanitize_ident_segment(f)).collect::<Vec<_>>().join("_");
+        push(index.fields.clone(), index.name.as_ref(), index_name(&format!("idx_{table}_{slug}")));
+    }
+    let explicit_single: std::collections::HashSet<&str> = model
+        .indexes
+        .iter()
+        .filter(|i| matches!(i.index_type, IndexType::Unique) && i.fields.len() == 1)
+        .map(|i| i.fields[0].as_str())
+        .collect();
+    for field in model.fields.iter().filter(|f| f.is_unique() && !f.is_primary_key() && !explicit_single.contains(f.name.as_str())) {
+        push(vec![field.name.clone()], None, index_name(&format!("idx_{table}_{}", field.name)));
+    }
+    out
+}
+
+/// The name of one of `model`'s declared indexes (bare table `table`): a unique one by
+/// [`model_unique_indexes`], any other `idx_<table>_<fields>` unless the schema names it.
+pub(crate) fn declared_index_name(table: &str, model: &Model, index: &Index) -> String {
+    if matches!(index.index_type, IndexType::Unique) && index.name.is_none() {
+        if let Some(u) = model_unique_indexes(table, model).into_iter().find(|u| u.keys == index.fields) {
+            return u.name;
+        }
+    }
+    let name = index.name.clone().unwrap_or_else(|| {
+        let slug = index.fields.iter().map(|f| sanitize_ident_segment(f)).collect::<Vec<_>>().join("_");
+        format!("idx_{table}_{slug}")
+    });
+    index_name(&name)
 }
 
 /// skipped with a notice, and the key refuses new orphans all the same.
@@ -3644,7 +3803,7 @@ mod tests {
             ))
             .unwrap();
 
-        assert!(content.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email"));
+        assert!(content.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email__unique"));
     }
 
     /// Audit-metadata models should get text-typed expression indexes on
@@ -4199,6 +4358,53 @@ mod tests {
         assert!(constraint_name("ck", "t", &"r".repeat(80), "code").ends_with("__code"));
     }
 
+    /// Generated unique indexes and row-rule CHECKs are named after the field a refusal names,
+    /// so the service can read the path back out of the constraint when Postgres reports no
+    /// column (it reports none on a table with row-level security): `uq_<table>_[<tenant
+    /// keys>_]<field>__<code>` and `ck_<table>_<field>__<code>`. Indexes and constraints a
+    /// database already has under the old names are renamed by the declared-checks migration.
+    #[test]
+    fn unique_indexes_and_row_rule_checks_are_named_after_their_field() {
+        let keys = |k: &[&str]| k.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(unique_index_name("projects", &keys(&["contact_email"]), "unique"), "uq_projects_contact_email__unique");
+        assert_eq!(unique_index_name("tickets", &keys(&["project_id", "title"]), "unique"), "uq_tickets_title__unique");
+        assert_eq!(unique_index_name("projects", &keys(&["code", "company_id"]), "code_taken"), "uq_projects_company_id_code__code_taken");
+        assert_eq!(unique_index_name("warehouses", &keys(&["org_unit_id", "code"]), "unique"), "uq_warehouses_org_unit_id_code__unique");
+        assert_eq!(unique_index_name("tags", &keys(&["lower(name::text)", "deleted_at"]), "unique"), "uq_tags_name__unique");
+        assert_eq!(unique_index_name("units", &keys(&["company_id"]), "unique"), "uq_units_company_id__unique");
+
+        let yaml = "models:\n  - name: Project\n    collection: projects\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      company_id:\n        type: uuid\n      code:\n        type: string\n      kind:\n        type: string\n      website:\n        type: string?\n      contact_email:\n        type: string?\n        attributes: [\"@unique\"]\n      owner_id:\n        type: uuid\n      title:\n        type: string\n    indexes:\n      - type: unique\n        fields: [owner_id, title]\n      - type: unique\n        fields: [company_id, title]\n";
+        let models = crate::parser::yaml_parser::parse_model_yaml_str(yaml).unwrap().into_models().unwrap();
+        let mut schema = ModuleSchema::new("work");
+        schema.models = models;
+        schema.rule_register.read_file(
+            "project.hook.yaml",
+            "name: Project\nmodel: Project\nrules:\n  code_unique_per_company:\n    when: [create, update]\n    condition: \"count(Project, code == $this.code && company_id == $this.company_id && id != $this.id) == 0\"\n    code: code_taken\n    message: \"taken\"\n  client_needs_website:\n    when: [create, update]\n    condition: \"kind != 'client' || website != null\"\n    code: website_required\n    message: \"a client needs a website\"\n",
+        );
+        let models = schema.models.clone();
+        schema.rule_register.bind(&models);
+        schema.rule_register.check(&models);
+        schema.rule_register.mark_compiled(&models, &Default::default());
+        let output = SqlGenerator::new().with_split(true).generate(&ResolvedSchema { schema }).unwrap();
+        let file = |part: &str| {
+            output.files.iter().find(|(k, _)| k.to_string_lossy().contains(part) && k.to_string_lossy().ends_with(".up.sql")).map(|(_, v)| v.clone()).unwrap_or_else(|| panic!("no {part}"))
+        };
+        let table = file("create_project_table");
+        assert!(table.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_contact_email__unique ON projects (contact_email);"), "{table}");
+        assert!(table.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_title__unique ON projects (owner_id, title)"), "{table}");
+        assert!(table.contains("CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_company_id_title__unique ON projects (company_id, title)"), "{table}");
+        let checks = file("add_declared_checks_");
+        assert!(checks.contains("ALTER INDEX idx_projects_contact_email RENAME TO uq_projects_contact_email__unique;"), "{checks}");
+        assert!(checks.contains("ALTER INDEX idx_projects_owner_id_title RENAME TO uq_projects_title__unique;"), "{checks}");
+        assert!(checks.contains("CREATE UNIQUE INDEX uq_projects_company_id_code__code_taken ON projects (\"code\", \"company_id\")"), "{checks}");
+        assert!(checks.contains("ALTER INDEX uq_projects_code_unique_per_company__code_taken RENAME TO uq_projects_company_id_code__code_taken;"), "{checks}");
+        assert!(checks.contains("ADD CONSTRAINT ck_projects_kind__website_required CHECK"), "{checks}");
+        assert!(checks.contains("RENAME CONSTRAINT ck_projects_client_needs_website__website_required TO ck_projects_kind__website_required;"), "{checks}");
+        let rename = checks.find("RENAME CONSTRAINT ck_projects_client").unwrap();
+        let add = checks.find("ADD CONSTRAINT ck_projects_kind__").unwrap();
+        assert!(rename < add, "an existing constraint is renamed before the add looks for it");
+    }
+
     /// Postgres keeps 63 bytes of an index name and `IF NOT EXISTS` then skips a second index
     /// whose first 63 bytes match the first, so a longer name shortens to a digest. A name that
     /// fits is unchanged, so existing indexes keep theirs.
@@ -4420,7 +4626,7 @@ mod tests {
         );
         // Implicit unique index: bare name, qualified ON target.
         assert!(
-            up.contains("idx_users_email ON sapiens.users"),
+            up.contains("uq_users_email__unique ON sapiens.users"),
             "got:\n{}",
             up
         );
@@ -4466,7 +4672,7 @@ mod tests {
             "got:\n{}",
             up
         );
-        assert!(up.contains("idx_users_email ON users"), "got:\n{}", up);
+        assert!(up.contains("uq_users_email__unique ON users"), "got:\n{}", up);
     }
 
     #[test]

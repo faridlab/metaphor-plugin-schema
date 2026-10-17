@@ -119,11 +119,8 @@ pub(super) fn build_schema_snapshot(
         // INDEX carries the same WHERE clause the full-regen path emits.
         let generator = crate::generators::sql::SqlGenerator::new();
         for index in &model.indexes {
-            let idx_name = crate::generators::sql::index_name(&format!(
-                "idx_{}_{}",
-                table_name,
-                index.fields.join("_")
-            ));
+            // The name the table's migration gives it, so a diff matches the database.
+            let idx_name = crate::generators::sql::declared_index_name(&table_name, model, index);
             let where_predicate = index
                 .attributes
                 .iter()

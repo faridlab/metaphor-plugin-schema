@@ -37,6 +37,16 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   another kind, `reference_missing` (`foreign_key_violation`) for an id naming no node. A module
   whose `enable_org_fence` migration is already applied gets the functions again from a new
   `refresh_org_kind_guards_<digest>` migration; the old migration is left as it is.
+- Generated unique indexes and row-rule CHECKs are named after the field a refusal is reported
+  on, so the service can map a duplicate or a broken rule to that field on tables with row-level
+  security, where Postgres reports no column: `@unique` and `indexes: unique` create
+  `uq_<table>_[<tenant keys>_]<field>__unique` (was `idx_<table>_<fields>`, which the service did
+  not map at all and answered 409 with the raw index name), a declared uniqueness rule
+  `uq_<table>_[<tenant keys>_]<field>__<code>` (was `uq_<table>_<rule>__<code>`), and a row rule's
+  CHECK `ck_<table>_<field>__<code>` (was `ck_<table>_<rule>__<code>`). Field checks keep
+  `ck_<table>_<field>_<code>__<code>`. Indexes and constraints a database already has under the
+  old names are renamed by the declared-checks migration; applied migrations are not edited. The
+  migration diff names declared indexes as the table migration does.
 
 ## [0.35.0] - 2026-10-17
 
