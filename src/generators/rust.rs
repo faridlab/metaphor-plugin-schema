@@ -2384,7 +2384,7 @@ impl RustGenerator {
             // serde and sqlx spell `rename_all = "snake_case"` without a break before a digit
             // (`Moved301` reads `moved301`); a label that has one (`moved_301`, as the SQL type
             // and Display write it) is named on its variant, or it would never round-trip.
-            let label = to_snake_case(&variant.name);
+            let label = crate::utils::enum_label(&variant.name);
             if serde_snake_case(&variant_name) != label {
                 writeln!(output, "    #[serde(rename = \"{label}\")]").unwrap();
                 writeln!(output, "    #[sqlx(rename = \"{label}\")]").unwrap();

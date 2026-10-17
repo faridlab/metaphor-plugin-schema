@@ -2,6 +2,13 @@
 //!
 //! This module provides common utilities used across generators and parsers.
 
+/// The label an enum variant carries everywhere it is spelled: the Postgres enum type, the Rust
+/// enum's serde and sqlx form, and the value a generated transition writes. One function, so the
+/// three can never drift apart.
+pub fn enum_label(variant: &str) -> String {
+    to_snake_case(variant)
+}
+
 /// Convert a PascalCase or camelCase string to snake_case.
 ///
 /// Handles acronyms properly:

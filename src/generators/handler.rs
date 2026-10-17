@@ -1162,7 +1162,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 .unwrap();
             } else {
                 // Written as the state enum serializes (snake_case), the form the entity reads back.
-                writeln!(output, "    fields.insert(\"{}\".to_string(), serde_json::Value::String(\"{}\".to_string()));", status_field, to_snake_case(&to_pascal_case(&transition.to))).unwrap();
+                writeln!(output, "    fields.insert(\"{}\".to_string(), serde_json::Value::String(\"{}\".to_string()));", status_field, crate::utils::enum_label(&transition.to)).unwrap();
             }
             writeln!(output).unwrap();
 
@@ -1530,6 +1530,16 @@ mod tests {
         assert!(out.contains("serde_json::Value::String(\"on_hold\".to_string())"), "{out}");
         assert!(!out.contains("\"OnHold\""), "{out}");
         assert!(out.contains("backbone_core::write_guard::as_transition(\"put_on_hold\", service.partial_update(&id, fields))"), "{out}");
+        // A label the PascalCase round trip loses (`moved_301` reads `moved301`) is written as the
+        // SQL type spells it.
+        let sm301 = StateMachine {
+            field: "status".to_string(),
+            transitions: vec![Transition { name: "relocate".into(), from: vec!["active".into()], to: "moved_301".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut out301 = String::new();
+        HandlerGenerator::new().write_transition_handlers(&mut out301, &model, "TicketState", &sm301, None).unwrap();
+        assert!(out301.contains("serde_json::Value::String(\"moved_301\".to_string())"), "{out301}");
         // A refused transition answers with the service's status (422 with its violations, 404,
         // 409), not a blanket 500.
         assert!(out.contains("Err(e) => backbone_core::http::service_error_response::<TicketResponseDto>(&e),"), "{out}");
