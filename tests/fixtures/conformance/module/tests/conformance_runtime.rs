@@ -1154,15 +1154,27 @@ async fn area_g(c: &Ctx) {
     r.check("G", "Write fence", "bulk: B's bulk permanent delete of A's id removes nothing", still.status == 200, &bh.request, "A's row still there", &bh.got(), RLS);
 
     let bt = c.ticket(tb, c.org.company_b, &aid, json!({ "title": "B ticket on A project" })).await;
-    if bt.status == 201 {
-        let inc = app.get(&format!("/tickets?id={}&include=project", bt.id()), tb).await;
-        let leaked = inc.raw.contains("Company A secret project");
-        r.check("G", "Read fence", "include=: B cannot read A's project through a relation", inc.status == 200 && !leaked, &inc.request, "project null, A's name absent", &inc.got(), "backbone-core/src/http.rs:631-675 (include runs through the fenced connection)");
-        r.check("G", "Write fence", "B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides)", false, &bt.request, "refused (422 reference_missing)", &bt.got(), "Postgres referential checks bypass RLS, and nothing in the generated guard checks the referenced row is visible (rules/fields.rs; generators/sql.rs add_declared_foreign_keys): a scoped writer can probe for and reference another company's ids");
-    } else {
-        r.check("G", "Write fence", "B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides)", true, &bt.request, "refused", &bt.got(), "");
-        r.unsupported("G", "Read fence", "include=: B cannot read A's project through a relation", "not reachable: B could not create a ticket referencing A's project");
-    }
+    r.check("G", "Write fence", "B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides)", bt.status != 201, &bt.request, "refused (422 reference_missing)", &bt.got(), "backbone-core write path (PersistentEntity::references, emitted by generators/rust.rs from generators/sql.rs relation_foreign_key): a written key must name a row the writer can see; Postgres's own key check reads rows RLS hides");
+
+    // The read fence over include=, proven on a cross-company link the API now refuses: seeded as
+    // the owner, whom RLS does not apply to, so B holds a ticket naming A's project.
+    let seeded = Uuid::new_v4();
+    let seed = sqlx::query("INSERT INTO conformance.tickets (id, org_unit_id, project_id, title) VALUES ($1, $2, $3, 'B ticket seeded on A project')")
+        .bind(seeded)
+        .bind(c.org.company_b)
+        .bind(Uuid::parse_str(&aid).unwrap_or_default())
+        .execute(&c.owner)
+        .await;
+    const INC: &str = "backbone-core/src/http.rs (include runs through the fenced connection)";
+    let leaks = |resp: &Resp| resp.raw.contains("Company A secret project") || resp.raw.contains(&code);
+    let inc = app.get(&format!("/tickets?id={seeded}&include=project"), tb).await;
+    let sees_own = inc.items().iter().any(|i| i["id"] == json!(seeded.to_string()));
+    r.check("G", "Read fence", "include=: B cannot read A's project through a relation (list)", seed.is_ok() && inc.status == 200 && sees_own && !leaks(&inc), &inc.request, "B's seeded ticket listed, A's project fields absent", &format!("seed {:?}; {}", seed.as_ref().err(), inc.got()), INC);
+    let one = app.get(&format!("/tickets/{seeded}?include=project"), tb).await;
+    r.check("G", "Read fence", "include=: B cannot read A's project through a relation (get by id)", seed.is_ok() && one.status == 200 && !leaks(&one), &one.request, "200, A's project fields absent", &one.got(), INC);
+    let own = app.get(&format!("/tickets?id={atid}&include=project"), ta).await;
+    let hydrated = own.items().first().map(|i| i["project"]["id"] == json!(aid)).unwrap_or(false);
+    r.check("G", "Read fence", "include=: A's own ticket still hydrates A's project", own.status == 200 && hydrated, &own.request, "items[0].project.id == A's project", &own.got(), INC);
     let ag = app.get(&format!("/projects/aggregate?code={code}&group_by=kind&sum=budget"), tb).await;
     r.check("G", "Read fence", "aggregate: B's aggregate sees none of A's rows", ag.status == 200 && !ag.raw.contains("777"), &ag.request, "no group with A's budget", &ag.got(), RLS);
     let cn = app.get(&format!("/projects/count?code={code}"), tb).await;

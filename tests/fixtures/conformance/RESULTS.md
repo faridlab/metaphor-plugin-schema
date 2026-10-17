@@ -5,7 +5,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.35.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 35s
+- Generation: 1s; whole run: 42s
 
 ## Summary
 
@@ -17,9 +17,9 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | D. Hooks and events | 12 | 0 | 3 |
 | E. State machine | 20 | 0 | 0 |
 | F. Extension | 12 | 0 | 1 |
-| G. Scoping | 33 | 0 | 1 |
+| G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 20 | 0 | 0 |
-| **Total** | **211** | **0** | **6** |
+| **Total** | **214** | **0** | **5** |
 
 ## Matrix
 
@@ -200,7 +200,9 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | G | Write fence | bulk: B's bulk patch and bulk delete of A's ids change nothing | PASS |
 | G | Write fence | bulk: B's bulk permanent delete of A's id removes nothing | PASS |
 | G | Write fence | B cannot attach its ticket to a project it cannot see (foreign keys check rows RLS hides) | PASS |
-| G | Read fence | include=: B cannot read A's project through a relation | UNSUPPORTED |
+| G | Read fence | include=: B cannot read A's project through a relation (list) | PASS |
+| G | Read fence | include=: B cannot read A's project through a relation (get by id) | PASS |
+| G | Read fence | include=: A's own ticket still hydrates A's project | PASS |
 | G | Read fence | aggregate: B's aggregate sees none of A's rows | PASS |
 | G | Read fence | count: B's count of A's code is 0 | PASS |
 | G | Read fence | an OR-filter attempt (?code[or]=…) cannot widen past the fence | PASS |
@@ -245,11 +247,10 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 ## Failures (0)
 
-## Unsupported (6)
+## Unsupported (5)
 
 - **A / History / row history of an `audited: true` model** — needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither
 - **D / Declared events / `events:` in a hook file produce publishing code** — nothing is generated: generation and schema doctor say the declared events are declaration-only (resolver/validator.rs declaration_only_warnings), and doctor warns about a declared event no hand code names (commands/schema/events_check.rs); the generic service publishes CrudEvents through the publisher the module attaches, proven above
 - **D / Outbox / an event staged in the write's transaction (outbox)** — the generic service publishes fire-and-forget after the write, outside its transaction (backbone-core/src/service.rs, `let _ = self.event_publisher.publish(..)`); staging is hand code with backbone_outbox::outbox::stage, which the generator never emits
 - **D / Schema lifecycle hooks / before/after create/update/delete declared as hook `triggers:` produce runtime hooks** — generation fails —   Error: Validation error: Hook 'Ticket' declares trigger 'after_create' with 1 action(s); hook triggers are not generated, so nothing runs them: move the behaviour into the service and declare the events it publishes under `events:` \\| Error: Schema validation failed with 1 error(s); the trigger target is retired (generators/mod.rs:621) and resolver/validator.rs:1916 refuses t…
 - **F / Workflow / schema/workflows/ticket_escalation.workflow.yaml does something at runtime** — declaration-only: it is parsed and validated (resolver/validator.rs:55) and no generated file mentions it; the flow target is retired (generators/mod.rs:621) — the hand-written escalate route is the executable flow (proven in F)
-- **G / Read fence / include=: B cannot read A's project through a relation** — not reachable: B could not create a ticket referencing A's project
