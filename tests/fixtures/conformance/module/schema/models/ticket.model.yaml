@@ -1,0 +1,82 @@
+# Ticket: the org-scoped child. Carries the foreign key to Project, the state machine
+# (schema/hooks/ticket_state.hook.yaml), lifecycle shapes and the hook rules.
+
+models:
+  - name: Ticket
+    collection: tickets
+    description: "Conformance fixture: an org-scoped record with a state machine"
+
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+
+      org_unit_id:
+        type: uuid
+        attributes: ["@exclude_from_foreign_key_check"]
+        description: "The org fence (RLS on app.scope_unit_ids)"
+
+      project_id:
+        type: uuid
+        attributes: ["@required", "@foreign_key(Project.id)"]
+
+      title:
+        type: string
+        attributes: ["@required", "@length(max=120)"]
+
+      status:
+        type: TicketStatus
+        attributes: ["@default(open)"]
+
+      stage:
+        type: string?
+        lifecycle:
+          shape: projection
+        description: "Projected by the service, never written by a client"
+
+      amount:
+        type: decimal
+        attributes: ["@non_negative", "@default(0)"]
+
+      budget_cap:
+        type: decimal?
+
+      discount:
+        type: decimal?
+
+      discount_reason:
+        type: string?
+
+      note:
+        type: string?
+
+      archive_reason:
+        type: string?
+
+      due_on:
+        type: date?
+
+      reference:
+        type: uuid
+        attributes: ["@default(uuid)"]
+
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]
+
+    indexes:
+      - type: unique
+        fields: [project_id, title]
+      - type: index
+        fields: [project_id]
+      - type: index
+        fields: [status]
+
+enums:
+  - name: TicketStatus
+    variants:
+      - name: open
+        default: true
+      - name: in_progress
+      - name: resolved
+      - name: archived

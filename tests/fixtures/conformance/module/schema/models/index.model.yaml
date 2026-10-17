@@ -1,0 +1,47 @@
+# Conformance fixture: the module index. Replaces the skeleton's index, so the module holds only
+# the fixture's entities.
+
+module: conformance
+version: 2
+schema: conformance
+description: "Conformance fixture: every Backbone feature the schema DSL declares, driven at runtime"
+
+# Projects carry company_id (the company fence); tickets carry org_unit_id (the org fence).
+company_fence: strict
+org_fence: strict
+
+config:
+  database: postgresql
+  soft_delete: true
+  audit: true
+  default_timestamps: true
+  generators:
+    extensions: true
+    disabled:
+      - graphql
+      - grpc
+      - proto
+
+shared_types:
+  Timestamps:
+    created_at:
+      type: datetime
+      attributes: ["@default(now)"]
+    updated_at:
+      type: datetime
+      attributes: ["@updated_at"]
+    deleted_at:
+      type: datetime?
+  Actors:
+    created_by:
+      type: uuid?
+    updated_by:
+      type: uuid?
+    deleted_by:
+      type: uuid?
+  Metadata: [Timestamps, Actors]
+
+imports:
+  - project.model.yaml
+  - ticket.model.yaml
+  - approval.model.yaml

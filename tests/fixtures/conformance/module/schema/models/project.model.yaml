@@ -1,0 +1,112 @@
+# Project: the company-scoped master. Exercises every field type and field attribute the
+# generator compiles into the write guard, the DTOs and the migration.
+
+models:
+  - name: Project
+    collection: projects
+    description: "Conformance fixture: a company-scoped master record"
+
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+
+      company_id:
+        type: uuid
+        attributes: ["@required", "@exclude_from_foreign_key_check"]
+        description: "The company fence (RLS on app.company_id)"
+
+      code:
+        type: string
+        attributes: ["@required", "@length(min=2, max=12)", "@pattern(\"^[A-Z][A-Z0-9-]*$\")"]
+
+      name:
+        type: string
+        attributes: ["@required", "@length(min=3, max=80)"]
+
+      summary:
+        type: string?
+        attributes: ["@max(500)"]
+
+      backup_email:
+        type: string?
+        attributes: ["@email"]
+        description: "The @email attribute on a string field"
+
+      docs_url:
+        type: string?
+        attributes: ["@url"]
+        description: "The @url attribute on a string field"
+
+      contact_email:
+        type: email?
+        attributes: ["@unique"]
+
+      website:
+        type: url?
+
+      budget:
+        type: decimal
+        attributes: ["@non_negative", "@default(0)"]
+
+      fee:
+        type: money?
+        attributes: ["@positive"]
+
+      priority:
+        type: int
+        attributes: ["@range(1, 5)", "@default(3)"]
+
+      headcount:
+        type: int64?
+        attributes: ["@min(1)", "@max(100000)"]
+
+      billable:
+        type: bool
+        attributes: ["@default(true)"]
+
+      starts_on:
+        type: date?
+
+      kickoff_at:
+        type: datetime?
+
+      settings:
+        type: json?
+
+      kind:
+        type: ProjectKind
+        attributes: ["@default(internal)"]
+
+      external_ref:
+        type: string?
+        attributes: ["@immutable"]
+        description: "Set once on create, never changed by a generic write"
+
+      api_secret:
+        type: string?
+        attributes: ["@private"]
+        description: "Stripped from every response"
+
+      internal_score:
+        type: int?
+        attributes: ["@exclude_from_dto"]
+        description: "Never accepted from a writer"
+
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]
+
+    # The per-company code uniqueness is the hook rule `code_unique_per_company`
+    # (a coded partial unique index); a plain composite unique index lives on Ticket.
+    indexes:
+      - type: index
+        fields: [kind]
+
+enums:
+  - name: ProjectKind
+    variants:
+      - name: internal
+        default: true
+      - name: client
+      - name: research

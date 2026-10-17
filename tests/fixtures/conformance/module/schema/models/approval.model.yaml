@@ -1,0 +1,40 @@
+# Approval: a company-scoped record whose state is hand_set and bound to a machine
+# (schema/hooks/approval_state.hook.yaml): only its verbs move it, and a hand_set lifecycle
+# narrows the generic surface to reads.
+
+models:
+  - name: Approval
+    collection: approvals
+    description: "Conformance fixture: a hand_set state moved only by verbs"
+
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+
+      company_id:
+        type: uuid
+        attributes: ["@required", "@exclude_from_foreign_key_check"]
+
+      subject:
+        type: string
+        attributes: ["@required", "@length(max=120)"]
+
+      state:
+        type: ApprovalState
+        attributes: ["@default(draft)"]
+        lifecycle:
+          shape: hand_set
+          state_machine: approval_state
+
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]
+
+enums:
+  - name: ApprovalState
+    variants:
+      - name: draft
+        default: true
+      - name: submitted
+      - name: approved

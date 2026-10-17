@@ -1,0 +1,21 @@
+# approval_state: Approval.state, a hand_set field. Generated verbs move it.
+
+name: approval_state
+model: Approval
+
+states:
+  field: state
+  verbs: generated
+  values:
+    draft:
+      initial: true
+    submitted: {}
+    approved:
+      final: true
+  transitions:
+    submit:
+      from: draft
+      to: submitted
+    approve:
+      from: submitted
+      to: approved

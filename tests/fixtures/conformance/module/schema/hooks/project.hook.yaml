@@ -1,0 +1,17 @@
+# Project rules: a uniqueness rule (compiled to a partial unique index) and a row rule.
+
+name: Project
+model: Project
+
+rules:
+  code_unique_per_company:
+    when: [create, update]
+    condition: "count(Project, code == $this.code && company_id == $this.company_id && id != $this.id && metadata.deleted_at == null) == 0"
+    code: code_taken
+    message: "the code is taken in this company"
+
+  client_needs_website:
+    when: [create, update]
+    condition: "kind != 'client' || website != null"
+    code: website_required_for_client
+    message: "a client project needs a website"

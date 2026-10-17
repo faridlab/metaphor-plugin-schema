@@ -1,0 +1,6 @@
+# Codegen policy for the conformance fixture. Extension files (`*.ext.rs`) are always
+# user-owned; the runtime probe file is declared here so regeneration never touches it.
+user_owned:
+  - "tests/conformance_runtime.rs"
+  - "tests/features/**"
+  - "docs/**"

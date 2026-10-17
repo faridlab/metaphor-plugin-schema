@@ -1,0 +1,29 @@
+# A two-step saga, to prove what a workflow declaration does at runtime: the generator reads
+# and validates it, and nothing executes it. The hand-written escalate verb
+# (src/presentation/http/ticket_handler.ext.rs) is the flow's executable truth.
+
+name: TicketEscalation
+description: "Escalate a ticket: start it, then record the escalation note"
+version: 1
+
+trigger:
+  event: TicketEscalationRequestedEvent
+  extract:
+    ticket_id: "event.ticket_id"
+
+steps:
+  - name: start_ticket
+    type: action
+    action: update
+    entity: Ticket
+    on_success:
+      next: record_note
+  - name: record_note
+    type: action
+    action: update
+    entity: Ticket
+    on_success:
+      next: done
+  - name: done
+    type: terminal
+    status: completed

@@ -1,0 +1,73 @@
+# Ticket: the state machine on `status` (a final state, `archived`, left only through the
+# `from: "*"` reopen edge; `resolve` carries a guard; verbs generated) and one rule per register
+# label: GUARD, SHADOW, VERB, UNENFORCED. The machine and the rules share this file: a model's
+# generated verbs come from the first hook file naming it.
+
+name: Ticket
+model: Ticket
+
+states:
+  field: status
+  verbs: generated
+  values:
+    open:
+      initial: true
+    in_progress: {}
+    resolved: {}
+    archived:
+      final: true
+  transitions:
+    start:
+      from: open
+      to: in_progress
+    resolve:
+      from: in_progress
+      to: resolved
+      guard: "amount <= 1000"
+    archive:
+      from: [resolved]
+      to: archived
+    reopen:
+      from: "*"
+      to: open
+
+
+rules:
+  price_within_budget:
+    when: [create, update]
+    condition: "budget_cap == null || amount <= budget_cap"
+    code: over_budget
+    message: "amount exceeds the budget cap"
+
+  discount_needs_reason:
+    when: [create, update]
+    condition: "discount == null || discount_reason != null"
+    code: discount_reason_required
+    message: "a discount needs a reason"
+
+  note_shadowed:
+    when: [create, update]
+    condition: "note == null || note != 'shadow'"
+    code: shadow_note
+    message: "the note says shadow"
+    shadow: "observing before enforcing"
+
+  archive_reason_verb:
+    when: [archive]
+    condition: "status != 'archived' || archive_reason != null"
+    code: archive_reason_required
+    message: "archiving needs a reason"
+    enforced_by: "src/application/service/ticket_service.ext.rs::archive_with_reason"
+
+  aspiration_unenforced:
+    when: [create]
+    condition: "the title reads like a sentence a customer would write"
+    message: "the title should read like a customer wrote it"
+    code: title_tone
+    justification: "a judgement no expression can hold"
+
+
+# Declared events: nothing is generated for them; hand code publishes them.
+events:
+  - name: TicketOpened
+    fields: [id, project_id]
