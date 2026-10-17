@@ -7,6 +7,40 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- Declared events can be staged by the generated code. An `events:` entry (in a hook file, the
+  model index or a module config file) takes an optional `on:` (`create`, `update`,
+  `update(<field>)`, `delete`, `transition(<verb>)`, `enter(<state>)`, one or a list) and an
+  optional `if:` in the rule expression language. The generator checks every name they use against
+  the aggregate's fields, state machines and states, and fails validation naming each one it cannot
+  honour (`schema validate` and `generate`).
+- Every module that declares events gets `src/domain/event/declared.rs`: a typed payload struct per
+  declaration (all the declaration shapes in use are read: prose with a payload list, typed `fields:`
+  as a map or a list, and the full form), namespaced under `declared::` so it cannot collide with a
+  hand-written type, each implementing `backbone_core::write_hooks::DeclaredEvent`, plus
+  `OUTBOX_SCHEMAS` and `migrate_outbox(pool)` for the composing service to create the outbox tables
+  with at startup. A model with an `on:` event also gets `<entity>_write_hooks.rs`, a `WriteHooks`
+  implementation that stages its events in the write's transaction, which `build_<entity>_service`
+  attaches. Requires backbone-core with `write_hooks`.
+- `schema rules` labels each declared event `EVENT STAGED (on <trigger>, in tx)` or
+  `EVENT HAND-STAGED` (also in `-f json` under `events`). `schema doctor` stops asking for hand code
+  behind an event that has `on:`, reports `storage:` and `retention:` on an event as documentation
+  that nothing enforces, warns about a hand-staged payload field of no known type (carried as a JSON
+  value), and fails on a hand-built service of a model with staged events that attaches no write
+  hooks.
+- The generated transition routes carry `backbone_core::http::correlation_middleware`, so a verb's
+  events carry the request's correlation id like a generic write's.
+
+### Changed
+
+- The generation warning for events without `on:` no longer calls them declaration-only: a typed
+  payload is generated and hand code stages them. Declarations without `on:` keep their meaning;
+  nothing is staged for them.
+- The conformance fixture and `tests/conformance.rs` prove the write path with declared events (events
+  staged with the row, rollback both ways, transitions, `update(<field>)`, hook failure, bulk, relay
+  drain, dead letter, re-emit and inbox dedupe); `RESULTS.md` is regenerated.
+
 ## [0.36.0] - 2026-10-18
 
 ### Fixed
