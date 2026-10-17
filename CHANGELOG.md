@@ -51,6 +51,11 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   the model index, and workflows under `schema/workflows`, are declaration-only: nothing is
   generated from them and nothing generated publishes or runs them. Events were dropped at load
   without a word. Hook `triggers:` still fail validation, as before.
+- An entity with foreign keys lists them in `PersistentEntity::references()` (a const slice of
+  `backbone_core::Reference`: column, target table, target column), read from the same source as
+  the generated `fk_<table>_<column>` constraints, so the service can refuse a key naming a row the
+  writer cannot see; Postgres's own key check reads rows row-level security hides. An entity
+  without foreign keys is generated unchanged.
 
 ## [0.35.0] - 2026-10-17
 

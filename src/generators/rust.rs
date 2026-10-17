@@ -1392,7 +1392,7 @@ impl RustGenerator {
     }
 
     /// Generate backbone_core::PersistentEntity implementation for a model
-    fn generate_persistent_entity_impl(&self, model: &Model, state_fields: &[String], output: &mut String) {
+    fn generate_persistent_entity_impl(&self, model: &Model, state_fields: &[String], references: &[super::sql::ForeignKeyRef], output: &mut String) {
         let name = &model.name;
         let pk_field = self.get_pk_field(model);
         let has_audit = self.has_audit_metadata(model);
@@ -1428,6 +1428,20 @@ impl RustGenerator {
             let list = state_fields.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
             writeln!(output, "    fn state_fields() -> &'static [&'static str] {{").unwrap();
             writeln!(output, "        &[{list}]").unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
+        // The rows the entity's foreign keys reference. The generic service checks each written
+        // key names a row the writer can see: Postgres's own key check reads rows row-level
+        // security hides. A const, so the slice is `'static`. Left out without foreign keys.
+        if !references.is_empty() {
+            writeln!(output, "    fn references() -> &'static [backbone_core::Reference] {{").unwrap();
+            writeln!(output, "        const REFERENCES: &[backbone_core::Reference] = &[").unwrap();
+            for r in references {
+                writeln!(output, "            backbone_core::Reference::new({:?}, {:?}, {:?}),", r.column, r.target_table, r.target_column).unwrap();
+            }
+            writeln!(output, "        ];").unwrap();
+            writeln!(output, "        REFERENCES").unwrap();
             writeln!(output, "    }}").unwrap();
         }
 
@@ -2121,7 +2135,8 @@ impl RustGenerator {
         );
         // Generate backbone_core::PersistentEntity implementation
         let state_fields = crate::rules::compile::model_state_fields(&schema.schema, model);
-        self.generate_persistent_entity_impl(model, &state_fields, &mut output);
+        let references = super::sql::model_foreign_keys(model, &schema.schema);
+        self.generate_persistent_entity_impl(model, &state_fields, &references, &mut output);
 
         // Generate backbone_orm::EntityRepoMeta implementation (needs schema for enum detection)
         {
@@ -3248,6 +3263,29 @@ mod tests {
             .expect("PersistentEntity impl should be generated");
         let end = file[start..].find("\n}\n").map(|e| start + e).unwrap_or(file.len());
         file[start..end].to_string()
+    }
+
+    /// An entity lists the rows its foreign keys reference, from the same source as the
+    /// `fk_<table>_<column>` constraints, so the service can check a written key names a row the
+    /// writer can see. An entity without foreign keys is generated unchanged.
+    #[test]
+    fn foreign_keys_are_listed_as_references() {
+        let yaml = "schema: work\nmodels:\n  - name: Project\n    collection: projects\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      name:\n        type: string\n  - name: Ticket\n    collection: tickets\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      project_id:\n        type: uuid\n        attributes: [\"@foreign_key(Project.id)\"]\n      parent_id:\n        type: uuid?\n        attributes: [\"@foreign_key(Ticket.id)\"]\n";
+        let mut schema = ModuleSchema::new("work");
+        schema.models = crate::parser::yaml_parser::parse_model_yaml_str(yaml).unwrap().into_models().unwrap();
+        let fks = crate::generators::sql::model_foreign_keys(&schema.models[1], &schema);
+        assert_eq!(fks.iter().map(|f| f.constraint.as_str()).collect::<Vec<_>>(), ["fk_tickets_project_id", "fk_tickets_parent_id"]);
+        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        let file = |p: &str| output.files.get(&PathBuf::from(p)).cloned().unwrap_or_default();
+        let ticket = persistent_entity_impl(&file("src/domain/entity/ticket.rs"), "Ticket");
+        let table = |t: &str| if ticket.contains(&format!("\"work.{t}\"")) { format!("work.{t}") } else { t.to_string() };
+        let expected = format!(
+            "    fn references() -> &'static [backbone_core::Reference] {{\n        const REFERENCES: &[backbone_core::Reference] = &[\n            backbone_core::Reference::new(\"project_id\", \"{}\", \"id\"),\n            backbone_core::Reference::new(\"parent_id\", \"{}\", \"id\"),\n        ];\n        REFERENCES\n    }}",
+            table("projects"),
+            table("tickets")
+        );
+        assert!(ticket.contains(&expected), "{ticket}");
+        assert!(!persistent_entity_impl(&file("src/domain/entity/project.rs"), "Project").contains("fn references()"));
     }
 
     #[test]

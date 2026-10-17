@@ -2827,46 +2827,12 @@ impl SqlGenerator {
         schema: &ResolvedSchema,
     ) -> Result<Option<(String, String)>, GenerateError> {
         let relation = &model.relations[rel_idx];
-        let table_name = model.collection_name();
         let qualified_table = model.qualified_table_name();
-
-        if relation.relation_type == RelationType::ManyToMany {
+        let Some(ForeignKeyRef { column: fk_column, constraint: constraint_name, target_table: target_name, target_column: references }) =
+            relation_foreign_key(model, rel_idx, &schema.schema)
+        else {
             return Ok(None);
-        }
-        if relation.relation_type == RelationType::Many {
-            return Ok(None);
-        }
-        if !relation.has_database_fk() {
-            return Ok(None);
-        }
-
-        let fk_column = if let Some(explicit_fk) = relation.foreign_key() {
-            explicit_fk
-        } else {
-            format!("{}_id", to_snake_case(&relation.name))
         };
-
-        let column_exists = model.fields.iter().any(|f| f.name == fk_column);
-        if !column_exists {
-            return Ok(None);
-        }
-
-        let target_name = get_relation_target_table_qualified(&relation.target, &schema.schema);
-        // A declaration may name the far side's relation (`MailActivityType.activities`) rather
-        // than a column; the key then points at the target's primary key.
-        let references = {
-            let named = relation.references();
-            match &relation.target {
-                TypeRef::Custom(t) => match schema.schema.models.iter().find(|m| &m.name == t) {
-                    Some(target) if target.find_field(&named).is_none() => {
-                        target.primary_key().map(|p| p.name.clone()).unwrap_or_else(|| "id".into())
-                    }
-                    _ => named,
-                },
-                _ => named,
-            }
-        };
-        let constraint_name = format!("fk_{}_{}", table_name, fk_column);
 
         let on_delete = match relation.on_delete() {
             ForeignKeyAction::Cascade => "ON DELETE CASCADE",
@@ -3093,6 +3059,56 @@ pub(crate) fn unique_index_name(table: &str, keys: &[String], code: &str) -> Str
     let mut segments: Vec<String> = keys.iter().map(|k| key_column(k)).filter(|k| TENANCY_KEYS.contains(&k.as_str()) && *k != path).collect();
     segments.push(path);
     constraint_name("uq", table, &segments.join("_"), code)
+}
+
+/// One database foreign key of a model: the column, the constraint (`fk_<table>_<column>`) and
+/// what it references. The one source for the generated `FOREIGN KEY` constraints and for the
+/// entity's `PersistentEntity::references()`, which the service checks against what the writer
+/// can see (Postgres's own key check reads rows row-level security hides).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ForeignKeyRef {
+    pub column: String,
+    pub constraint: String,
+    /// `schema.table` for a target of this module that names its schema, the bare table
+    /// otherwise.
+    pub target_table: String,
+    pub target_column: String,
+}
+
+/// The foreign key relation `rel_idx` of `model` gives its table, or `None` when it gives none:
+/// a many-to-many or has-many relation, a relation without a database key, or one whose column
+/// the model does not have. A `@foreign_key` field attribute is read as such a relation.
+pub(crate) fn relation_foreign_key(model: &Model, rel_idx: usize, schema: &crate::ast::ModuleSchema) -> Option<ForeignKeyRef> {
+    let relation = model.relations.get(rel_idx)?;
+    if matches!(relation.relation_type, RelationType::ManyToMany | RelationType::Many) || !relation.has_database_fk() {
+        return None;
+    }
+    let column = relation.foreign_key().unwrap_or_else(|| format!("{}_id", to_snake_case(&relation.name)));
+    if !model.fields.iter().any(|f| f.name == column) {
+        return None;
+    }
+    let target_table = get_relation_target_table_qualified(&relation.target, schema);
+    // A declaration may name the far side's relation (`MailActivityType.activities`) rather
+    // than a column; the key then points at the target's primary key.
+    let target_column = {
+        let named = relation.references();
+        match &relation.target {
+            TypeRef::Custom(t) => match schema.models.iter().find(|m| &m.name == t) {
+                Some(target) if target.find_field(&named).is_none() => {
+                    target.primary_key().map(|p| p.name.clone()).unwrap_or_else(|| "id".into())
+                }
+                _ => named,
+            },
+            _ => named,
+        }
+    };
+    let constraint = format!("fk_{}_{}", model.collection_name(), column);
+    Some(ForeignKeyRef { column, constraint, target_table, target_column })
+}
+
+/// Every database foreign key of `model`, in relation order ([`relation_foreign_key`]).
+pub(crate) fn model_foreign_keys(model: &Model, schema: &crate::ast::ModuleSchema) -> Vec<ForeignKeyRef> {
+    (0..model.relations.len()).filter_map(|i| relation_foreign_key(model, i, schema)).collect()
 }
 
 /// Rename index `from` of `table` to `to` when `from` is there and `to` is not: a no-op on a
