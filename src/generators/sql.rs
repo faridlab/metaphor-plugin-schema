@@ -2681,6 +2681,21 @@ impl SqlGenerator {
             }
         }
 
+        // 8. The permission vocabulary and system roles, written into the identity module's tables.
+        // Named by a digest of its content, so a change to the vocabulary lands as a new migration
+        // (an applied one is never edited); every statement inserts what is missing and nothing is
+        // ever deleted, so re-applying it, or applying it after a tenant edited the roles, is safe.
+        let rbac = crate::rbac::Rbac::new(&schema.schema);
+        let seed = rbac.seed();
+        if !seed.permissions.is_empty() {
+            let (up, down) = crate::rbac::seed_sql(&module_name, &seed);
+            let digest = &crate::rbac::digest(&up)[..8];
+            // After everything above, whichever of it was emitted.
+            let ts = Self::timestamp_for(counter + 2);
+            output.add_file(PathBuf::from(format!("migrations/{}_seed_{}_permissions_{}.up.sql", ts, module_name, digest)), up);
+            output.add_file(PathBuf::from(format!("migrations/{}_seed_{}_permissions_{}.down.sql", ts, module_name, digest)), down);
+        }
+
         Ok(())
     }
 
