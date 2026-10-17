@@ -303,9 +303,37 @@ impl ModuleSchema {
         self.models.extend(file.models);
     }
 
-    /// Merge a hook file into this schema
+    /// Merge a hook file into this schema.
+    ///
+    /// A model's hook may be split across files — its machine in one, its rules in another —
+    /// and every consumer looks a model's hook up once (`hooks.iter().find(..)`), so the parts
+    /// are joined here into the one hook those lookups find. See [`Hook::absorb`].
     pub fn merge_hook_file(&mut self, file: HookFile) {
-        self.hooks.extend(file.hooks);
+        for hook in file.hooks {
+            self.merge_hook(hook);
+        }
+    }
+
+    /// The hook declared for `model`: its machine, rules, permissions and computed fields,
+    /// joined across the files that declare them ([`Self::merge_hook`]). Every generator looks
+    /// a model's hook up through this, so they agree on which hook that is.
+    pub fn hook_for(&self, model: &str) -> Option<&Hook> {
+        self.hooks.iter().find(|h| h.model_ref == model || h.name == model)
+    }
+
+    /// Add `hook`, joined into the hook already declared for the same model when the two can
+    /// be one: at most one of them carries a state machine. Two machines on one model (one per
+    /// state field) stay two hooks.
+    pub fn merge_hook(&mut self, hook: Hook) {
+        let joinable = |h: &Hook| {
+            !hook.model_ref.is_empty()
+                && h.model_ref == hook.model_ref
+                && !(h.state_machine.is_some() && hook.state_machine.is_some())
+        };
+        match self.hooks.iter_mut().find(|h| joinable(h)) {
+            Some(existing) => existing.absorb(hook),
+            None => self.hooks.push(hook),
+        }
     }
 
     /// Merge a workflow file into this schema

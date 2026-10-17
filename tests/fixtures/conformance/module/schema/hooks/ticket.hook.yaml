@@ -1,7 +1,7 @@
 # Ticket: the state machine on `status` (a final state, `archived`, left only through the
 # `from: "*"` reopen edge; `resolve` carries a guard; verbs generated) and one rule per register
-# label: GUARD, SHADOW, VERB, UNENFORCED. The machine and the rules share this file: a model's
-# generated verbs come from the first hook file naming it.
+# label: GUARD, SHADOW, VERB, UNENFORCED. The machine and the rules share this file; the layout
+# with the machine in a file of its own is a variant probe (tests/conformance.rs).
 
 name: Ticket
 model: Ticket

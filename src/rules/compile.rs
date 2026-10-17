@@ -467,9 +467,7 @@ pub fn state_field_is_enum(model: &Model, field: &str) -> bool {
 /// `verbs: generated`.
 pub fn mounts_generated_verbs(schema: &crate::ast::ModuleSchema, model: &Model) -> bool {
     let has_routes = schema
-        .hooks
-        .iter()
-        .find(|h| h.model_ref == model.name || h.name == model.name)
+        .hook_for(&model.name)
         .and_then(|h| h.state_machine.as_ref())
         .is_some_and(|sm| state_field_is_enum(model, &sm.field));
     has_routes

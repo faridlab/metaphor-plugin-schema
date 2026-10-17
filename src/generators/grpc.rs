@@ -1005,11 +1005,7 @@ impl Generator for GrpcGenerator {
 
         for model in &schema.schema.models {
             // Find matching hook for this model
-            let hook = schema
-                .schema
-                .hooks
-                .iter()
-                .find(|h| h.model_ref == model.name || h.name == model.name);
+            let hook = schema.schema.hook_for(&model.name);
 
             // Generate proto service definition
             let proto_content = self.generate_proto_service(model)?;

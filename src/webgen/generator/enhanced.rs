@@ -192,7 +192,7 @@ impl EnhancedGenerator {
             }
         }
 
-        Ok(hooks)
+        Ok(HookSchema::merge_by_model(hooks))
     }
 
     /// Generate DDD domain layer (entity types, schemas, services, events, etc.)

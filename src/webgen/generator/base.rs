@@ -854,7 +854,7 @@ impl Generator {
 
         // Create domain generator and generate
         let domain_generator = DomainGenerator::new(self.config.clone());
-        let domain_result = domain_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+        let domain_result = domain_generator.generate_all(&all_entities, &all_enums, &HookSchema::merge_by_model(all_hooks))?;
 
         // Update result counts
         result.entities_found = domain_result.entity_count;
@@ -933,7 +933,7 @@ impl Generator {
 
         let contracts_generator = ContractsGenerator::new(self.config.clone());
         let contracts_result =
-            contracts_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+            contracts_generator.generate_all(&all_entities, &all_enums, &HookSchema::merge_by_model(all_hooks))?;
 
         result.entities_found = contracts_result.entity_count;
 
@@ -1009,7 +1009,7 @@ impl Generator {
 
         let presentation_generator = PresentationGenerator::new(self.config.clone());
         let presentation_result =
-            presentation_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+            presentation_generator.generate_all(&all_entities, &all_enums, &HookSchema::merge_by_model(all_hooks))?;
 
         if self.config.dry_run {
             result
@@ -1085,7 +1085,7 @@ impl Generator {
 
         let application_generator = ApplicationGenerator::new(self.config.clone());
         let application_result =
-            application_generator.generate_all(&all_entities, &all_enums, &all_hooks)?;
+            application_generator.generate_all(&all_entities, &all_enums, &HookSchema::merge_by_model(all_hooks))?;
 
         if self.config.dry_run {
             result

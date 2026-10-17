@@ -22,6 +22,10 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   as that mistake, with the rule, the key and the line, instead of being read by the list-format
   parser as a hook with no rules and no states and failing later with "State machine ... has no
   states".
+- A model's hook split across files (its machine in one, its rules in another) is joined into one
+  hook at load time, in the service and the webapp generators alike, so the generated transition
+  routes are emitted and mounted whichever file loads first; they were silently dropped when the
+  rules file came first. Generators look a model's hook up through `ModuleSchema::hook_for`.
 
 ## [0.35.0] - 2026-10-17
 

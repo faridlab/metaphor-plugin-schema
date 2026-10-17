@@ -1330,11 +1330,7 @@ impl Generator for HandlerGenerator {
 
         for model in &schema.schema.models {
             // Find matching hook for this model
-            let hook = schema
-                .schema
-                .hooks
-                .iter()
-                .find(|h| h.model_ref == model.name || h.name == model.name);
+            let hook = schema.schema.hook_for(&model.name);
 
             let content = self.generate_handler(model, hook, Some(&schema.schema))?;
 

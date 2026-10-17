@@ -471,4 +471,41 @@ mod tests {
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert!(schema.scheduled_jobs.is_empty());
     }
+
+    /// A model's machine in its own hook file and its rules in another are one hook: the
+    /// generated verbs are emitted and mounted whichever file loads first.
+    #[test]
+    fn a_machine_and_rules_in_separate_hook_files_join_into_one_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("ticket.model.yaml");
+        std::fs::write(
+            &models,
+            "enums:\n  - name: TicketStatus\n    variants: [open, done]\nmodels:\n  - name: Ticket\n    collection: tickets\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\", \"@default(uuid)\"]\n      title:\n        type: string\n      status:\n        type: TicketStatus\n        attributes: [\"@default(open)\"]\n",
+        )
+        .unwrap();
+        let rules = dir.path().join("ticket.hook.yaml");
+        std::fs::write(
+            &rules,
+            "name: Ticket\nmodel: Ticket\nrules:\n  title_set:\n    when: [create]\n    condition: \"title != ''\"\n    code: title_required\n    message: \"a title is required\"\n",
+        )
+        .unwrap();
+        let machine = dir.path().join("ticket_state.hook.yaml");
+        std::fs::write(
+            &machine,
+            "name: ticket_state\nmodel: Ticket\nstates:\n  field: status\n  verbs: generated\n  values:\n    open:\n      initial: true\n    done:\n      final: true\n  transitions:\n    finish:\n      from: open\n      to: done\n",
+        )
+        .unwrap();
+        for order in [vec![models.clone(), rules.clone(), machine.clone()], vec![models.clone(), machine.clone(), rules.clone()]] {
+            let (schema, errors) = build_module_schema("helpdesk", &order).unwrap();
+            assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+            assert_eq!(schema.hooks.len(), 1, "one hook for the model");
+            let hook = schema.hook_for("Ticket").expect("Ticket has a hook");
+            assert!(hook.state_machine.is_some(), "the machine is joined in");
+            assert_eq!(hook.rules.len(), 1, "the rules are joined in");
+            assert_eq!(hook.name, "ticket_state", "the hook keeps the machine file's name");
+            let model = schema.models.iter().find(|m| m.name == "Ticket").unwrap();
+            assert!(crate::rules::compile::mounts_generated_verbs(&schema, model), "the generated verbs are mounted");
+        }
+    }
+
 }

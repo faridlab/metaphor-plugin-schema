@@ -51,6 +51,21 @@ impl Hook {
             ..Default::default()
         }
     }
+
+    /// Join `other`, another file's hook for the same model, into this one: its machine (when
+    /// this hook has none), rules, permissions, triggers and computed fields. The joined hook
+    /// keeps the name of the file declaring the machine, since that name prefixes the
+    /// machine's generated types and is what a `state_machine:` lifecycle names.
+    pub fn absorb(&mut self, other: Hook) {
+        if self.state_machine.is_none() && other.state_machine.is_some() {
+            self.state_machine = other.state_machine;
+            self.name = other.name;
+        }
+        self.rules.extend(other.rules);
+        self.permissions.extend(other.permissions);
+        self.triggers.extend(other.triggers);
+        self.computed_fields.extend(other.computed_fields);
+    }
 }
 
 /// State machine definition

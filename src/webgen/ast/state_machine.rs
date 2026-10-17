@@ -15,6 +15,39 @@ pub struct HookSchema {
     pub computed_fields: Vec<ComputedField>,
 }
 
+impl HookSchema {
+    /// Join the hooks one model declares across files — its machine in one, its rules in
+    /// another — into the one hook a per-model lookup finds, as the service generator does
+    /// (`ModuleSchema::merge_hook`). The joined hook keeps the name of the file declaring the
+    /// machine. Two machines on one model (one per state field) stay two hooks.
+    pub fn merge_by_model(hooks: Vec<HookSchema>) -> Vec<HookSchema> {
+        let mut out: Vec<HookSchema> = Vec::new();
+        for hook in hooks {
+            let joinable = out.iter_mut().find(|h| {
+                !hook.model.is_empty()
+                    && h.model.eq_ignore_ascii_case(&hook.model)
+                    && !(h.state_machine.is_some() && hook.state_machine.is_some())
+            });
+            match joinable {
+                Some(existing) => {
+                    if existing.state_machine.is_none() && hook.state_machine.is_some() {
+                        existing.state_machine = hook.state_machine;
+                        existing.name = hook.name;
+                    }
+                    existing.rules.extend(hook.rules);
+                    for (role, set) in hook.permissions {
+                        existing.permissions.entry(role).or_insert(set);
+                    }
+                    existing.triggers.extend(hook.triggers);
+                    existing.computed_fields.extend(hook.computed_fields);
+                }
+                None => out.push(hook),
+            }
+        }
+        out
+    }
+}
+
 /// Permission set for a role
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionSet {
