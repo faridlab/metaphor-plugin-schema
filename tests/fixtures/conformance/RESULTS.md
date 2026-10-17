@@ -5,7 +5,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.36.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 1s; whole run: 99s
+- Generation: 2s; whole run: 44s
 
 ## Summary
 
@@ -19,8 +19,8 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | F. Extension | 12 | 0 | 1 |
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 23 | 0 | 0 |
-| I. Permissions | 89 | 0 | 0 |
-| **Total** | **335** | **0** | **3** |
+| I. Permissions | 112 | 0 | 0 |
+| **Total** | **358** | **0** | **3** |
 
 ## Matrix
 
@@ -344,6 +344,29 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | I | Fail closed | no resolver and no permission on the AuthContext: a transition is 403 naming ticket:start | PASS |
 | I | Fail closed | no resolver and no permission on the AuthContext: a custom verb is 403 naming ticket:escalate | PASS |
 | I | Fail closed | no resolver and no permission on the AuthContext: the extension's generic list is 403 naming project:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: get is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: count is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: aggregate is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: history is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: trash is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: trash count is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: deleted get is 403 naming ticket:read | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: create is 403 naming ticket:create | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk create is 403 naming ticket:create | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: upsert is 403 naming ticket:create | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: put is 403 naming ticket:update | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: patch is 403 naming ticket:update | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk put is 403 naming ticket:update | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk patch is 403 naming ticket:update | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk preview is 403 naming ticket:update | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: delete is 403 naming ticket:delete | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk delete is 403 naming ticket:delete | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: restore is 403 naming ticket:restore | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk restore is 403 naming ticket:restore | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: restore all is 403 naming ticket:restore | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: purge is 403 naming ticket:purge | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: bulk purge is 403 naming ticket:purge | PASS |
+| I | Fail closed | no resolver and no permission on the AuthContext: empty trash is 403 naming ticket:purge | PASS |
 | I | Fail closed | no resolver: the permissions on the AuthContext are what counts (ticket:read reads, and only reads) | PASS |
 | I | Fail closed | no AuthContext on the request at all is 401 authentication_required, never allowed | PASS |
 | I | Fail closed | a transition with no AuthContext is 401 too | PASS |

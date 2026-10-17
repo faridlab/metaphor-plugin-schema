@@ -1708,6 +1708,23 @@ async fn area_i(c: &Ctx) {
         let d = app.send(method, &path, Some(&c.clerk), payload.as_ref().map(|b| b.to_string()), &[]).await;
         r.check("I", "Fail closed", &format!("no resolver and no permission on the AuthContext: {what} is 403 naming {perm}"), denied(&d, perm), &d.request, &format!("403, params.permission {perm}"), &d.got(), P);
     }
+    // Every other generic verb, in the default stack too: no resolver, nothing held, refused.
+    for (what, path) in [
+        ("get", format!("/tickets/{tid}")),
+        ("count", "/tickets/count".to_string()),
+        ("aggregate", "/tickets/aggregate?group_by=status&agg=count".to_string()),
+        ("history", format!("/tickets/{tid}/history")),
+        ("trash", "/tickets/trash".to_string()),
+        ("trash count", "/tickets/trash/count".to_string()),
+        ("deleted get", format!("/tickets/{gone}/deleted")),
+    ] {
+        let d = app.get(&path, &c.clerk).await;
+        r.check("I", "Fail closed", &format!("no resolver and no permission on the AuthContext: {what} is 403 naming ticket:read"), denied(&d, "ticket:read"), &d.request, "403, params.permission ticket:read", &d.got(), P);
+    }
+    for (what, method, path, payload, perm) in &writes {
+        let d = app.send(method, path, Some(&c.clerk), payload.as_ref().map(|b| b.to_string()), &[]).await;
+        r.check("I", "Fail closed", &format!("no resolver and no permission on the AuthContext: {what} is 403 naming {perm}"), denied(&d, perm), &d.request, &format!("403, params.permission {perm}"), &d.got(), P);
+    }
     let rd = app.get("/tickets", &reader).await;
     let rw = app.post("/tickets", &reader, body.clone()).await;
     r.check("I", "Fail closed", "no resolver: the permissions on the AuthContext are what counts (ticket:read reads, and only reads)", rd.status == 200 && denied(&rw, "ticket:create"), &rw.request, "200 on read, 403 ticket:create on write", &format!("{} / {}", rd.got(), rw.got()), P);
