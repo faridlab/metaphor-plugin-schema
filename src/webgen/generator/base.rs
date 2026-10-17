@@ -932,8 +932,12 @@ impl Generator {
         }
 
         let contracts_generator = ContractsGenerator::new(self.config.clone());
-        let contracts_result =
+        let mut contracts_result =
             contracts_generator.generate_all(&all_entities, &all_enums, &HookSchema::merge_by_model(all_hooks))?;
+        // The permission names, read from the module schema the server's routes are generated from.
+        if let Some(module_schema) = crate::commands::schema::load_module_schema(&self.config.module, &schema_dir) {
+            contracts_generator.generate_permissions(&module_schema, &mut contracts_result);
+        }
 
         result.entities_found = contracts_result.entity_count;
 
