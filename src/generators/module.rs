@@ -205,20 +205,9 @@ impl ModuleGenerator {
         }
         writeln!(output).unwrap();
 
-        // Re-exports - Middleware (Auth & RBAC)
-        // Only export if authorization config is present in the schema
-        if schema.schema.authorization.is_some() {
-            writeln!(output, "// Re-exports - Middleware (Auth & RBAC)").unwrap();
-            writeln!(output, "pub use application::middleware::{{").unwrap();
-            writeln!(output, "    AuthContext, AuthMiddleware, AuthExtractor, AuthError, OptionalAuth, CurrentUser,").unwrap();
-            writeln!(
-                output,
-                "    RbacMiddleware, PermissionGuard, RequirePermission, rbac_layer,"
-            )
-            .unwrap();
-            writeln!(output, "}};").unwrap();
-            writeln!(output).unwrap();
-        }
+        // No middleware re-exports: the module-level `authorization:` block declares the permission
+        // vocabulary and system roles (see `crate::rbac`); the identity types a service needs
+        // (`AuthContext`, `GrantSource`, `resolve_grants`) live in `backbone-auth`, not here.
 
         // Imports for builder
         writeln!(output, "use std::sync::Arc;").unwrap();

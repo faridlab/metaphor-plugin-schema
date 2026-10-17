@@ -63,7 +63,7 @@ impl HandlerGenerator {
         self.write_error_types(&mut output, model, hook)?;
 
         // Generate route configuration using BackboneCrudHandler
-        self.write_route_config(&mut output, model)?;
+        self.write_route_config(&mut output, model, module)?;
         self.write_history_route(&mut output, model);
 
         // Generate custom action handlers if hook has state machine
@@ -584,7 +584,13 @@ pub async fn {snake}_history(
 /// module's route composer (the pool there is the tenant-resolved one).
 pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
     axum::Router::new()
-        .route("/{plural}/:id/history", axum::routing::get({snake}_history))
+        .route(
+            "/{plural}/:id/history",
+            backbone_core::permission::guarded_needs(
+                axum::routing::get({snake}_history),
+                {snake}_permissions().needs(backbone_core::permission::Gate::Read),
+            ),
+        )
         .with_state(pool)
 }}
 "#,
@@ -600,7 +606,12 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         }
         writeln!(output).unwrap();
     }
-    fn write_route_config(&self, output: &mut String, model: &Model) -> Result<(), GenerateError> {
+    fn write_route_config(
+        &self,
+        output: &mut String,
+        model: &Model,
+        module: Option<&crate::ast::ModuleSchema>,
+    ) -> Result<(), GenerateError> {
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
 
@@ -615,6 +626,36 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             "// ============================================================================="
         )
         .unwrap();
+        writeln!(output).unwrap();
+
+        // The permissions of this entity's generic routes: `<entity>:<action>` unless the schema's
+        // `requires:` says otherwise. Every generic route below refuses a caller without its
+        // permission (401 with no AuthContext, 403 `permission_required` with one that lacks it).
+        writeln!(output, "/// The permissions this entity's generic routes require: `{}:<action>` for `read`, `create`,", model_snake).unwrap();
+        writeln!(output, "/// `update`, `delete`, `restore` and `purge`, with any rename the schema's `requires:` declares.").unwrap();
+        writeln!(output, "pub fn {}_permissions() -> backbone_core::http::CrudPermissions {{", model_snake).unwrap();
+        writeln!(output, "    backbone_core::http::CrudPermissions::new({:?})", model_snake).unwrap();
+        if let Some(module) = module {
+            writeln!(output, "        .in_module({:?})", crate::utils::to_snake_case(&module.name)).unwrap();
+        }
+        if let Some(module) = module {
+            let rbac = crate::rbac::Rbac::new(module);
+            for gate in crate::rbac::Gate::ALL {
+                let (permission, renamed) = rbac.gate_permission(model, gate);
+                if renamed {
+                    let variant = match gate {
+                        crate::rbac::Gate::Read => "Read",
+                        crate::rbac::Gate::Create => "Create",
+                        crate::rbac::Gate::Update => "Update",
+                        crate::rbac::Gate::Delete => "Delete",
+                        crate::rbac::Gate::Restore => "Restore",
+                        crate::rbac::Gate::Purge => "Purge",
+                    };
+                    writeln!(output, "        .requiring(backbone_core::permission::Gate::{variant}, {permission:?})").unwrap();
+                }
+            }
+        }
+        writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(
@@ -721,10 +762,11 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             model_snake, model.name
         )
         .unwrap();
-        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::routes(",
+        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::routes_guarded(",
             model.name, model.name, model.name, model.name, model.name).unwrap();
         writeln!(output, "        service,").unwrap();
         writeln!(output, "        \"/{}\",", model_plural).unwrap();
+        writeln!(output, "        {}_permissions(),", model_snake).unwrap();
         writeln!(output, "    )").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -739,7 +781,7 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         writeln!(output, "///").unwrap();
         writeln!(
             output,
-            "/// Safe for public, unauthenticated exposure (e.g., reference data)."
+            "/// Each route requires the entity's `read` permission, so it needs an authenticated caller."
         )
         .unwrap();
         writeln!(
@@ -755,10 +797,11 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             model_snake, model.name
         )
         .unwrap();
-        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::read_routes(",
+        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::read_routes_guarded(",
             model.name, model.name, model.name, model.name, model.name).unwrap();
         writeln!(output, "        service,").unwrap();
         writeln!(output, "        \"/{}\",", model_plural).unwrap();
+        writeln!(output, "        {}_permissions(),", model_snake).unwrap();
         writeln!(output, "    )").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -814,10 +857,11 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             model_snake, model.name
         )
         .unwrap();
-        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::write_routes(",
+        writeln!(output, "    BackboneCrudHandler::<{}Service, {}, Create{}Dto, Update{}Dto, {}ResponseDto>::write_routes_guarded(",
             model.name, model.name, model.name, model.name, model.name).unwrap();
         writeln!(output, "        service,").unwrap();
         writeln!(output, "        \"/{}\",", model_plural).unwrap();
+        writeln!(output, "        {}_permissions(),", model_snake).unwrap();
         writeln!(output, "    )").unwrap();
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -997,8 +1041,48 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             // Optional so a missing AuthContext is refused here (401), never skipped and never a
             // bare extractor failure.
             writeln!(output, "    auth: Option<axum::Extension<AuthContext>>,").unwrap();
+            // A gate that admitted the request on a narrower rule (a self-service lane) marks it.
+            writeln!(output, "    waiver: Option<axum::Extension<backbone_auth::PermissionWaiver>>,").unwrap();
             writeln!(output, ") -> impl axum::response::IntoResponse {{").unwrap();
             writeln!(output, "    use axum::{{http::StatusCode, Json}};").unwrap();
+            writeln!(output).unwrap();
+
+            // The caller's permission is checked first, before the record is read, so a caller
+            // without it learns nothing about whether the id exists. It is checked whatever the
+            // module's cargo features: a transition without a known caller is refused.
+            let (permission, alternates) = match module {
+                Some(m) => {
+                    let rbac = crate::rbac::Rbac::new(m);
+                    let (permission, renamed) = rbac.verb_permission(model, &transition.name, transition.requires.as_deref());
+                    // The module-wide spelling of an older grant (`<module>:<verb>`) still counts.
+                    let alternates = if renamed { Vec::new() } else { vec![format!("{}:{}", rbac.module(), transition_snake)] };
+                    (permission, alternates)
+                }
+                None => (format!("{}:{}", model_snake, transition_snake), Vec::new()),
+            };
+            let alternates_literal = alternates.iter().map(|a| format!("{a:?}")).collect::<Vec<_>>().join(", ");
+            writeln!(output, "    // Check permission").unwrap();
+            writeln!(output, "    let Some(axum::Extension(auth)) = auth else {{").unwrap();
+            writeln!(output, "        return backbone_core::http::unauthenticated_refusal::<{}>();", body_type).unwrap();
+            writeln!(output, "    }};").unwrap();
+            writeln!(output, "    if waiver.is_none() {{").unwrap();
+            // The verb's own permission or a listed role grants it; `{model}:update` does not.
+            if !transition.allowed_roles.is_empty() {
+                writeln!(
+                    output,
+                    "        let allowed_roles = {}Transition::{}.allowed_roles();",
+                    sm_name,
+                    to_pascal_case(&transition.name)
+                )
+                .unwrap();
+                writeln!(output, "        let has_role = auth.roles.iter().any(|r| allowed_roles.contains(&r.as_str()));").unwrap();
+                writeln!(output, "        if let (false, Err(refused)) = (has_role, auth.require_with({:?}, &[{}])) {{", permission, alternates_literal).unwrap();
+            } else {
+                writeln!(output, "        if let Err(refused) = auth.require_with({:?}, &[{}]) {{", permission, alternates_literal).unwrap();
+            }
+            writeln!(output, "            return backbone_core::http::permission_refusal::<{}>(&refused);", body_type).unwrap();
+            writeln!(output, "        }}").unwrap();
+            writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
             writeln!(output, "    // Get current entity").unwrap();
@@ -1011,54 +1095,6 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
             writeln!(output, "        Ok(None) => return (StatusCode::NOT_FOUND, Json(ApiResponse::<{}>::not_found(\"{}\", &id))),", body_type, model.name).unwrap();
             writeln!(output, "        Err(e) => return backbone_core::http::service_error_response::<{}>(&e),", body_type).unwrap();
             writeln!(output, "    }};").unwrap();
-            writeln!(output).unwrap();
-
-            // The caller's permission is checked whatever the module's cargo features: a
-            // transition without a known caller is refused.
-            writeln!(output, "    // Check permission").unwrap();
-            writeln!(output, "    let Some(axum::Extension(auth)) = auth else {{").unwrap();
-            writeln!(output, "        return (StatusCode::UNAUTHORIZED, Json(ApiResponse::<{}>::error(\"A transition needs an authenticated caller\")));", body_type).unwrap();
-            writeln!(output, "    }};").unwrap();
-            writeln!(output, "    {{").unwrap();
-            // Permission-based check: use transition's allowed_roles() method
-            writeln!(
-                output,
-                "        let allowed_roles = {}Transition::{}.allowed_roles();",
-                sm_name,
-                to_pascal_case(&transition.name)
-            )
-            .unwrap();
-            // `AuthContext` exposes raw `permissions: Vec<String>` — no
-            // `has_permission` method exists on the framework type.
-            // `resource:action` permissions with `*` wildcards: a `*` segment matches any one, and
-            // a trailing `*` covers the rest (`*:*` and `{model}:*` grant every transition).
-            writeln!(output, "        let granted = |required: &str| auth.permissions.iter().any(|p| {{").unwrap();
-            writeln!(output, "            let (have, want): (Vec<&str>, Vec<&str>) = (p.split(':').collect(), required.split(':').collect());").unwrap();
-            writeln!(output, "            have.iter().enumerate().all(|(i, h)| *h == \"*\" || want.get(i) == Some(h))").unwrap();
-            writeln!(output, "                && (have.len() == want.len() || (have.len() < want.len() && have.last() == Some(&\"*\")))").unwrap();
-            writeln!(output, "        }});").unwrap();
-            writeln!(output, "        let has_specific_perm = granted(\"{}:transition:{}\");", model_snake, transition_snake).unwrap();
-            // The verb's own permission or a listed role grants it; `{model}:update` does not.
-            if !transition.allowed_roles.is_empty() {
-                writeln!(output, "        let has_role = auth.roles.iter().any(|r| allowed_roles.contains(&r.as_str()));").unwrap();
-                writeln!(output, "        if !has_specific_perm && !has_role {{").unwrap();
-            } else {
-                writeln!(output, "        let _ = &allowed_roles;").unwrap();
-                writeln!(output, "        if !has_specific_perm {{").unwrap();
-            }
-            writeln!(
-                output,
-                "            return (StatusCode::FORBIDDEN, Json(ApiResponse::<{}>::error(\"{} needs {}:transition:{}{}\")));",
-                body_type,
-                transition.name,
-                model_snake,
-                transition_snake,
-                // Plain names: the message is a string literal in the generated code.
-                if transition.allowed_roles.is_empty() { String::new() } else { format!(" or one of the roles {}", transition.allowed_roles.join(", ")) }
-            )
-            .unwrap();
-            writeln!(output, "        }}").unwrap();
-            writeln!(output, "    }}").unwrap();
             writeln!(output).unwrap();
 
             let status_field = self.find_status_field(model, &sm.field).unwrap_or(&sm.field);
@@ -1419,6 +1455,7 @@ impl Generator for HandlerGenerator {
                 writeln!(mod_content, "    create_{}_routes,", model_snake).unwrap();
                 writeln!(mod_content, "    create_{}_read_routes,", model_snake).unwrap();
                 writeln!(mod_content, "    create_{}_write_routes,", model_snake).unwrap();
+                writeln!(mod_content, "    {}_permissions,", model_snake).unwrap();
                 // The @audited read surface rides the same export block.
                 if audited.contains(model.as_str()) {
                     writeln!(mod_content, "    create_{}_history_route,", model_snake).unwrap();
@@ -1444,14 +1481,14 @@ impl Generator for HandlerGenerator {
                 if model.has_attribute("audited") {
                     writeln!(
                         mod_content,
-                        "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes, create_{}_history_route}};",
-                        model_snake, model_snake, model_snake, model_snake, model_snake
+                        "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes, {}_permissions, create_{}_history_route}};",
+                        model_snake, model_snake, model_snake, model_snake, model_snake, model_snake
                     ).unwrap();
                 } else {
                     writeln!(
                         mod_content,
-                        "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes}};",
-                        model_snake, model_snake, model_snake, model_snake
+                        "pub use {}_handler::{{create_{}_routes, create_{}_read_routes, create_{}_write_routes, {}_permissions}};",
+                        model_snake, model_snake, model_snake, model_snake, model_snake
                     ).unwrap();
                 }
             }
@@ -1599,7 +1636,7 @@ mod tests {
         // The caller's permission is checked whatever the module's features, and an unknown
         // caller is refused rather than let through.
         assert!(!out.contains("cfg(feature = \"auth\")"), "no permission check behind a feature: {out}");
-        assert!(out.contains("auth: Option<axum::Extension<AuthContext>>,") && out.contains("StatusCode::UNAUTHORIZED"), "{out}");
+        assert!(out.contains("auth: Option<axum::Extension<AuthContext>>,") && out.contains("backbone_core::http::unauthenticated_refusal::<TicketResponseDto>()"), "{out}");
 
         // A verb with roles names them in the shadow log as plain words: quoted names would end
         // the generated string literal early.
@@ -1609,11 +1646,17 @@ mod tests {
         };
         let mut roles_out = String::new();
         HandlerGenerator::new().write_transition_handlers(&mut roles_out, &model, "TicketState", &with_roles, None).unwrap();
-        assert!(roles_out.contains("or one of the roles admin, owner"), "{roles_out}");
-        // Permissions match with wildcards, as serpa's `*:*` superuser grant needs.
-        assert!(out.contains("let has_specific_perm = granted(\"ticket:transition:put_on_hold\");"), "{out}");
-        assert!(out.contains("have.last() == Some(&\"*\")"), "{out}");
-        assert!(!roles_out.contains("[\"admin\""), "{roles_out}");
+        assert!(roles_out.contains("let has_role = auth.roles.iter().any(|r| allowed_roles.contains(&r.as_str()));"), "{roles_out}");
+        assert!(roles_out.contains("auth.require_with(\"ticket:lock\", &[])"), "{roles_out}");
+        // The permission is `<model>:<verb>`, matched by the framework (wildcards included), not a
+        // three-segment name and not a matcher of the generated code's own.
+        assert!(out.contains("auth.require_with(\"ticket:put_on_hold\", &[])"), "{out}");
+        assert!(!out.contains(":transition:") && !out.contains("granted("), "{out}");
+        // The check runs before the record is read, so a refused caller learns nothing about the id,
+        // and a gate that admitted the request on a narrower rule can waive it.
+        assert!(out.find("auth.require_with").unwrap() < out.find("service.get_by_id").unwrap(), "{out}");
+        assert!(out.contains("waiver: Option<axum::Extension<backbone_auth::PermissionWaiver>>,") && out.contains("if waiver.is_none() {"), "{out}");
+        assert!(out.contains("backbone_core::http::permission_refusal::<TicketResponseDto>(&refused)"), "{out}");
 
         // A state field that is not an enum (a bool `resolved`) gets no routes, never another column.
         let flag = Model {
@@ -1868,6 +1911,35 @@ mod tests {
         assert!(handler.contains("pub fn create_user_write_routes"));
         assert!(handler.contains("BackboneCrudHandler::<UserService, User, CreateUserDto, UpdateUserDto, UserResponseDto>::read_routes"));
         assert!(handler.contains("BackboneCrudHandler::<UserService, User, CreateUserDto, UpdateUserDto, UserResponseDto>::write_routes"));
+    }
+
+    #[test]
+    fn every_generic_route_is_guarded_by_the_entitys_permissions() {
+        let mut schema = create_test_schema();
+        schema.schema.models[0].requires.insert("read".into(), "support:view".into());
+        let mut auth = crate::ast::AuthorizationConfig::new();
+        auth.permissions.insert("support".into(), vec!["view".into()]);
+        schema.schema.authorization = Some(auth);
+        let output = HandlerGenerator::new().generate(&schema).unwrap();
+        let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
+
+        // No generic route is built without its permissions.
+        for call in ["routes_guarded(", "read_routes_guarded(", "write_routes_guarded("] {
+            assert!(handler.contains(&format!("UserResponseDto>::{call}")), "{call}: {handler}");
+        }
+        for unguarded in ["UserResponseDto>::routes(", "UserResponseDto>::read_routes(", "UserResponseDto>::write_routes("] {
+            assert!(!handler.contains(unguarded), "{unguarded}");
+        }
+        assert_eq!(handler.matches("        user_permissions(),").count(), 3, "{handler}");
+        // The permissions are `<entity>:<action>`, the module's name for the legacy spelling, and a
+        // declared rename.
+        assert!(handler.contains("pub fn user_permissions() -> backbone_core::http::CrudPermissions {"), "{handler}");
+        assert!(handler.contains("CrudPermissions::new(\"user\")") && handler.contains(".in_module(\"test\")"), "{handler}");
+        assert!(handler.contains(".requiring(backbone_core::permission::Gate::Read, \"support:view\")"), "{handler}");
+        assert!(!handler.contains("Gate::Create,"), "only a renamed action is listed: {handler}");
+        // The module re-exports it for hand code that mounts the routes itself.
+        let module = output.files.get(&PathBuf::from("src/presentation/http/mod.rs")).unwrap();
+        assert!(module.contains("user_permissions"), "{module}");
     }
 
     // Note: domain event enums (UserEvent, DomainEvent impl, feature gating) are emitted
