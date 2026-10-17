@@ -173,6 +173,9 @@ pub struct Transition {
     pub to: String,
     /// Roles allowed to perform this transition
     pub allowed_roles: Vec<String>,
+    /// `requires:` — the permission the verb needs when it is not `<entity>:<verb>`, as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
     /// Guard condition
     pub guard: Option<Expression>,
     /// Source location

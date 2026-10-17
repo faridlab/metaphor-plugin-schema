@@ -72,6 +72,7 @@ pub mod kotlin;
 pub mod merge;
 pub mod migration;
 pub mod parser;
+pub mod rbac;
 pub mod resolver;
 pub mod rules;
 pub mod utils;

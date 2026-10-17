@@ -84,6 +84,10 @@ pub(super) fn build_module_schema(
                     module_schema_default = index_schema.schema.clone();
                     module_schema.company_fence = index_schema.company_fence;
                     module_schema.org_fence = index_schema.org_fence;
+                    // The permission vocabulary and system roles live in the module index.
+                    if let Some(auth) = &index_schema.authorization {
+                        module_schema.authorization = Some(auth.clone().into_authorization());
+                    }
                     resolved_shared_types = resolve_shared_types(&index_schema.shared_types);
                 }
                 Ok(ModelParseResult::Model(_)) => {

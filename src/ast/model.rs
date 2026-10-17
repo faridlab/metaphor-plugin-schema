@@ -43,6 +43,11 @@ pub struct Model {
     /// model YAML (or the `@read_only` model attribute). Defaults to false.
     #[serde(default)]
     pub read_only: bool,
+    /// `requires:` — the permission a generic action of this entity needs when it is not the
+    /// default `<entity>:<action>`, keyed by `read`, `create`, `update`, `delete`, `restore` or
+    /// `purge`. Values are as written in the schema (either spelling); [`crate::rbac`] reads them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub requires: std::collections::BTreeMap<String, String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,

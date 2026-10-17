@@ -151,6 +151,7 @@ impl YamlModel {
         let mut model = Model::new(&self.name);
         model.collection = self.collection.clone();
         model.schema = self.schema.clone();
+        model.requires = self.requires.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
         // Add soft_delete attribute if enabled in YAML schema
         if self.soft_delete == Some(true) {
@@ -726,6 +727,7 @@ impl YamlTransition {
             from: self.from.into_vec(),
             to: self.to,
             allowed_roles: self.roles,
+            requires: self.requires,
             guard: self.condition.map(Expression::Raw),
             ..Default::default()
         }

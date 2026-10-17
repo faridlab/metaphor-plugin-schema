@@ -36,7 +36,7 @@ const MACHINE_KEYS: &[&str] = &[
 ];
 const TRANSITION_KEYS: &[&str] = &[
     "from", "to", "on", "name", "event", "guard", "condition", "roles", "message", "id", "write", "note",
-    "notes", "description", "actions", "on_failure", "enforced_by",
+    "notes", "description", "actions", "on_failure", "enforced_by", "requires",
 ];
 const STATE_KEYS: &[&str] = &["name", "initial", "final", "on_enter", "on_exit", "description", "note", "notes"];
 
@@ -355,6 +355,7 @@ fn read_machine(
             to,
             guard,
             roles: get(t, "roles").map(strings).unwrap_or_default(),
+            requires: str_at(t, "requires"),
             message: str_at(t, "message"),
             guard_check: super::expr::ExpressionCheck::NotAnExpression,
             enforced_by: str_at(t, "enforced_by"),

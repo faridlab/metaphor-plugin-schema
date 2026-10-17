@@ -73,6 +73,7 @@ fn test_entity_template_emits_no_serial_name_annotations() {
         collection: Some("test_entities".to_string()),
         schema: None,
         read_only: false,
+        requires: Default::default(),
         fields: vec![
             Field {
                 name: "id".to_string(),
@@ -147,6 +148,7 @@ fn test_entity_template_no_annotation_for_matching_names() {
         collection: Some("simple_entities".to_string()),
         schema: None,
         read_only: false,
+        requires: Default::default(),
         fields: vec![
             Field {
                 name: "id".to_string(),

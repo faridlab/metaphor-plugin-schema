@@ -129,6 +129,10 @@ pub struct YamlModel {
     /// be created/updated/deleted through generic CRUD.
     #[serde(default)]
     pub read_only: Option<bool>,
+    /// The permission each generic action needs when it is not `<entity>:<action>`, keyed by
+    /// `read`, `create`, `update`, `delete`, `restore` or `purge`.
+    #[serde(default)]
+    pub requires: IndexMap<String, String>,
     /// Enroll this entity in data-change audit capture (ADR-0025): the
     /// generator emits one migration per audited table attaching the
     /// row-level trigger that calls the composed backbone-auditlog module's
@@ -769,6 +773,11 @@ pub struct YamlModelIndexSchema {
     /// entitlement-union policy and the write-path kind guard.
     #[serde(default)]
     pub org_fence: Option<OrgFence>,
+    /// Module-level authorization: the permission vocabulary beyond what the routes imply and the
+    /// system roles the seed migration writes. Absent = every permission is the default
+    /// `<entity>:<action>`.
+    #[serde(default)]
+    pub authorization: Option<YamlAuthorization>,
 }
 
 /// A shared type definition that can be:
@@ -1714,6 +1723,9 @@ pub struct YamlTransition {
     /// Allowed roles
     #[serde(default)]
     pub roles: Vec<String>,
+    /// The permission the verb needs when it is not `<entity>:<verb>`
+    #[serde(default)]
+    pub requires: Option<String>,
     /// Guard condition
     #[serde(default)]
     pub condition: Option<String>,

@@ -175,6 +175,9 @@ pub struct DeclaredTransition {
     /// `guards:`, which [`DeclaredMachine::guard_expression`] resolves.
     pub guard: Option<String>,
     pub roles: Vec<String>,
+    /// `requires:` — the permission the verb needs when it is not `<entity>:<verb>`, as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
     pub message: Option<String>,
     /// Whether its guard parses and resolves; set by [`RuleRegister::check`].
     pub guard_check: expr::ExpressionCheck,

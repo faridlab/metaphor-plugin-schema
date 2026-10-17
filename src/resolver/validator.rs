@@ -49,6 +49,9 @@ impl<'a> SchemaValidator<'a> {
         // A declared event the write hooks stage must name real fields, verbs and states
         errors.extend(event_problems(self.schema).into_iter().map(ResolveError::validation));
 
+        // The permission declarations: roles, the vocabulary and every `requires:`
+        errors.extend(crate::rbac::Rbac::new(self.schema).problems().into_iter().map(|p| ResolveError::validation(p.message)));
+
         // Hook triggers are not generated, so a module may not declare them
         if !legacy_triggers(self.schema) {
             errors.extend(trigger_problems(self.schema).into_iter().map(ResolveError::validation));

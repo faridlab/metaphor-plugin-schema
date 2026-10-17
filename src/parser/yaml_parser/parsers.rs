@@ -353,6 +353,7 @@ fn parse_list_format_transitions(
                 from,
                 to,
                 roles,
+                requires: tm.get(&Value::String("requires".into())).and_then(|v| v.as_str()).map(String::from),
                 condition: None,
                 message: None,
             },
