@@ -38,7 +38,7 @@ impl DtoGenerator {
     }
 
     /// Generate DTO file for a model
-    fn generate_dto_file(&self, model: &Model, born: &std::collections::HashMap<String, String>) -> Result<String, GenerateError> {
+    fn generate_dto_file(&self, model: &Model, born: &std::collections::HashMap<String, String>, enums: &[crate::ast::EnumDef]) -> Result<String, GenerateError> {
         let mut output = String::new();
 
         // File header
@@ -65,7 +65,7 @@ impl DtoGenerator {
         self.write_imports(&mut output, model)?;
 
         // Generate CreateDto
-        self.write_create_dto(&mut output, model, born)?;
+        self.write_create_dto(&mut output, model, born, enums)?;
 
         // Generate UpdateDto
         self.write_update_dto(&mut output, model)?;
@@ -176,7 +176,7 @@ impl DtoGenerator {
         }
     }
 
-    fn write_create_dto(&self, output: &mut String, model: &Model, born: &std::collections::HashMap<String, String>) -> Result<(), GenerateError> {
+    fn write_create_dto(&self, output: &mut String, model: &Model, born: &std::collections::HashMap<String, String>, enums: &[crate::ast::EnumDef]) -> Result<(), GenerateError> {
         writeln!(
             output,
             "// ============================================================================="
@@ -209,6 +209,8 @@ impl DtoGenerator {
         writeln!(output, "#[serde(rename_all = \"camelCase\")]").unwrap();
         writeln!(output, "pub struct Create{}Dto {{", model.name).unwrap();
 
+        // A field a create may leave out starts at its literal default, as its column does.
+        let mut default_fns = Vec::new();
         for field in &model.fields {
             // Skip auto-generated fields and fields excluded from write DTOs, and the fields only
             // an entity's own operations set: a create cannot choose them.
@@ -220,7 +222,16 @@ impl DtoGenerator {
             self.write_field_schema_attrs(output, field)?;
 
             let rust_type = self.field_to_dto_type(field);
-            let serde_attrs = self.get_serde_field_attrs(field);
+            let default = create_default(enums, field).map(|value| {
+                if matches!(value.as_str(), "0" | "0.0" | "false" | "\"\".to_string()" | "Decimal::from(0_i64)") {
+                    "default".to_string()
+                } else {
+                    let name = format!("default_create_{}_{}", to_snake_case(&model.name), field.name);
+                    default_fns.push(format!("fn {name}() -> {rust_type} {{\n    {value}\n}}\n"));
+                    format!("default = \"{name}\"")
+                }
+            });
+            let serde_attrs = self.get_serde_field_attrs(field, default);
 
             if !serde_attrs.is_empty() {
                 writeln!(output, "    #[serde({})]", serde_attrs).unwrap();
@@ -231,6 +242,9 @@ impl DtoGenerator {
 
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
+        for f in default_fns {
+            writeln!(output, "{f}").unwrap();
+        }
 
         Ok(())
     }
@@ -284,7 +298,7 @@ impl DtoGenerator {
             self.write_field_schema_attrs(output, field)?;
 
             let rust_type = self.field_to_dto_type(field);
-            let serde_attrs = self.get_serde_field_attrs(field);
+            let serde_attrs = self.get_serde_field_attrs(field, None);
 
             if !serde_attrs.is_empty() {
                 writeln!(output, "    #[serde({})]", serde_attrs).unwrap();
@@ -344,16 +358,15 @@ impl DtoGenerator {
             // For patch, all fields are optional
             self.write_field_schema_attrs(output, field)?;
 
-            let inner_type = self.field_to_dto_type(field);
-            // Wrap in Option if not already optional
-            let rust_type = match &field.type_ref {
-                TypeRef::Optional(_) => inner_type,
-                _ => format!("Option<{}>", inner_type),
-            };
-
+            // Every field is optional. A nullable one is `Option<Option<T>>`: absent leaves the
+            // column alone, `null` clears it.
+            let rust_type = format!("Option<{}>", self.field_to_dto_type(field));
             let field_name = escape_rust_keyword(&field.name);
+            let mut patch_attrs = match &field.type_ref {
+                TypeRef::Optional(_) => vec!["default".to_string(), "deserialize_with = \"crate::presentation::dto::double_option\"".to_string()],
+                _ => vec!["skip_serializing_if = \"Option::is_none\"".to_string()],
+            };
             // Accept snake_case input alongside the camelCase wire name.
-            let mut patch_attrs = vec!["skip_serializing_if = \"Option::is_none\"".to_string()];
             if field.name.contains('_') {
                 patch_attrs.push(format!("alias = \"{}\"", field.name));
             }
@@ -802,19 +815,14 @@ impl DtoGenerator {
         output: &mut String,
         model: &Model,
     ) -> Result<(), GenerateError> {
-        writeln!(
-            output,
-            "// ============================================================================="
-        )
-        .unwrap();
-        writeln!(output, "// Custom DTOs").unwrap();
-        writeln!(
-            output,
-            "// ============================================================================="
-        )
-        .unwrap();
-        writeln!(output).unwrap();
+        // The banner sits inside the zone, so a layout module, whose zones are stripped, keeps
+        // none of it.
         writeln!(output, "// <<< CUSTOM DTOs").unwrap();
+        writeln!(
+            output,
+            "// ============================================================================="
+        )
+        .unwrap();
         writeln!(
             output,
             "// Add custom DTOs specific to {} here.",
@@ -826,8 +834,7 @@ impl DtoGenerator {
             "// This section will be preserved during regeneration."
         )
         .unwrap();
-        writeln!(output, "// >>> END CUSTOM DTOs").unwrap();
-        writeln!(output).unwrap();
+        writeln!(output, "// END CUSTOM").unwrap();
 
         Ok(())
     }
@@ -953,7 +960,9 @@ impl DtoGenerator {
         }
     }
 
-    fn get_serde_field_attrs(&self, field: &Field) -> String {
+    /// A write DTO field's serde attributes. `default` is how an omitted non-optional field is
+    /// filled (`default`, or `default = "<fn>"`), when it may be omitted.
+    fn get_serde_field_attrs(&self, field: &Field, default: Option<String>) -> String {
         let mut attrs = Vec::new();
 
         // Handle optional fields
@@ -961,6 +970,7 @@ impl DtoGenerator {
             attrs.push("default".to_string());
             attrs.push("skip_serializing_if = \"Option::is_none\"".to_string());
         }
+        attrs.extend(default);
 
         // AuditMetadata should default when not provided in request body
         if field.has_attribute("audit_metadata") {
@@ -1073,7 +1083,18 @@ impl DtoGenerator {
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
         writeln!(output, "fn default_page() -> u32 {{ 1 }}").unwrap();
+
         writeln!(output, "fn default_per_page() -> u32 {{ 20 }}").unwrap();
+        writeln!(output).unwrap();
+        writeln!(output, "/// Reads a PATCH field that is present, `null` included, as `Some(..)`, so a nullable column").unwrap();
+        writeln!(output, "/// can be cleared; with `#[serde(default)]` an absent field stays `None`.").unwrap();
+        writeln!(output, "pub fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>").unwrap();
+        writeln!(output, "where").unwrap();
+        writeln!(output, "    T: serde::Deserialize<'de>,").unwrap();
+        writeln!(output, "    D: serde::Deserializer<'de>,").unwrap();
+        writeln!(output, "{{").unwrap();
+        writeln!(output, "    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)").unwrap();
+        writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
 
         writeln!(output, "/// API response wrapper").unwrap();
@@ -1171,7 +1192,7 @@ impl Generator for DtoGenerator {
 
         // Generate DTO file for each model
         for model in &schema.schema.models {
-            let content = self.generate_dto_file(model, &born_values(&schema.schema, model))?;
+            let content = self.generate_dto_file(model, &born_values(&schema.schema, model), &schema.schema.enums)?;
             let file_name = format!("{}_dto.rs", to_snake_case(&model.name));
             let path = build_generated_path(
                 "src/presentation/dto",
@@ -1229,6 +1250,86 @@ pub(crate) fn excluded_from_update(field: &Field) -> bool {
     is_auto_field(&field.name) || field.has_attribute("immutable") || is_excluded_from_dto(field)
 }
 
+/// The value a create that leaves `field` out starts it at: its literal `@default`, for a field
+/// that is neither optional (an omitted optional field is `None`) nor filled by the server.
+pub(crate) fn create_default(enums: &[crate::ast::EnumDef], field: &Field) -> Option<String> {
+    if field.type_ref.is_optional() || field.has_attribute("audit_metadata") {
+        return None;
+    }
+    field.default_value().and_then(|v| literal_default(enums, &field.type_ref, v))
+}
+
+/// The Rust value a literal `@default` gives a non-optional field of `type_ref`, the same value
+/// the column starts at: a number, a flag, a text, an enum variant, the current time or date, a
+/// fresh UUID, or a JSON literal. A default with no such value reads `None`.
+pub(crate) fn literal_default(enums: &[crate::ast::EnumDef], type_ref: &TypeRef, value: &crate::ast::model::AttributeValue) -> Option<String> {
+    use crate::ast::model::AttributeValue as V;
+    let word = match value {
+        V::Ident(w) | V::String(w) => Some(w.as_str()),
+        _ => None,
+    };
+    match type_ref {
+        TypeRef::Custom(name) => {
+            let variant = to_pascal_case(word?);
+            let e = enums.iter().find(|e| &e.name == name)?;
+            e.variants.iter().any(|v| to_pascal_case(&v.name) == variant).then(|| format!("{name}::{variant}"))
+        }
+        TypeRef::Primitive(p) => match p {
+            PrimitiveType::Bool => match (value, word) {
+                (V::Bool(b), _) => Some(b.to_string()),
+                (_, Some(w @ ("true" | "false"))) => Some(w.to_string()),
+                _ => None,
+            },
+            PrimitiveType::Int | PrimitiveType::Int32 | PrimitiveType::Int64 => match value {
+                V::Int(i) => Some(i.to_string()),
+                _ => None,
+            },
+            PrimitiveType::Float | PrimitiveType::Float32 | PrimitiveType::Float64 => match value {
+                V::Int(i) => Some(format!("{i}.0")),
+                V::Float(f) if f.is_finite() => Some(format!("{f:?}")),
+                _ => None,
+            },
+            PrimitiveType::Decimal | PrimitiveType::Money | PrimitiveType::Percentage => match value {
+                V::Int(i) => Some(format!("Decimal::from({i}_i64)")),
+                V::Float(f) => decimal_literal(&f.to_string()),
+                V::String(s) => decimal_literal(s.trim()),
+                _ => None,
+            },
+            PrimitiveType::Uuid => matches!(word, Some("uuid" | "uuid()" | "gen_random_uuid()")).then(|| "Uuid::new_v4()".to_string()),
+            PrimitiveType::DateTime | PrimitiveType::Timestamp => {
+                matches!(word, Some("now" | "now()")).then(|| "Utc::now()".to_string())
+            }
+            PrimitiveType::Date => matches!(word, Some("now" | "now()" | "today")).then(|| "Utc::now().date_naive()".to_string()),
+            PrimitiveType::Json => {
+                let json = match value {
+                    V::String(s) => serde_json::from_str::<serde_json::Value>(s).ok()?,
+                    V::Array(_) | V::Object(_) => serde_json::to_value(value).ok()?,
+                    _ => return None,
+                };
+                Some(format!("serde_json::json!({json})"))
+            }
+            _ if p.rust_type() == "String" => word.map(|w| format!("{w:?}.to_string()")),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `text`, a plain decimal like `0.25`, as an exact `Decimal::new(25, 2)`.
+fn decimal_literal(text: &str) -> Option<String> {
+    let (whole, frac) = text.split_once('.').unwrap_or((text, ""));
+    let digits = whole.trim_start_matches('-');
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let frac = frac.trim_end_matches('0');
+    if frac.is_empty() {
+        return Some(format!("Decimal::from({whole}_i64)"));
+    }
+    let mantissa: i64 = format!("{whole}{frac}").parse().ok()?;
+    Some(format!("Decimal::new({mantissa}, {})", frac.len()))
+}
+
 /// The fields of `model` a generic create may not set, each with the Rust value a new record
 /// starts with. A state machine's field starts in the machine's initial state, so a record is never
 /// born past the verbs that move it. A hand-set or projected lifecycle field (a close stamp, a
@@ -1267,24 +1368,7 @@ pub(crate) fn born_values(schema: &crate::ast::ModuleSchema, model: &Model) -> s
             continue;
         }
         // A required one starts at its literal `@default`, the value the column starts at too.
-        use crate::ast::model::AttributeValue;
-        let start = match (&field.type_ref, field.default_value()) {
-            (TypeRef::Custom(name), Some(AttributeValue::Ident(v) | AttributeValue::String(v))) if is_enum(name) => {
-                Some(format!("{name}::{}", to_pascal_case(v)))
-            }
-            (TypeRef::Primitive(PrimitiveType::String), Some(AttributeValue::String(v) | AttributeValue::Ident(v))) => {
-                Some(format!("{v:?}.to_string()"))
-            }
-            (TypeRef::Primitive(PrimitiveType::Bool), Some(AttributeValue::Bool(b))) => Some(b.to_string()),
-            (TypeRef::Primitive(PrimitiveType::Int | PrimitiveType::Int32 | PrimitiveType::Int64), Some(AttributeValue::Int(i))) => {
-                Some(i.to_string())
-            }
-            (TypeRef::Primitive(PrimitiveType::Decimal | PrimitiveType::Money), Some(AttributeValue::Int(i))) => {
-                Some(format!("Decimal::from({i}_i64)"))
-            }
-            _ => None,
-        };
-        if let Some(start) = start {
+        if let Some(start) = field.default_value().and_then(|v| literal_default(&schema.enums, &field.type_ref, v)) {
             born.insert(field.name.clone(), start);
         }
     }
@@ -1328,6 +1412,81 @@ mod tests {
         for born in ["status: JournalStatus::Draft,", "period: PeriodStatus::Open,", "posted_at: None,", "total: Decimal::from(0_i64),", "line_count: 0,"] {
             assert!(dto.contains(born), "missing `{born}` in the create conversion");
         }
+    }
+
+    fn dto_for(yaml: &str, enums: &[(&str, &[&str])]) -> String {
+        let mut schema = ModuleSchema::new("hiring");
+        schema.models = crate::parser::yaml_parser::parse_model_yaml_str(yaml).unwrap().into_models().unwrap();
+        for (name, values) in enums {
+            let mut e = crate::ast::EnumDef::new(*name);
+            for v in *values {
+                e.variants.push(crate::ast::EnumVariant { name: (*v).into(), ..Default::default() });
+            }
+            schema.enums.push(e);
+        }
+        let out = DtoGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        out.files.iter().find(|(p, _)| p.to_string_lossy().ends_with("_dto.rs") && !p.ends_with("mod.rs")).unwrap().1.clone()
+    }
+
+    fn section<'a>(file: &'a str, start: &str) -> &'a str {
+        let rest = &file[file.find(start).unwrap_or_else(|| panic!("no `{start}` in:\n{file}"))..];
+        &rest[..rest.find("\n}").unwrap()]
+    }
+
+    /// A create that leaves out a field with a literal `@default` gets that default, as the
+    /// column and the webapp form do, instead of failing with "missing field". A full update
+    /// still states every field.
+    #[test]
+    fn a_create_dto_fills_an_omitted_field_from_its_literal_default() {
+        let yaml = "models:\n  - name: Job\n    collection: jobs\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      title:\n        type: string\n      filled:\n        type: int\n        attributes: [\"@default(0)\"]\n      active:\n        type: bool\n        attributes: [\"@default(true)\"]\n      priority:\n        type: Priority\n        attributes: [\"@default(normal)\"]\n      currency:\n        type: string\n        attributes: [\"@default('IDR')\"]\n      rate:\n        type: decimal\n        attributes: [\"@default(0.25)\"]\n      opened_at:\n        type: datetime\n        attributes: [\"@default(now)\"]\n";
+        let dto = dto_for(yaml, &[("Priority", &["low", "normal"])]);
+        let create = section(&dto, "pub struct CreateJobDto");
+        assert!(create.contains("    #[serde(default)]\n    pub filled: i32,"), "{create}");
+        for (field, ty, value) in [
+            ("active", "bool", "true"),
+            ("priority", "Priority", "Priority::Normal"),
+            ("currency", "String", "\"IDR\".to_string()"),
+            ("rate", "Decimal", "Decimal::new(25, 2)"),
+            ("opened_at", "DateTime<Utc>", "Utc::now()"),
+        ] {
+            let attr = format!("#[serde(default = \"default_create_job_{field}\"");
+            let at = create.find(&attr).unwrap_or_else(|| panic!("{field}: {create}"));
+            assert!(create[at..].lines().nth(1) == Some(&format!("    pub {field}: {ty},")[..]), "{field}: {create}");
+            assert!(dto.contains(&format!("fn default_create_job_{field}() -> {ty} {{\n    {value}\n}}")), "{field}: {dto}");
+        }
+        // A field without a default stays required.
+        assert!(create.contains("    pub title: String,") && !create.contains("default_create_job_title"), "{create}");
+        let update = section(&dto, "pub struct UpdateJobDto");
+        assert!(!update.contains("default"), "a full update states every field: {update}");
+    }
+
+    /// A PATCH tells a nullable column's absence from its clearing: absent leaves it alone,
+    /// `null` clears it.
+    #[test]
+    fn a_patch_dto_can_clear_a_nullable_column() {
+        let yaml = "models:\n  - name: Job\n    collection: jobs\n    fields:\n      id:\n        type: uuid\n        attributes: [\"@id\"]\n      title:\n        type: string\n      closing_note:\n        type: string?\n";
+        let dto = dto_for(yaml, &[]);
+        let patch = section(&dto, "pub struct PatchJobDto");
+        assert!(patch.contains("    pub title: Option<String>,"), "{patch}");
+        assert!(
+            patch.contains("#[serde(default, deserialize_with = \"crate::presentation::dto::double_option\", alias = \"closing_note\")]\n    pub closing_note: Option<Option<String>>,"),
+            "{patch}"
+        );
+        let schema = create_test_schema();
+        let out = DtoGenerator::new().generate(&schema).unwrap();
+        let module = &out.files[&PathBuf::from("src/presentation/dto/mod.rs")];
+        assert!(module.contains("pub fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>"), "{module}");
+    }
+
+    /// The custom zone is one the merger and the layout stripper both recognise, so a stripped
+    /// file keeps no stray end marker.
+    #[test]
+    fn the_custom_dto_zone_closes_with_the_standard_end_marker() {
+        let schema = create_test_schema();
+        let out = DtoGenerator::new().generate(&schema).unwrap();
+        let dto = &out.files[&PathBuf::from("src/presentation/dto/user_dto.rs")];
+        assert!(dto.contains("// <<< CUSTOM DTOs") && dto.contains("\n// END CUSTOM\n"), "{dto}");
+        assert!(!dto.contains(">>> END CUSTOM"), "{dto}");
     }
 
     fn create_test_schema() -> ResolvedSchema {

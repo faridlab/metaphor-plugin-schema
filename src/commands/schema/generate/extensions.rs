@@ -111,7 +111,9 @@ pub(in crate::commands::schema) fn unattached_guards(
 
 /// Remove the CUSTOM marker lines from a layout module's generated files: its hand code lives
 /// in extension files, so a generated file carries no zone to edit (ADR-0031). A zone the
-/// generator itself fills is never emitted between markers, so only empty markers are removed.
+/// generator itself fills is never emitted between markers, so only empty markers are removed,
+/// together with the comments between them: a zone's own instructions ("add code here",
+/// "preserved during regeneration") are false once the zone is gone.
 pub(super) fn strip_custom_markers(generated: &mut GeneratedOutput) {
     for (path, content) in generated.files.iter_mut() {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -120,13 +122,25 @@ pub(super) fn strip_custom_markers(generated: &mut GeneratedOutput) {
         if !content.contains("CUSTOM") {
             continue;
         }
-        let kept: Vec<&str> = content
-            .lines()
-            .filter(|l| {
-                let t = l.trim_start();
-                !(t.starts_with("// <<< CUSTOM") || t.starts_with("// END CUSTOM"))
-            })
-            .collect();
+        let is_start = |l: &str| l.trim_start().starts_with("// <<< CUSTOM");
+        let is_end = |l: &str| l.trim_start().starts_with("// END CUSTOM");
+        let lines: Vec<&str> = content.lines().collect();
+        let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+        let mut i = 0;
+        while i < lines.len() {
+            if is_start(lines[i]) {
+                // A zone holding nothing but comments goes whole, up to its end marker.
+                let body = lines[i + 1..].iter().take_while(|l| l.trim_start().starts_with("//") && !is_end(l) && !is_start(l)).count();
+                if lines.get(i + 1 + body).is_some_and(|l| is_end(l)) {
+                    i += body + 2;
+                    continue;
+                }
+            }
+            if !(is_start(lines[i]) || is_end(lines[i])) {
+                kept.push(lines[i]);
+            }
+            i += 1;
+        }
         let mut out = kept.join("\n");
         if content.ends_with('\n') {
             out.push('\n');
@@ -138,6 +152,20 @@ pub(super) fn strip_custom_markers(generated: &mut GeneratedOutput) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An empty zone's own instructions ("add code here", "preserved during regeneration") go
+    /// with its markers: on the layout nothing between them survives a regeneration.
+    #[test]
+    fn stripping_an_empty_zone_removes_its_instructions_too() {
+        let mut generated = GeneratedOutput::new();
+        generated.add_file(
+            std::path::PathBuf::from("src/presentation/dto/job_dto.rs"),
+            "pub struct A;\n\n// <<< CUSTOM DTOs\n// Add custom DTOs specific to Job here.\n// This section will be preserved during regeneration.\n// END CUSTOM\n\npub struct B;\n".to_string(),
+        );
+        strip_custom_markers(&mut generated);
+        let content = &generated.files[&std::path::PathBuf::from("src/presentation/dto/job_dto.rs")];
+        assert_eq!(content, "pub struct A;\n\n\npub struct B;\n");
+    }
 
     #[test]
     fn a_hand_owned_build_attaches_a_guard_through_its_guarded_constructor() {

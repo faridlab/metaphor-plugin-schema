@@ -6,9 +6,11 @@
 //! rules compile into, so the generic write path checks them on every create and update.
 //!
 //! - **Every check refuses.** A field marked `@required` must hold a value: not null, and for
-//!   text not blank. A field with a `@default`, an input-excluded or server-filled field, the id
-//!   and audit columns, a tenant column and a state-machine field carry no checks: the write
-//!   does not supply them, so the client cannot be held to them.
+//!   text not blank. A `@default` fills a field the write leaves out, so it carries no required
+//!   check, except a text field, which still refuses a blank the writer supplies. An
+//!   input-excluded or server-filled field, the id and audit columns, a tenant column and a
+//!   state-machine field carry no checks: the write does not supply them, so the client cannot
+//!   be held to them.
 //! - **`@shadow(<why>)` keeps a field's checks in shadow**: a break is logged and the write goes
 //!   ahead, with the reason beside the field.
 //! - **An update is checked only for the fields it changes**, so an edit is never refused for a
@@ -174,8 +176,11 @@ pub fn field_rules(model: &Model, state_fields: &[String]) -> Vec<CompiledRowRul
         let v = b.value();
         let text = matches!(kind, Kind::Text | Kind::Email | Kind::Url);
 
-        // required — refuses
-        if field.has_attribute("required") && field.default_value().is_none() {
+        // required — refuses. A default fills an omitted value, but text still refuses a supplied
+        // blank, unless the default is itself blank.
+        let blank_default = matches!(field.default_value(), Some(AttributeValue::String(s) | AttributeValue::Ident(s)) if s.trim().is_empty());
+        let defaulted = field.default_value().is_some();
+        if field.has_attribute("required") && (!defaulted || (text && !field.type_ref.is_optional() && !blank_default)) {
             if text {
                 b.push(
                     "required",
@@ -464,13 +469,21 @@ mod tests {
         assert!(rules.iter().all(|r| r.path != "id" && r.path != "metadata"), "server-filled fields carry no checks");
     }
 
+    /// A default fills a text field a create leaves out, but a blank the writer supplies is still
+    /// refused: the default is no licence to send "". A blank default, and a field nobody marked
+    /// required, carry no check.
     #[test]
-    fn a_defaulted_or_unmarked_field_is_not_required() {
+    fn a_defaulted_required_text_field_still_refuses_a_supplied_blank() {
         let m = model(
-            "      status_label:\n        type: string\n        attributes: [\"@required\", \"@default(open)\"]\n      note:\n        type: string\n        attributes: []\n",
+            "      status_label:\n        type: string\n        attributes: [\"@required\", \"@default(open)\"]\n      prefix:\n        type: string\n        attributes: [\"@required\", \"@default('')\"]\n      note:\n        type: string\n        attributes: []\n",
         );
         let rules = field_rules(&m, &[]);
-        assert!(rules.iter().all(|r| r.code != "required"), "{:?}", rules.iter().map(|r| &r.name).collect::<Vec<_>>());
+        let required: Vec<&str> = rules.iter().filter(|r| r.code == "required").map(|r| r.path.as_str()).collect();
+        assert_eq!(required, ["status_label"]);
+        assert_eq!(
+            rule(&rules, "status_label_required").rust,
+            "r::and(r::is_not_null(r::field(row, \"status_label\")), r::not(r::is_empty(r::trim(r::field(row, \"status_label\")))))"
+        );
     }
 
     #[test]
