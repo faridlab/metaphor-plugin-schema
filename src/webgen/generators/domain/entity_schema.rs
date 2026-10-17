@@ -15,6 +15,16 @@ use crate::webgen::error::Result;
 use crate::webgen::parser::{to_camel_case, to_pascal_case, to_snake_case};
 
 /// Generator for Zod entity schemas
+/// Whether a field of `t` is a decimal, or holds them, and so reads `decimalSchema`.
+fn holds_decimal(t: &crate::webgen::ast::entity::FieldType) -> bool {
+    use crate::webgen::ast::entity::FieldType;
+    match t {
+        FieldType::Decimal => true,
+        FieldType::Optional(inner) | FieldType::Array(inner) => holds_decimal(inner),
+        _ => false,
+    }
+}
+
 pub struct EntitySchemaGenerator {
     config: Config,
     type_mapper: TypeMapper,
@@ -214,7 +224,7 @@ impl EntitySchemaGenerator {
  * @module {module}/entity/{entity_pascal}.schema
  */
 
-import {{ z }} from 'zod';{enum_schemas}
+import {{ z }} from 'zod';{decimal_import}{enum_schemas}
 // ============================================================================
 // Base Schema
 // ============================================================================
@@ -342,6 +352,11 @@ export function safeParseUpdate{entity_pascal}(data: unknown) {{
             entity_pascal = entity_pascal,
             entity_camel = entity_camel,
             module = self.config.module,
+            decimal_import = if entity.fields.iter().any(|f| holds_decimal(&f.type_name)) {
+                format!("\nimport {{ decimalSchema }} from '{}/shared/types/decimal';", self.config.import_root)
+            } else {
+                String::new()
+            },
             enum_schemas = if enum_schemas.is_empty() {
                 String::new()
             } else {
@@ -1408,7 +1423,9 @@ mod tests {
             assert!(!fields.contains(legacy), "`{legacy}` in:\n{fields}");
         }
         // A projection the service fills: no browser check at all.
-        assert!(content.contains("  total_debits: z.number().default(0),"), "{content}");
+        // A decimal reads the shared decimal schema, its default a decimal string.
+        assert!(content.contains("  total_debits: decimalSchema.default('0'),"), "{content}");
+        assert!(content.contains("\nimport { decimalSchema } from '@webapp/shared/types/decimal';\n"), "{content}");
         assert!(content.contains("  journal_count: z.number().superRefine((v, ctx) => {\n    if (!(Number.isInteger(v))) ctx.addIssue("), "{content}");
         let journal_count = content.split("  journal_count: ").nth(1).unwrap().split("\n  lines:").next().unwrap();
         assert!(!journal_count.contains("non_negative"), "a projection carries no guard check: {journal_count}");

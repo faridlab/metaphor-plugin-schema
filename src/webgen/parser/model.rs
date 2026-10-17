@@ -287,7 +287,9 @@ impl ModelParser {
             match t {
                 "string" => FieldType::String,
                 "int" | "integer" => FieldType::Int,
-                "float" | "double" | "decimal" => FieldType::Float,
+                "float" | "double" => FieldType::Float,
+                // Exact decimals travel as strings, so they are their own type.
+                "decimal" | "money" | "percentage" => FieldType::Decimal,
                 "bool" | "boolean" => FieldType::Bool,
                 "uuid" => FieldType::Uuid,
                 "datetime" | "timestamp" => FieldType::DateTime,
@@ -552,6 +554,16 @@ mod tests {
         let (ty, opt) = ModelParser::parse_type_string("int");
         assert!(!opt);
         assert_eq!(ty, FieldType::Int);
+
+        // A decimal (and money, a percentage) is its own type: it travels as a string.
+        for t in ["decimal", "money", "percentage"] {
+            assert_eq!(
+                ModelParser::parse_type_string(t).0,
+                FieldType::Decimal,
+                "{t}"
+            );
+        }
+        assert_eq!(ModelParser::parse_type_string("float").0, FieldType::Float);
 
         let (ty, opt) = ModelParser::parse_type_string("Role[]");
         assert!(!opt);

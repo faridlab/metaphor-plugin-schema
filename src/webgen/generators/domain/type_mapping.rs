@@ -14,6 +14,8 @@ pub const UUID_MESSAGE: &str = "This field must be a valid UUID";
 pub const DATETIME_MESSAGE: &str = "This field must be a date and time";
 /// The wording for a value that is not an ISO calendar date.
 pub const DATE_MESSAGE: &str = "This field must be a date";
+/// The largest integer a JSON number holds exactly (`Number.MAX_SAFE_INTEGER`).
+const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
 /// `s` as a double-quoted JavaScript string literal.
 fn js_str(s: &str) -> String {
@@ -94,6 +96,16 @@ impl TypeMapper {
         )
     }
 
+    /// Integer scalars as wide as an i64, which the service writes as a JSON number.
+    pub fn is_int64_scalar(name: &str) -> bool {
+        matches!(name.to_lowercase().as_str(), "int64" | "uint64" | "sint64" | "fixed64" | "long" | "bigint")
+    }
+
+    /// A decimal's literal default as the string a decimal field holds (`0.5` → `'0.5'`).
+    pub fn decimal_default(value: &str) -> String {
+        format!("'{}'", value.trim().trim_matches(|c| c == '\'' || c == '"'))
+    }
+
     /// Schema `@default(...)` values that denote a runtime function (e.g. a
     /// generated UUID or timestamp) rather than a literal. These must NOT be
     /// emitted as Zod `.default('uuid')` or as bare identifiers in factories.
@@ -134,7 +146,9 @@ impl TypeMapper {
         match field_type {
             FieldType::String | FieldType::Text => "string".to_string(),
             FieldType::Int => "number".to_string(),
-            FieldType::Float | FieldType::Decimal => "number".to_string(),
+            FieldType::Float => "number".to_string(),
+            // rust_decimal writes a decimal as a string, and the OpenAPI document says so.
+            FieldType::Decimal => "string".to_string(),
             FieldType::Bool => "boolean".to_string(),
             FieldType::Uuid => "string".to_string(),
             FieldType::DateTime => "Date".to_string(),
@@ -275,7 +289,9 @@ impl TypeMapper {
         match field_type {
             FieldType::String | FieldType::Text | FieldType::Email | FieldType::Phone | FieldType::Url => plain("z.string()"),
             FieldType::Int => ("z.number()".to_string(), vec![check("integer", "This field must be a whole number", "Number.isInteger(v)")]),
-            FieldType::Float | FieldType::Decimal => plain("z.number()"),
+            FieldType::Float => plain("z.number()"),
+            // A string or a number in, the decimal string out (`shared/types/decimal`).
+            FieldType::Decimal => plain("decimalSchema"),
             FieldType::Bool => plain("z.boolean()"),
             FieldType::Uuid => (format!("z.string().uuid({{ message: {} }})", js_str(UUID_MESSAGE)), Vec::new()),
             FieldType::DateTime => (format!("z.string().datetime({{ message: {} }})", js_str(DATETIME_MESSAGE)), Vec::new()),
@@ -304,6 +320,11 @@ impl TypeMapper {
                 } else if Self::is_freeform_custom(name) {
                     // Free-form framework types (e.g. Metadata) → permissive record
                     plain("z.record(z.unknown())")
+                } else if Self::is_int64_scalar(name) {
+                    // serde writes an i64 as a JSON number, which is exact only up to 2^53.
+                    let mut range = check("range", format!("This field must be between -{MAX_SAFE_INTEGER} and {MAX_SAFE_INTEGER}").as_str(), "!Number.isInteger(v) || Number.isSafeInteger(v)");
+                    range.params = vec![("min".to_string(), serde_json::Value::from(-MAX_SAFE_INTEGER)), ("max".to_string(), serde_json::Value::from(MAX_SAFE_INTEGER))];
+                    ("z.number()".to_string(), vec![check("integer", "This field must be a whole number", "Number.isInteger(v)"), range])
                 } else if Self::is_numeric_scalar(name) {
                     plain("z.number()")
                 } else {
@@ -347,7 +368,8 @@ impl TypeMapper {
                     "false".to_string()
                 }
             }
-            FieldType::Int | FieldType::Float | FieldType::Decimal => value.to_string(),
+            FieldType::Int | FieldType::Float => value.to_string(),
+            FieldType::Decimal => Self::decimal_default(value),
             FieldType::Array(_) => {
                 if value == "[]" || value.starts_with('[') {
                     value.to_string()
@@ -391,7 +413,8 @@ impl TypeMapper {
             | FieldType::Ip => "''".to_string(),
             FieldType::Uuid => "crypto.randomUUID()".to_string(),
             FieldType::Int => "0".to_string(),
-            FieldType::Float | FieldType::Decimal => "0.0".to_string(),
+            FieldType::Float => "0.0".to_string(),
+            FieldType::Decimal => "'0'".to_string(),
             FieldType::Bool => "false".to_string(),
             // Zod infers date/datetime fields as ISO `string`, so factory
             // defaults must be strings (not `Date`).
@@ -579,7 +602,7 @@ pub(crate) mod tests {
         let mapper = TypeMapper::new();
         // A service-filled total: `@non_negative`, but no guard check, so no browser check.
         let total = field("total_debits", FieldType::Decimal, &[("non_negative", &[]), ("positive", &[])], false);
-        assert_eq!(mapper.to_zod_schema(&total, &[], &[]), "z.number()");
+        assert_eq!(mapper.to_zod_schema(&total, &[], &[]), "decimalSchema");
         let email = field("email", FieldType::Email, &[], false);
         assert_eq!(mapper.to_zod_schema(&email, &[], &[]), "z.string()");
     }
@@ -658,6 +681,46 @@ pub(crate) mod tests {
         );
         assert!(schema.contains("params: {\"code\":\"required\"}"), "{schema}");
         assert!(!schema.contains("\"max_length\""), "the maximum is Zod's own, not repeated in the refinement: {schema}");
+        assert_every_message_coded(&schema);
+    }
+
+    /// A decimal travels as a string (rust_decimal writes one, and the OpenAPI document says so):
+    /// its TypeScript type is `string`, its schema the shared `decimalSchema`, which takes a
+    /// string or a number and hands on a decimal string, and its defaults are strings.
+    #[test]
+    fn a_decimal_is_typed_as_the_string_the_service_sends() {
+        let mapper = TypeMapper::new();
+        assert_eq!(mapper.to_typescript_type(&FieldType::Decimal, false), "string");
+        assert_eq!(mapper.default_value_for_type(&FieldType::Decimal), "'0'");
+        let mut rate = field("rate", FieldType::Decimal, &[], false);
+        rate.default_value = Some("0.5".into());
+        assert_eq!(mapper.to_zod_schema(&rate, &[], &[]), "decimalSchema.default('0.5')");
+        let check = BrowserCheck {
+            field: "rate".into(),
+            code: "non_negative".into(),
+            message: "This field must not be negative".into(),
+            params: vec![],
+            test: "Number(v) >= 0".into(),
+        };
+        let schema = mapper.to_zod_schema(&field("rate", FieldType::Decimal, &[], false), &[], &[check]);
+        assert!(schema.starts_with("decimalSchema.superRefine("), "{schema}");
+        assert_every_message_coded(&schema);
+        let (path, shared) = crate::webgen::generators::shared_runtime::shared_files().into_iter().find(|(p, _)| p.ends_with("decimal.ts")).expect("a shared decimal schema");
+        assert_eq!(path, "shared/types/decimal.ts");
+        assert!(shared.contains("export const decimalSchema") && shared.contains("params: { code: 'invalid_decimal' }"), "{shared}");
+    }
+
+    /// An int64 arrives as a JSON number (serde writes i64 as one), so it stays a `number`; a
+    /// value past 2^53 cannot be one exactly, so it is refused with the service's `range` code.
+    #[test]
+    fn an_int64_is_a_whole_number_within_the_safe_range() {
+        let mapper = TypeMapper::new();
+        let ty = FieldType::Custom("int64".into());
+        assert_eq!(mapper.to_typescript_type(&ty, false), "number");
+        let schema = mapper.to_zod_schema(&field("size_bytes", ty, &[], false), &[], &[]);
+        assert!(schema.starts_with("z.number().superRefine("), "{schema}");
+        assert!(schema.contains("params: {\"code\":\"integer\"}"), "{schema}");
+        assert!(schema.contains("Number.isSafeInteger(v)") && schema.contains("{\"code\":\"range\",\"max\":9007199254740991,\"min\":-9007199254740991}"), "{schema}");
         assert_every_message_coded(&schema);
     }
 

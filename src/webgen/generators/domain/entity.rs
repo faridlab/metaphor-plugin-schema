@@ -342,7 +342,8 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
                     "false".to_string()
                 }
             }
-            FieldType::Int | FieldType::Float | FieldType::Decimal => {
+            FieldType::Decimal => TypeMapper::decimal_default(value),
+            FieldType::Int | FieldType::Float => {
                 if value.parse::<f64>().is_ok() {
                     value.to_string()
                 } else {
