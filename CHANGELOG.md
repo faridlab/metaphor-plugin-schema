@@ -31,12 +31,71 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   hooks.
 - The generated transition routes carry `backbone_core::http::correlation_middleware`, so a verb's
   events carry the request's correlation id like a generic write's.
+- Permissions are declared in the schema and enforced by the generated routes (hybrid role-based
+  access control; the grants themselves stay data in the identity module's tables). The canonical name
+  is `<resource>:<action>`, the resource an entity in snake_case. `requires:` on a model (keyed by
+  `read`, `create`, `update`, `delete`, `restore`, `purge`) or on a transition renames the permission a
+  route needs; the default is `<entity>:<action>` and `<entity>:<verb>`, so most modules declare
+  nothing. The module index's `authorization:` block declares the vocabulary beyond the defaults
+  (custom verbs) and the system roles with baseline grants; the older `resource.action` spelling and a
+  plural collection name (`buckets`) are normalised, and a role may inherit. The block is read from the
+  module index, where bucket has always written it (it was parsed and dropped before). Generation
+  fails on a malformed permission, a role inheriting a role that is not declared, a `requires:` key
+  that is no generic action, and a `requires:` naming a permission the vocabulary does not declare.
+- Every generated generic route checks its permission: `create_<entity>_routes`, `_read_routes` and
+  `_write_routes` call `BackboneCrudHandler::routes_guarded` (and `read_routes_guarded`,
+  `write_routes_guarded`) with the new `<entity>_permissions()` (exported from `presentation::http`),
+  and the audited history route is guarded with `<entity>:read`. A request with no `AuthContext` is
+  `401 authentication_required`; a caller without the permission is `403 permission_required` with
+  `params.permission`, before the body is read or the record is looked up. Requires backbone-core and
+  backbone-auth with `permission` and `grants`.
+- A generated transition checks `<model>:<verb>` (or its `requires:`) through `AuthContext::require_with`
+  before it reads the record, so a caller without the permission learns nothing about an id (it was
+  404 versus 403); a listed `roles:` still admits, a `PermissionWaiver` on the request passes the check,
+  and a request with no caller is `401`. The refusal is the `permission_required` violation.
+- A seed migration, `migrations/<ts>_seed_<module>_permissions_<digest>.up.sql`, named by a digest of
+  its content: it inserts the permissions the module's routes require and its vocabulary declares, and
+  the declared system roles with their baseline grants, into the identity module's tables
+  (`public.permissions`, `public.roles`, `public.role_permissions`). It inserts what is missing,
+  refreshes a permission's description, and never deletes or revokes, so a tenant's edits survive a
+  re-run; a database without the identity tables skips it with a notice.
+- `schema rules` labels each route group `PERMISSION REQUIRED <permission>` (also under `permissions`
+  in `-f json`, with the vocabulary and system roles) under the mode: `RESOLVER` when the consumer's
+  source installs a grant resolver, `AUTHCONTEXT` when the routes read the permissions already on
+  `AuthContext`. `schema doctor` says the mode and fails on a hand-written `.route(..)` not wrapped in
+  `guarded` (a line says `// unguarded: <reason>` to be accepted and listed), on a direct call of
+  `BackboneCrudHandler::routes`, `read_routes` or `write_routes`, on a `guarded` or `.require` permission
+  the vocabulary lacks, and on a malformed declaration; it warns on legacy spellings and on declared
+  names nothing uses.
+- The web client generator emits `domain/permissions.ts` per module (`Permissions.ticket.read ===
+  'ticket:read'`, `PermissionName`), from the same declarations, so the interface gates on the names the
+  server requires.
 
 ### Changed
 
+- **BREAKING** (for a service that mounts a regenerated module with no permissions on `AuthContext`):
+  the generic routes, which checked nothing, now refuse a caller who holds no permission. A service
+  opts in before it upgrades a module by installing `backbone_auth::resolve_grants` (or by having its
+  own layer put the permissions on `AuthContext`); with neither, every route is `401` or `403`, and
+  nothing is allowed by default. The generated read routes are no longer safe to serve to anonymous
+  callers. A hard delete from the trash needs `<entity>:purge`, no longer covered by `delete`.
+  [Migration guide](../docs/handbook/permissions-migration.md).
+- **BREAKING**: a generated transition's permission is `<model>:<verb>`, no longer
+  `<model>:transition:<verb>` (three segments, which the identity module's permission pattern cannot
+  store). The old stored name still grants the verb (and only verbs) for one release and raises a
+  deprecation signal; the migration guide has the SQL to rewrite stored rows.
+- A generated module no longer re-exports `application::middleware::*` when its schema declares an
+  `authorization:` block: those names exist only in a module that hand-writes them, and the block is now
+  read, so the re-export would have broken a build.
 - The generation warning for events without `on:` no longer calls them declaration-only: a typed
   payload is generated and hand code stages them. Declarations without `on:` keep their meaning;
   nothing is staged for them.
+- The conformance fixture gains a permissions area (`I`): every generic verb, transition and custom
+  verb refused with the violation and the permission named, the fail-closed default with no resolver
+  installed, wildcards and authority by name, a tenant role created as rows after startup, a revoked
+  or unreadable grant store, the legacy spellings, seeds applied, re-applied and applied over a
+  tenant's edits, and variants for an unguarded hand route, an undeclared permission and a `requires:`
+  rename; `RESULTS.md` is regenerated.
 - The conformance fixture and `tests/conformance.rs` prove the write path with declared events (events
   staged with the row, rollback both ways, transitions, `update(<field>)`, hook failure, bulk, relay
   drain, dead letter, re-emit and inbox dedupe); `RESULTS.md` is regenerated.
