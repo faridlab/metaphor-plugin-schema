@@ -3190,6 +3190,7 @@ mod tests {
             field("name", vec![]),
             field("password_hash", vec![Attribute::new("hashed")]),
             field("code", vec![Attribute::new("immutable")]),
+            field("risk_score", vec![Attribute::new("exclude_from_dto")]),
             Field { lifecycle: lifecycle(LifecycleShape::HandSet), ..field("status", vec![]) },
             Field { lifecycle: lifecycle(LifecycleShape::Projection), ..field("balance", vec![]) },
             Field { lifecycle: lifecycle(LifecycleShape::Label), ..field("stage_label", vec![]) },
@@ -3263,8 +3264,8 @@ mod tests {
             "the impl should override write_protected_fields:\n{section}"
         );
         assert!(
-            section.contains(r#"&["password_hash", "code", "status", "balance"]"#),
-            "hashed, immutable, hand_set and projection fields are protected, in schema order; \
+            section.contains(r#"&["password_hash", "code", "risk_score", "status", "balance"]"#),
+            "hashed, immutable, DTO-excluded, hand_set and projection fields are protected, in schema order; \
              a plain field and a label are not:\n{section}"
         );
     }
@@ -3290,7 +3291,7 @@ mod tests {
         let output = RustGenerator::new().generate(&resolved).unwrap();
         let file = output.files.get(&PathBuf::from("src/domain/entity/account.rs")).expect("account.rs");
         let section = persistent_entity_impl(file, "Account");
-        assert!(section.contains(r#"&["password_hash", "code", "status", "balance"]"#), "still write-protected:\n{section}");
+        assert!(section.contains(r#"&["password_hash", "code", "risk_score", "status", "balance"]"#), "still write-protected:\n{section}");
         assert!(
             section.contains("fn state_fields() -> &'static [&'static str] {\n        &[\"status\"]"),
             "the machine's field is a state field:\n{section}"

@@ -12,6 +12,10 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 - `@email` and `@url` on a string field check the value as the `email` and `url` types do, with
   the same `email` / `url` code, in the write guard, the database CHECK and the webapp; the
   attributes were parsed and then ignored.
+- A field no write DTO takes (`@exclude_from_dto`, `@readonly`, `@no_input`) is write-protected on
+  the entity, so a generic PATCH, which merges any entity field, refuses a new value for it with
+  `field_not_writable` instead of storing it. Hand code that sets such a field through its own
+  repository or SQL, or a verb moving a state field, is unaffected.
 
 ## [0.35.0] - 2026-10-17
 

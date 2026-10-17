@@ -1455,7 +1455,7 @@ mod tests {
         // The fields a generic write may not change are listed for the screens.
         let content = generator.generate_schema_content(&entity, &enums, None);
         assert!(
-            content.contains("export const periodWriteProtectedFields = [\"total_debits\", \"journal_count\", \"code\"] as const;"),
+            content.contains("export const periodWriteProtectedFields = [\"total_debits\", \"journal_count\", \"code\", \"checksum\"] as const;"),
             "{content}"
         );
     }
