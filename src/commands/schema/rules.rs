@@ -99,11 +99,24 @@ pub(super) fn execute_rules(
                     "name": e.name,
                     "source": e.source.to_string(),
                     "aggregate": e.bound_model,
-                    "status": event_label(e),
+                    "status": event_label(&module_schema, e),
                     "on": e.on.iter().map(|t| t.text()).collect::<Vec<_>>(),
                     "if": e.condition,
                     "problems": e.problems,
                 })).collect::<Vec<_>>(),
+                "triggers": register.triggers.iter().map(|t| {
+                    let (label, hand) = trigger_labels(&module_schema, t);
+                    serde_json::json!({
+                        "source": t.source.to_string(),
+                        "model": t.bound_model,
+                        "key": t.key,
+                        "label": label,
+                        "when": t.when.as_ref().map(|w| w.text()),
+                        "hand": hand,
+                        "problems": t.problems,
+                        "notes": t.notes,
+                    })
+                }).collect::<Vec<_>>(),
                 "permissions": permissions_json(&module_schema, mode),
                 "warnings": register.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
                 "proposals": proposals(register),
@@ -150,15 +163,46 @@ fn proposals(register: &RuleRegister) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// The label of a declared event: staged by the generated write hooks (and when), or by hand.
-fn event_label(event: &crate::rules::events::DeclaredEvent) -> String {
+/// The label of a declared event: staged by the generated write hooks (and when), by a hook trigger
+/// that emits it, or by hand.
+fn event_label(schema: &crate::ast::ModuleSchema, event: &crate::rules::events::DeclaredEvent) -> String {
     match event.status() {
         crate::rules::events::EventStatus::Staged => {
             let on: Vec<String> = event.on_text.clone();
             format!("EVENT STAGED (on {}, in tx)", on.join(" | "))
         }
-        crate::rules::events::EventStatus::HandStaged => "EVENT HAND-STAGED".to_string(),
+        crate::rules::events::EventStatus::HandStaged => match crate::generators::triggers::emitted_events(schema).get(&event.name) {
+            Some(by) => format!("EVENT STAGED (by trigger {}, in tx)", by.join(" | ")),
+            None => "EVENT HAND-STAGED".to_string(),
+        },
     }
+}
+
+/// The label of a declared trigger, and the labels of the hand methods it needs.
+fn trigger_labels(schema: &crate::ast::ModuleSchema, t: &crate::rules::triggers::DeclaredTrigger) -> (String, Vec<String>) {
+    use crate::rules::triggers::TriggerWhen;
+    if !crate::generators::triggers::active(schema) {
+        return ("TRIGGER UNGENERATED (legacy_triggers)".to_string(), Vec::new());
+    }
+    let Some(when) = &t.when else { return ("TRIGGER UNRESOLVED".to_string(), Vec::new()) };
+    let hand: Vec<String> = t
+        .bound_model
+        .as_ref()
+        .and_then(|m| schema.models.iter().find(|x| &x.name == m))
+        .map(|model| {
+            crate::generators::triggers::hand_methods(schema, model)
+                .into_iter()
+                .filter(|h| h.key == t.key && h.source == t.source.to_string())
+                .map(|h| format!("TRIGGER HAND ({})", h.name))
+                .collect()
+        })
+        .unwrap_or_default();
+    let label = match when {
+        TriggerWhen::Scheduled => format!("TRIGGER SCHEDULED ({})", t.schedule.as_deref().unwrap_or("")),
+        TriggerWhen::HandFired => format!("TRIGGER RUNS (hand-fired by fire_{}, in tx)", crate::rules::trigger_compile::ident(&t.key)),
+        other => format!("TRIGGER RUNS ({}, in tx)", other.text()),
+    };
+    (label, hand)
 }
 
 /// The check state of an expression, with what stands in its way.
@@ -291,8 +335,8 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
     if !register.events.is_empty() {
         println!("{}", "Events:".bold());
         for e in &register.events {
-            let label = event_label(e);
-            let label = if e.status() == crate::rules::events::EventStatus::Staged && e.problems.is_empty() {
+            let label = event_label(schema, e);
+            let label = if label.starts_with("EVENT STAGED") && e.problems.is_empty() {
                 label.green()
             } else if e.problems.is_empty() {
                 label.yellow()
@@ -311,6 +355,35 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
                 println!("      if: {}  {}", condition.dimmed(), describe(&e.condition_check));
             }
             for problem in &e.problems {
+                println!("      {} {problem}", "problem:".red());
+            }
+        }
+    }
+    if !register.triggers.is_empty() {
+        println!("{}", "Triggers:".bold());
+        for t in &register.triggers {
+            let (label, hand) = trigger_labels(schema, t);
+            let label = if !t.problems.is_empty() {
+                label.red()
+            } else if label.starts_with("TRIGGER UNGENERATED") {
+                label.yellow()
+            } else {
+                label.green()
+            };
+            println!(
+                "  {}  {}  → {}  {}",
+                t.source.to_string().dimmed(),
+                t.key.bold(),
+                t.bound_model.as_deref().unwrap_or("-"),
+                label
+            );
+            for h in hand {
+                println!("      {}", h.yellow());
+            }
+            for note in &t.notes {
+                println!("      {} {note}", "note:".dimmed());
+            }
+            for problem in &t.problems {
                 println!("      {} {problem}", "problem:".red());
             }
         }

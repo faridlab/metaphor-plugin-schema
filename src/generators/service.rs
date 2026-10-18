@@ -214,6 +214,10 @@ impl Generator for ServiceGenerator {
                     hooks,
                 );
             }
+            // The trait the hand-written half of the model's hook triggers implements.
+            if let Some(triggers) = super::triggers::trait_file(&schema.schema, model) {
+                output.add_file(PathBuf::from(format!("src/application/triggers/{model_snake}_triggers.rs")), triggers);
+            }
             if schema.schema.hand_owned_services.contains(&model.name)
                 && crate::rules::compile::model_has_guard(&schema.schema, model)
             {
@@ -245,6 +249,10 @@ impl Generator for ServiceGenerator {
                 ));
                 output.add_file(service_path, service_content);
             }
+        }
+
+        if let Some(triggers_mod) = super::triggers::mod_file(&schema.schema) {
+            output.add_file(PathBuf::from("src/application/triggers/mod.rs"), triggers_mod);
         }
 
         // error.rs — re-export from backbone-core
@@ -366,7 +374,11 @@ fn guarded_constructor(schema: &crate::ast::ModuleSchema, model: &crate::ast::Mo
     } else {
         String::new()
     };
-    let hooks = if super::declared_events::model_has_write_hooks(schema, model) {
+    let hooks = if super::triggers::model_has_triggers(schema, model) {
+        // The triggers' hand-written half is `{name}TriggersImpl`, in `<model>_triggers.ext.rs` when
+        // it has hand methods and generated when it has none.
+        format!(".with_write_hooks(std::sync::Arc::new({name}WriteHooks::new(std::sync::Arc::new(crate::application::triggers::{name}TriggersImpl))))")
+    } else if super::declared_events::model_has_write_hooks(schema, model) {
         format!(".with_write_hooks(std::sync::Arc::new({name}WriteHooks))")
     } else {
         String::new()

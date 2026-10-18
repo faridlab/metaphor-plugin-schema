@@ -1236,7 +1236,7 @@ impl ModuleGenerator {
     }
 
     /// Generate application/mod.rs
-    fn generate_application_mod(&self, _schema: &ResolvedSchema) -> String {
+    fn generate_application_mod(&self, schema: &ResolvedSchema) -> String {
         let mut output = String::new();
 
         writeln!(output, "//! Application layer").unwrap();
@@ -1256,6 +1256,11 @@ impl ModuleGenerator {
         writeln!(output).unwrap();
 
         writeln!(output, "pub mod service;").unwrap();
+        // The hand-written half of the hook triggers, when the module declares any.
+        let has_triggers = super::triggers::mod_file(&schema.schema).is_some();
+        if has_triggers {
+            writeln!(output, "pub mod triggers;").unwrap();
+        }
 
         // NOTE: `pub mod middleware;` is intentionally NOT declared here. No generator
         // emits `application/middleware.rs`, so declaring it produced E0583. When an
@@ -1265,6 +1270,9 @@ impl ModuleGenerator {
         writeln!(output).unwrap();
         writeln!(output, "// Re-exports").unwrap();
         writeln!(output, "pub use service::*;").unwrap();
+        if has_triggers {
+            writeln!(output, "pub use triggers::*;").unwrap();
+        }
         writeln!(output, "// <<< CUSTOM").unwrap();
         writeln!(output, "// END CUSTOM").unwrap();
 

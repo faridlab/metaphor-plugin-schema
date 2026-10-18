@@ -16,6 +16,7 @@ pub struct ReadHookFile {
     pub rules: Vec<DeclaredRule>,
     pub machines: Vec<DeclaredMachine>,
     pub events: Vec<super::events::DeclaredEvent>,
+    pub triggers: Vec<super::triggers::DeclaredTrigger>,
     pub warnings: Vec<RegisterWarning>,
 }
 
@@ -96,6 +97,21 @@ pub fn read_hook_file(file: &str, content: &str) -> ReadHookFile {
                     message: format!("`{key}:` is not read by the generator in a hook file of the list format"),
                 });
             }
+        }
+    }
+
+    if !list_format {
+        out.triggers = super::triggers::read_triggers(file, &root, file_target, file_alternatives);
+        // The line each entry sits on, found by its key.
+        let mut cursor = lines.find(&["triggers:".to_string()], 0).unwrap_or(0);
+        for t in out.triggers.iter_mut().filter(|t| t.state_list.is_none()) {
+            let line = lines.find(&[format!("{}:", t.key)], cursor);
+            cursor = line.unwrap_or(cursor);
+            t.source.line = line;
+        }
+        for t in out.triggers.iter_mut().filter(|t| t.state_list.is_some()) {
+            let state = t.key.split_once(' ').map(|(_, s)| s.to_string()).unwrap_or_default();
+            t.source.line = lines.find(&[format!("{state}:")], 0);
         }
     }
 

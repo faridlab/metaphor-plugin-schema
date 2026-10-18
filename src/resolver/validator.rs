@@ -52,10 +52,8 @@ impl<'a> SchemaValidator<'a> {
         // The permission declarations: roles, the vocabulary and every `requires:`
         errors.extend(crate::rbac::Rbac::new(self.schema).problems().into_iter().map(|p| ResolveError::validation(p.message)));
 
-        // Hook triggers are not generated, so a module may not declare them
-        if !legacy_triggers(self.schema) {
-            errors.extend(trigger_problems(self.schema).into_iter().map(ResolveError::validation));
-        }
+        // Hook triggers the generator cannot honour (a module on `legacy_triggers` has none reported)
+        errors.extend(trigger_problems(self.schema).into_iter().map(ResolveError::validation));
 
         // Validate workflows (business processes)
         for workflow in &self.schema.workflows {
@@ -1018,7 +1016,13 @@ pub fn declaration_only_warnings(schema: &ModuleSchema) -> Vec<String> {
     use crate::rules::events::EventStatus;
     let mut out = Vec::new();
     let mut by_file: indexmap::IndexMap<&str, Vec<&str>> = indexmap::IndexMap::new();
-    for event in schema.rule_register.events.iter().filter(|e| e.status() == EventStatus::HandStaged) {
+    let by_triggers = crate::generators::triggers::emitted_events(schema);
+    for event in schema
+        .rule_register
+        .events
+        .iter()
+        .filter(|e| e.status() == EventStatus::HandStaged && !by_triggers.contains_key(&e.name))
+    {
         by_file.entry(event.source.file.as_str()).or_default().push(event.name.as_str());
     }
     for (file, events) in by_file {
@@ -1960,13 +1964,88 @@ fn legacy_triggers(schema: &ModuleSchema) -> bool {
     schema.generators_config.as_ref().and_then(|c| c.legacy_triggers) == Some(true)
 }
 
-/// Hook triggers and state enter/exit actions the schema declares. None is generated:
-/// no write path ever ran a trigger registry, so a declaration would promise behaviour
-/// nothing performs. What a trigger described belongs in the service (a verb, or a
-/// `ServiceLifecycle` hook for a value set before the row is written), and an event it
-/// publishes is declared under `events:`. Failing validation keeps that promise honest.
+/// What is wrong with the hook triggers and state enter/exit lists a module declares, when it
+/// generates them (it has not opted out with `legacy_triggers`): a key that names no field, verb
+/// or state, an `if:` that cannot compile, an `emit:` of an event no file declares, a `set:` that
+/// cannot be said, and hand methods in a module without the extension layout, which has nowhere to
+/// put them. Each is an error, since a declaration that cannot be honoured must not read as one that is.
 pub fn trigger_problems(schema: &ModuleSchema) -> Vec<String> {
-    const FIX: &str = "hook triggers are not generated, so nothing runs them: move the behaviour into the service and declare the events it publishes under `events:`";
+    if legacy_triggers(schema) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for t in &schema.rule_register.triggers {
+        for problem in &t.problems {
+            out.push(format!("{}: {problem}", t.source));
+        }
+    }
+    if schema.generators_config.as_ref().and_then(|c| c.extensions) != Some(true) {
+        for model in &schema.models {
+            if let Some(first) = crate::generators::triggers::hand_methods(schema, model).first() {
+                out.push(format!(
+                    "{}: {} has triggers that need hand code (`{}` and {} more), but the module does not use the extension layout (`generators: extensions: true`), which is where the implementation of `{}Triggers` lives",
+                    first.source,
+                    model.name,
+                    first.name,
+                    crate::generators::triggers::hand_methods(schema, model).len() - 1,
+                    model.name
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// What a module that generates its triggers is told without failing: what became a hand method
+/// or was left out of a log, and the triggers whose moment depends on hand code.
+pub fn trigger_warnings(schema: &ModuleSchema) -> Vec<String> {
+    if legacy_triggers(schema) {
+        return legacy_trigger_findings(schema);
+    }
+    let mut out = Vec::new();
+    for t in &schema.rule_register.triggers {
+        for note in &t.notes {
+            out.push(format!("{}: {note}", t.source));
+        }
+        let Some(model) = t.bound_model.as_ref() else { continue };
+        let machines = || {
+            schema
+                .rule_register
+                .machines
+                .iter()
+                .filter(move |m| m.bound_model.as_deref() == Some(model.as_str()))
+        };
+        use crate::rules::triggers::{StateList, TriggerWhen};
+        match (&t.when, &t.state_list) {
+            (_, Some(StateList::Enter(state))) if machines().any(|m| m.initial.as_deref() == Some(state.as_str())) => out.push(format!(
+                "{}: `on_enter {state}` of {model} fires when a transition enters the state; a row created in `{state}` (its initial state) enters it with no transition, so this list never runs on create",
+                t.source
+            )),
+            (Some(TriggerWhen::Transition { verb }), _)
+                if machines().any(|m| m.verbs.as_deref() == Some("hand") && m.transitions.iter().any(|tr| tr.verb.as_deref() == Some(verb.as_str()))) =>
+            {
+                out.push(format!(
+                    "{}: `{}` of {model} fires only when the hand-written `{verb}` verb writes through `backbone_core::write_guard::as_transition`: its machine declares `verbs: hand`",
+                    t.source, t.key
+                ))
+            }
+            (Some(TriggerWhen::HandFired), _) => out.push(format!(
+                "{}: `{}` of {model} names no write, field or transition: it runs only when hand code calls `fire_{}` on the model's write hooks",
+                t.source,
+                t.key,
+                crate::rules::trigger_compile::ident(&t.key)
+            )),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The old finding for each hook trigger and state enter/exit action a module that kept
+/// `legacy_triggers: true` still declares: none is generated, so each promises behaviour nothing
+/// performs. It resolves and generates as it always did, and `schema validate` shows these.
+pub fn legacy_trigger_findings(schema: &ModuleSchema) -> Vec<String> {
+    const FIX: &str = "hook triggers are not generated, so nothing runs them: move the behaviour into the service and declare the events it publishes under `events:` (or drop `legacy_triggers` and the generator runs them)";
     let mut out = Vec::new();
     for hook in &schema.hooks {
         for trigger in &hook.triggers {
@@ -2008,13 +2087,6 @@ fn trigger_key(event: &crate::ast::hook::TriggerEvent) -> String {
         OnEnterState(s) => format!("on_enter {s}"),
         OnExitState(s) => format!("on_exit {s}"),
     }
-}
-
-/// The trigger rule's findings for a module exempt from it (`legacy_triggers`), reported
-/// as warnings so its declarations stay visible while it still resolves. Any other
-/// module fails validation on them instead.
-pub fn trigger_warnings(schema: &ModuleSchema) -> Vec<String> {
-    if legacy_triggers(schema) { trigger_problems(schema) } else { Vec::new() }
 }
 
 /// Fields named like a secret (a password, token, PIN or key, or a digest of one) that
@@ -2151,6 +2223,7 @@ mod secret_rule_tests {
 mod trigger_rule_tests {
     use super::*;
     use crate::ast::hook::{Action, Hook, State, StateMachine, Trigger, TriggerEvent};
+    use crate::ast::{Field, Model, PrimitiveType, TypeRef};
 
     fn act(text: &str) -> Action {
         crate::parser::yaml_parser::YamlAction::Simple(text.to_string()).into_action()
@@ -2167,40 +2240,86 @@ mod trigger_rule_tests {
         s
     }
 
+    fn legacy(mut s: ModuleSchema) -> ModuleSchema {
+        s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { legacy_triggers: Some(true), ..Default::default() });
+        s
+    }
+
     #[test]
-    fn every_declared_trigger_and_state_action_fails_validation_since_none_is_generated() {
-        let s = schema_with(
+    fn a_module_on_legacy_triggers_gets_a_warning_per_trigger_and_state_action_and_no_error() {
+        let s = legacy(schema_with(
             vec![
                 Trigger { event: TriggerEvent::BeforeCreate, actions: vec![act("set: placed_at = now()")], ..Default::default() },
                 Trigger { event: TriggerEvent::AfterCreate, actions: vec![act("emit: OrderPlaced(order_id: id)"), act("log(created)")], ..Default::default() },
             ],
             vec![State { name: "paid".into(), on_enter: vec![act("set: paid_at = now()")], on_exit: vec![], ..Default::default() }],
-        );
-        let p = trigger_problems(&s);
-        assert_eq!(p.len(), 3, "one per trigger and per state hook, quiet hooks pass: {p:?}");
-        assert!(p[0].contains("trigger 'before_create' with 1 action(s)") && p[0].contains("not generated"), "{p:?}");
-        assert!(p[1].contains("trigger 'after_create' with 2 action(s)"), "{p:?}");
-        assert!(p[2].contains("state 'paid' on_enter"), "{p:?}");
-        assert_eq!(validate_trigger_errors(&s).len(), 3, "validation fails on each");
-        assert!(trigger_warnings(&s).is_empty(), "a module the rule holds gets errors, not warnings");
+        ));
+        let w = trigger_warnings(&s);
+        assert_eq!(w.len(), 3, "one per trigger and per state hook, quiet hooks pass: {w:?}");
+        assert!(w[0].contains("trigger 'before_create' with 1 action(s)") && w[0].contains("not generated"), "{w:?}");
+        assert!(w[1].contains("trigger 'after_create' with 2 action(s)"), "{w:?}");
+        assert!(w[2].contains("state 'paid' on_enter"), "{w:?}");
+        assert!(trigger_problems(&s).is_empty(), "legacy modules get warnings, never errors");
+        assert!(validate_trigger_errors(&s).is_empty(), "and still validate");
     }
 
     #[test]
-    fn a_trigger_names_the_key_the_hook_file_wrote() {
+    fn a_trigger_names_the_key_the_hook_file_wrote_for_a_legacy_module() {
         let yaml: crate::parser::yaml_parser::YamlTrigger = serde_yaml::from_str("actions: [\"emit: StatusChanged(id)\"]").unwrap();
         let t = yaml.into_trigger("after_update_status");
-        let p = trigger_problems(&schema_with(vec![t], vec![]));
-        assert_eq!(p.len(), 1, "{p:?}");
-        assert!(p[0].contains("'after_update_status'"), "{p:?}");
+        let w = trigger_warnings(&legacy(schema_with(vec![t], vec![])));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("'after_update_status'"), "{w:?}");
+    }
+
+    fn generating(hook: &str, extensions: bool) -> ModuleSchema {
+        let mut s = ModuleSchema::new("test");
+        let mut order = Model::new("Order");
+        for name in ["id", "status"] {
+            order.fields.push(Field::new(name, TypeRef::Primitive(PrimitiveType::String)));
+        }
+        s.models.push(order);
+        s.rule_register.read_file("order.hook.yaml", hook);
+        let models = s.models.clone();
+        s.rule_register.bind(&models);
+        s.rule_register.check(&models);
+        s.rule_register.mark_compiled(&models, &Default::default());
+        if extensions {
+            s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { extensions: Some(true), ..Default::default() });
+        }
+        s
     }
 
     #[test]
-    fn an_exempt_module_reports_the_problems_as_warnings_and_still_resolves() {
-        let mut s = schema_with(vec![Trigger { event: TriggerEvent::AfterCreate, actions: vec![act("log(created)")], ..Default::default() }], vec![]);
-        s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig { legacy_triggers: Some(true), ..Default::default() });
-        assert!(validate_trigger_errors(&s).is_empty(), "exempt module still validates");
-        let w = trigger_warnings(&s);
-        assert!(w.len() == 1 && w[0].contains("not generated"), "{w:?}");
+    fn a_module_that_generates_triggers_fails_only_on_what_cannot_be_honoured() {
+        let ok = "name: Order\nmodel: Order\ntriggers:\n  after_create:\n    actions: [\"log(made)\"]\n";
+        assert!(trigger_problems(&generating(ok, false)).is_empty());
+        let bad = "name: Order\nmodel: Order\ntriggers:\n  after_update_nope:\n    actions: [\"log(made)\"]\n  after_create:\n    if: \"x IN (1)\"\n    actions: [\"log(made)\"]\n";
+        let p = trigger_problems(&generating(bad, true));
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert!(p[0].starts_with("order.hook.yaml") && p[0].contains("no field that `nope` spells"), "{p:?}");
+        assert!(p[1].contains("an `if:` the generator cannot compile"), "{p:?}");
+        assert_eq!(validate_trigger_errors(&generating(bad, true)).len(), 2, "validation fails on each");
+    }
+
+    #[test]
+    fn hand_methods_need_the_extension_layout_and_say_where_the_implementation_lives() {
+        let hand = "name: Order\nmodel: Order\ntriggers:\n  after_create:\n    actions: [\"trigger: refresh\", \"trigger: again\"]\n";
+        let p = trigger_problems(&generating(hand, false));
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("`after_create__refresh` and 1 more") && p[0].contains("generators: extensions: true") && p[0].contains("OrderTriggers"), "{p:?}");
+        assert!(trigger_problems(&generating(hand, true)).is_empty());
+    }
+
+    #[test]
+    fn a_moment_that_depends_on_hand_code_is_a_warning() {
+        let hook = "name: Order\nmodel: Order\nstates:\n  field: status\n  verbs: hand\n  values:\n    open:\n      initial: true\n      on_enter: [\"log(opened)\"]\n    done: {}\n  transitions:\n    finish: { from: open, to: done }\ntriggers:\n  after_finish:\n    actions: [\"log(done)\"]\n  after_login:\n    actions: [\"log(in)\"]\n";
+        let s = generating(hook, true);
+        assert!(trigger_problems(&s).is_empty(), "{:?}", trigger_problems(&s));
+        let w = trigger_warnings(&s).join("\n");
+        for needle in ["never runs on create", "`verbs: hand`", "fire_after_login"] {
+            assert!(w.contains(needle), "{needle} not in:\n{w}");
+        }
     }
 
     /// The validation errors the trigger rule raised; the bare test hook trips
@@ -2212,7 +2331,7 @@ mod trigger_rule_tests {
             .unwrap_or_default()
             .iter()
             .map(|e| e.to_string())
-            .filter(|m| m.contains("Hook 'Order'") && m.contains(" declares "))
+            .filter(|m| m.contains("order.hook.yaml:") || (m.contains("Hook 'Order'") && m.contains(" declares ")))
             .collect()
     }
 }

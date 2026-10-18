@@ -381,6 +381,8 @@ pub(super) fn build_module_schema(
     module_schema.rule_register.check(&models);
     let enums = module_schema.enums.iter().map(|e| e.name.clone()).collect();
     module_schema.rule_register.mark_compiled(&models, &enums);
+    // A trigger entry with a `schedule:` is a job of the module's scheduled-job list.
+    crate::generators::triggers::scheduled_jobs(&mut module_schema);
     // `enforced_by:` names a file under the module root, the parent of its `schema/` directory.
     if let Some(root) = schema_files
         .first()

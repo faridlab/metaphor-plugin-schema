@@ -31,6 +31,7 @@ pub mod repository_trait;
 pub mod rust;
 pub mod seeder;
 pub mod service;
+pub mod triggers;
 pub mod sql;
 pub mod state_machine;
 pub mod value_object;

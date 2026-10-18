@@ -230,6 +230,7 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         .iter()
         .filter(|e| e.status() == crate::rules::events::EventStatus::Staged)
         .map(|e| e.name.clone())
+        .chain(crate::generators::triggers::emitted_events(&module_schema).into_keys())
         .collect();
     for warning in super::events_check::unpublished_events(&consumer_root, &staged) {
         println!("  {} {warning}", "!".yellow().bold());
@@ -290,6 +291,13 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     let permission_failures = permission_report(&module_schema, &consumer_root);
     if !permission_failures.is_empty() && findings.is_empty() {
         anyhow::bail!("{} permission problem(s)", permission_failures.len());
+    }
+
+    // Hook triggers: what hand code owes the generated trait, and what it must not call inside a
+    // transaction.
+    let trigger_failures = trigger_report(&module_schema, &consumer_root);
+    if !trigger_failures.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} trigger problem(s)", trigger_failures.len());
     }
 
     // A raw write of a literal an enum column's type lacks fails at run time: a gate.
@@ -403,6 +411,39 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
     }
 
     anyhow::bail!("found {} drift reference(s)", findings.len())
+}
+
+/// Print the trigger section of the report and return the failures (each already printed).
+fn trigger_report(schema: &crate::ast::ModuleSchema, root: &Path) -> Vec<String> {
+    let register = &schema.rule_register;
+    if register.triggers.is_empty() {
+        return Vec::new();
+    }
+    if !crate::generators::triggers::active(schema) {
+        println!(
+            "  triggers: {} declared, none generated (`generators: legacy_triggers: true`); drop the flag to have the write hooks run them",
+            register.triggers.len()
+        );
+        return Vec::new();
+    }
+    let report = super::triggers_check::scan(schema, root);
+    println!(
+        "  triggers: {} entr{} on {} model(s) run in the write's transaction; {} hand method(s) of the generated `<Model>Triggers` traits to implement in src/application/triggers/*.ext.rs",
+        report.entries,
+        if report.entries == 1 { "y" } else { "ies" },
+        report.models,
+        report.hand_methods
+    );
+    for warning in crate::resolver::validator::trigger_warnings(schema) {
+        println!("  {} {warning}", "!".yellow().bold());
+    }
+    for w in &report.warnings {
+        println!("  {} {w}", "!".yellow().bold());
+    }
+    for f in &report.failures {
+        println!("  {} {f}", "✗".red().bold());
+    }
+    report.failures
 }
 
 /// Print the permission section of the report and return the failures (each already printed).

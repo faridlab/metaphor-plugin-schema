@@ -19,6 +19,8 @@ pub mod expr;
 pub mod fields;
 pub mod reader;
 pub mod rewrite;
+pub mod trigger_compile;
+pub mod triggers;
 pub mod writers;
 
 use serde::{Deserialize, Serialize};
@@ -35,6 +37,9 @@ pub struct RuleRegister {
     /// The events the module's schema files declare, in file order ([`events`]).
     #[serde(default)]
     pub events: Vec<events::DeclaredEvent>,
+    /// The hook triggers and state `on_enter` / `on_exit` lists the hook files declare ([`triggers`]).
+    #[serde(default)]
+    pub triggers: Vec<triggers::DeclaredTrigger>,
     pub warnings: Vec<RegisterWarning>,
 }
 
@@ -244,6 +249,7 @@ impl RuleRegister {
         self.rules.extend(read.rules);
         self.machines.extend(read.machines);
         self.events.extend(read.events);
+        self.triggers.extend(read.triggers);
         self.warnings.extend(read.warnings);
     }
 
@@ -292,6 +298,13 @@ impl RuleRegister {
                 Some(aggregate) => bind_target(aggregate, models),
                 None if event.target.is_empty() => None,
                 None => bind_first(&event.target, &event.alternatives, models, &event.source, &mut warnings),
+            };
+        }
+        for trigger in &mut self.triggers {
+            let source = trigger.source.clone();
+            trigger.bound_model = match &trigger.entity {
+                Some(entity) => bind_target(entity, models),
+                None => bind_first(&trigger.target, &trigger.alternatives, models, &source, &mut warnings),
             };
         }
         warnings.dedup();
@@ -372,6 +385,8 @@ impl RuleRegister {
         // Declared events are checked here, with the rules: a staged event's `if:` compiles
         // through the same compiler, which needs the module's enums.
         events::check_events(self, models, enums);
+        // Hook triggers resolve against the model and compile their actions here too.
+        triggers::check_triggers(self, models, enums);
         // A delete guard counts rows of another model of the module, so it sees them all.
         let mut module = crate::ast::ModuleSchema::new("");
         module.models = models.to_vec();
