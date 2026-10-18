@@ -17,6 +17,7 @@ pub mod events;
 pub mod graphql;
 pub mod grpc;
 pub mod handler;
+pub mod includable_relations;
 pub mod module;
 pub mod openapi;
 // TODO: pub mod permission;

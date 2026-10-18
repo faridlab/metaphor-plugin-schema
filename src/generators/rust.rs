@@ -16,6 +16,7 @@
 //! - Status checkers (is_active(), is_deleted(), etc.)
 //! - Computed properties
 
+use super::includable_relations::includable_relations;
 use super::{GenerateError, GeneratedOutput, Generator};
 use crate::ast::hook::StateMachine;
 use crate::ast::{AttributeValue, Entity, EntityMethod, EnumDef, Model, PrimitiveType, TypeRef};
@@ -1561,7 +1562,7 @@ impl RustGenerator {
         &self,
         model: &Model,
         enum_names: &std::collections::HashSet<String>,
-        collections: &std::collections::HashMap<String, String>,
+        module: &crate::ast::ModuleSchema,
         secrets: &std::collections::HashMap<String, Vec<String>>,
         output: &mut String,
     ) {
@@ -1690,65 +1691,20 @@ impl RustGenerator {
             .map(|f| f.name.clone());
 
         // To-one relations expandable via `?include=` — (relation_name, target_table,
-        // local_fk). relation_name + local_fk are response keys (camelCase); the
-        // target table comes from the target model's collection.
+        // local_fk). relation_name + local_fk are response keys (camelCase); the target table
+        // comes from the target model's collection. The webapp's `<entity>IncludableRelations`
+        // export reads the same function, so the screens offer exactly what the service accepts.
+        let relations: Vec<(String, String, String)> = includable_relations(module, model)
+            .into_iter()
+            .map(|r| (r.name, r.table, r.fk))
+            .collect();
         // The secrets of each related model, stripped from the row an `?include=`
         // hydrates (it is read raw). A cross-module `@include` names only a table, so
         // its target's secrets are not known here.
         let mut relation_secrets: Vec<(String, Vec<String>)> = Vec::new();
-        let relations: Vec<(String, String, String)> = model
-            .relations
-            .iter()
-            .filter(|r| matches!(r.relation_type, crate::ast::model::RelationType::One))
-            .filter_map(|r| {
-                let target = match &r.target {
-                    TypeRef::Custom(n) => Some(n.as_str()),
-                    TypeRef::Optional(inner) => match inner.as_ref() {
-                        TypeRef::Custom(n) => Some(n.as_str()),
-                        _ => None,
-                    },
-                    _ => None,
-                }?;
-                let table = collections.get(target)?.clone();
-                if let Some(keys) = secrets.get(target).filter(|k| !k.is_empty()) {
-                    relation_secrets.push((crate::webgen::parser::to_camel_case(&r.name), keys.clone()));
-                }
-                // Read the relation's @foreign_key locally — a bare FK name parses as
-                // `Ident`, which the shared `Relation::foreign_key()` ignores (and we
-                // don't want to widen it: that would change FK-constraint emission in
-                // migration generation). Accept String or Ident here.
-                let fk = r
-                    .attributes
-                    .iter()
-                    .find(|a| a.name == "foreign_key")
-                    .and_then(|a| a.args.first())
-                    .and_then(|(_, v)| match v {
-                        AttributeValue::String(s) | AttributeValue::Ident(s) => Some(s.clone()),
-                        _ => None,
-                    })?;
-                Some((
-                    crate::webgen::parser::to_camel_case(&r.name),
-                    table,
-                    crate::webgen::parser::to_camel_case(&fk),
-                ))
-            })
-            .collect();
-        // A key into another module's table is no relation here (its target is not a
-        // model of this module), so it declares what `?include=` may hydrate on the
-        // field itself: `@include("employee", "employee.employees")`.
-        let mut relations = relations;
-        for field in &model.fields {
-            let Some(attr) = field.attributes.iter().find(|a| a.name == "include") else { continue };
-            let text = |i: usize| match attr.args.get(i).map(|(_, v)| v) {
-                Some(AttributeValue::String(s) | AttributeValue::Ident(s)) => Some(s.clone()),
-                _ => None,
-            };
-            if let (Some(rel), Some(table)) = (text(0), text(1)) {
-                relations.push((
-                    crate::webgen::parser::to_camel_case(&rel),
-                    table,
-                    crate::webgen::parser::to_camel_case(&field.name),
-                ));
+        for r in includable_relations(module, model) {
+            if let Some(keys) = r.target.as_ref().and_then(|t| secrets.get(t)).filter(|k| !k.is_empty()) {
+                relation_secrets.push((r.name, keys.clone()));
             }
         }
 
@@ -2142,13 +2098,6 @@ impl RustGenerator {
         {
             let enum_names: std::collections::HashSet<String> =
                 schema.schema.enums.iter().map(|e| e.name.clone()).collect();
-            // entity name → DB table, so relations() can resolve a target's table.
-            let collections: std::collections::HashMap<String, String> = schema
-                .schema
-                .models
-                .iter()
-                .map(|m| (m.name.clone(), m.collection_name()))
-                .collect();
             // entity name → its secrets, so a relation strips them from the included row.
             let secrets: std::collections::HashMap<String, Vec<String>> = schema
                 .schema
@@ -2156,7 +2105,7 @@ impl RustGenerator {
                 .iter()
                 .map(|m| (m.name.clone(), secret_keys(m)))
                 .collect();
-            self.generate_entity_repo_meta_impl(model, &enum_names, &collections, &secrets, &mut output);
+            self.generate_entity_repo_meta_impl(model, &enum_names, &schema.schema, &secrets, &mut output);
         }
 
         // Generate builder struct for fluent entity construction

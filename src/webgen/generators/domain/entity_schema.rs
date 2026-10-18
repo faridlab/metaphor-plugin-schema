@@ -87,6 +87,19 @@ impl EntitySchemaGenerator {
             .collect()
     }
 
+    /// The names `?include=` accepts on `entity`, from the function that builds the Rust entity's
+    /// `relations()`. `None` when the module schema could not be loaded or does not hold the entity.
+    fn includable_relation_names(&self, entity: &EntityDefinition) -> Option<Vec<String>> {
+        let schema = self.module_schema()?;
+        let model = schema.models.iter().find(|m| m.name == entity.name)?;
+        Some(
+            crate::generators::includable_relations::includable_relations(schema, model)
+                .into_iter()
+                .map(|r| r.name)
+                .collect(),
+        )
+    }
+
     /// The fields a generic write may not change (the service refuses a new value), as the
     /// Rust entity lists them.
     fn write_protected(&self, entity: &EntityDefinition) -> Vec<String> {
@@ -211,6 +224,17 @@ impl EntitySchemaGenerator {
             let list = moved.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
             lifecycle.push_str(&format!(
                 "\n/**\n * The fields a state machine moves. Only its verbs change them: the service refuses a\n * generic write that does, so no generic edit offers them.\n */\nexport const {camel}StateFields = [{list}] as const;\n"
+            ));
+        }
+
+        // The relations the service expands for `?include=<name>`: the same list the Rust
+        // entity's `relations()` carries, from the same function. Emitted even when empty, so a
+        // reader can tell "this entity has none" from "this schema predates the export".
+        if let Some(names) = self.includable_relation_names(entity) {
+            let camel = to_camel_case(&entity.name);
+            let list = names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+            lifecycle.push_str(&format!(
+                "\n/**\n * The relations the service expands for `?include=<name>`, spelled as it reads them. It refuses any\n * other name with a 400 `invalid_query` (reason `unknown_relation`), so a screen asks for these only.\n * Empty when the entity has none.\n */\nexport const {camel}IncludableRelations = [{list}] as const;\n"
             ));
         }
 
@@ -1458,6 +1482,97 @@ mod tests {
             content.contains("export const periodWriteProtectedFields = [\"total_debits\", \"journal_count\", \"code\", \"checksum\"] as const;"),
             "{content}"
         );
+    }
+
+    /// The webapp's `<entity>IncludableRelations` and the Rust entity's `relations()` are the same
+    /// list, from the same function: a screen offers exactly the names the service accepts.
+    #[test]
+    fn the_webapp_lists_the_relations_the_service_will_expand() {
+        use crate::generators::Generator as _;
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models");
+        fs::create_dir_all(&models).unwrap();
+        let file = models.join("widget.model.yaml");
+        fs::write(
+            &file,
+            r#"models:
+  - name: Gadget
+    collection: gadgets
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+  - name: Widget
+    collection: widgets
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+      gadget_id:
+        type: uuid
+        attributes: ["@foreign_key(Gadget.id)"]
+      parent_widget:
+        type: uuid?
+        attributes: ["@foreign_key(Gadget.id)"]
+      owner_id:
+        type: uuid
+        attributes: ["@exclude_from_foreign_key_check"]
+      company_id:
+        type: uuid
+        attributes: ["@foreign_key(core.Company.id)"]
+      manager_id:
+        type: uuid?
+        attributes: ["@exclude_from_foreign_key_check", '@include("manager", "people.employees")']
+"#,
+        )
+        .unwrap();
+        let config = Config::new("test_module")
+            .with_output_dir(dir.path())
+            .with_schema_dir(Some(dir.path().to_path_buf()))
+            .with_dry_run(true);
+        let parsed = crate::webgen::parser::ModelParser::parse_file(&file).unwrap();
+        let generator = EntitySchemaGenerator::new(config, TypeMapper::new());
+        let export = |name: &str| -> Option<String> {
+            let entity = parsed.models.iter().find(|m| m.name == name).unwrap();
+            let content = generator.generate_schema_content(entity, &parsed.enums, None);
+            content
+                .split(&format!("export const {}IncludableRelations = ", to_camel_case(name)))
+                .nth(1)
+                .and_then(|rest| rest.split(" as const;").next())
+                .map(str::to_string)
+        };
+
+        // A declared relation (`@foreign_key(Gadget.id)`) and a to-one named after a key with no
+        // `_id`; a key with no relation (a logical FK into another module), and a cross-module
+        // `@foreign_key(core.Company.id)`, are not includable; `@include` declares one.
+        assert_eq!(export("Widget").unwrap(), r#"["gadget", "parentWidgetGadget", "manager"]"#);
+        // An entity with none states it, rather than leaving the export out.
+        assert_eq!(export("Gadget").unwrap(), "[]");
+
+        // The Rust entity's `relations()` carries the same names, in the same order.
+        let module = generator.module_schema().unwrap().clone();
+        let rust = crate::generators::rust::RustGenerator::new()
+            .generate(&crate::resolver::ResolvedSchema { schema: module })
+            .unwrap();
+        let entity_file = rust
+            .files
+            .get(&std::path::PathBuf::from("src/domain/entity/widget.rs"))
+            .expect("widget.rs");
+        let relations = entity_file.split("fn relations()").nth(1).expect("relations()");
+        let names: Vec<&str> = relations
+            .split_once("&[")
+            .and_then(|(_, r)| r.split_once("]\n"))
+            .map(|(l, _)| l)
+            .unwrap_or("")
+            .split("(\"")
+            .skip(1)
+            .filter_map(|t| t.split('"').next())
+            .collect();
+        assert_eq!(
+            format!("[{}]", names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ")),
+            export("Widget").unwrap()
+        );
+        assert!(!entity_file.contains("\"owner\"") && !entity_file.contains("\"company\""));
     }
 
     #[test]
