@@ -5,27 +5,28 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.39.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 83s
+- Generation: 2s; whole run: 104s
 
 ## Summary
 
 | Area | PASS | FAIL | UNSUPPORTED |
 |---|---|---|---|
-| A. Generic routes | 96 | 0 | 1 |
+| A. Generic routes | 123 | 0 | 0 |
 | B. Validation | 42 | 0 | 0 |
 | C. Custom validation | 15 | 0 | 0 |
-| D. Hooks and events | 75 | 0 | 0 |
+| D. Hooks and events | 79 | 0 | 0 |
 | E. State machine | 20 | 0 | 0 |
 | F. Extension | 66 | 0 | 0 |
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 35 | 0 | 0 |
 | I. Permissions | 142 | 0 | 0 |
-| **Total** | **527** | **0** | **1** |
+| **Total** | **558** | **0** | **0** |
 
 ## Matrix
 
 | Area | Feature | Probe | Result |
 |---|---|---|---|
+| A | Audit trail | the composed backbone-auditlog migrations apply before the module's own | PASS |
 | A | Migrations | every generated up-migration applies to an empty database | PASS |
 | A | Create | POST /projects answers 201 with the stored record | PASS |
 | A | Get | GET /projects/:id answers 200 with the record | PASS |
@@ -116,13 +117,38 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A | Count | GET /projects/count honours filters | PASS |
 | A | Aggregate | GET /projects/aggregate?group_by=kind&sum=budget groups and sums | PASS |
 | A | History | GET /projects/:id/history on a model that is not audited answers 501 (no history provider) | PASS |
-| A | History | row history of an `audited: true` model | UNSUPPORTED |
 | A | Upsert | POST /projects/upsert answers 501 | PASS |
 | A | Body errors | POST with an unknown key answers 422 unknown_field on that path | PASS |
 | A | Body errors | PATCH with an unknown key answers 422 unknown_field | PASS |
 | A | Body errors | a malformed JSON body answers 400 malformed_body | PASS |
 | A | Body errors | POST with a wrong type answers 422 with the field's path | PASS |
 | A | Body errors | PATCH with a wrong type answers 422 with the field's path | PASS |
+| A | Audit trail | creating an audited row answers 201 | PASS |
+| A | Audit trail | the create records an insert row with the full image, the actor and the request's correlation id | PASS |
+| A | Audit trail | the trail row inherits the audited row's org unit | PASS |
+| A | Audit trail | the update records an update row naming only the fields that changed, with its own correlation id | PASS |
+| A | History | GET /ledgers/:id/history with the auditlog provider lists the trail newest first with actor and correlation | PASS |
+| A | History | a table without the capture trigger answers audited false, not an empty timeline | PASS |
+| A | History | the nested history endpoint lists the trail newest first, numbered from the oldest | PASS |
+| A | History | as_of between the create and the update reconstructs the row's earlier state | PASS |
+| A | History | as_of after the update reconstructs the later state | PASS |
+| A | History | as_of before the first captured event answers 404 history_before_subject | PASS |
+| A | Audit trail | another company's token reads nothing from the nested history of a ledger it cannot see | PASS |
+| A | Audit trail | another company's token cannot reconstruct the row either | PASS |
+| A | Audit trail | another company's token reads nothing through the provider route | PASS |
+| A | Audit trail | the nested history route asks for ledger:read | PASS |
+| A | Audit trail | a create the write guard refuses answers 422 over_limit | PASS |
+| A | Audit trail | an update the write guard refuses answers 422 over_limit | PASS |
+| A | Audit trail | an update the field rule refuses answers 422 | PASS |
+| A | Audit trail | an update the permission guard refuses answers 403 | PASS |
+| A | Audit trail | an update from another company is refused by the fence | PASS |
+| A | Audit trail | none of the refused writes left a trail row | PASS |
+| A | Audit trail | a write that rolls back takes its trail row with it (same-transaction truth) | PASS |
+| A | Audit trail | the trail is append-only, even for the owner | PASS |
+| A | Audit trail | a soft delete records an update row and a purge records a delete row with the full image | PASS |
+| A | History | a purged subject still resolves its history, newest entry a delete | PASS |
+| A | History | as_of after the purge answers 404 subject_deleted_before_as_of | PASS |
+| A | History | as_of an earlier instant still reconstructs the row after it was purged | PASS |
 | B | Field attributes | @required refuses a blank name | PASS |
 | B | Field attributes | @length(min=3) refuses a short name | PASS |
 | B | Field attributes | @length(max=12) refuses a long code | PASS |
@@ -218,6 +244,10 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | D | Relay | a failing publish leaves the row pending, an exhausted one makes it dead | PASS |
 | D | Relay | re-emitting a dead row delivers it again | PASS |
 | D | Relay | a consumer's inbox::once dedupes a replay of the same event | PASS |
+| D | Notification delivery | the relay hands the NotificationRequested rows a trigger staged to the registered delivery, once each, under the request's correlation id | PASS |
+| D | Notification delivery | a replayed row is deduped by the inbox: the delivery is not called again | PASS |
+| D | Notification delivery | a Retry leaves the request pending, and the limit dead-letters it with the reason | PASS |
+| D | Notification delivery | a Reject dead-letters the request at once with the delivery's reason | PASS |
 | D | Hook triggers | a before_create `set:` is persisted (sla, handled_by) | PASS |
 | D | Hook triggers | a trigger keyed by a label with `timing: before_create` and a `condition:` runs after the one before it, and only when it holds | PASS |
 | D | Hook triggers | after_create stages what its compiled actions say: the emitted event and a request per notify and send_email | PASS |
@@ -557,6 +587,5 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 ## Failures (0)
 
-## Unsupported (1)
+## Unsupported (0)
 
-- **A / History / row history of an `audited: true` model** — needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither

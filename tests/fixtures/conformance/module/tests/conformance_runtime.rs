@@ -1885,6 +1885,76 @@ async fn area_d_events(c: &Ctx) {
     let replay = inbox::once(&c.owner, "conformance", "conf-consumer", id).await;
     r.check("D", "Relay", "a consumer's inbox::once dedupes a replay of the same event", first.as_ref().is_ok_and(|b| *b) && replay.as_ref().is_ok_and(|b| !*b), "inbox::once twice for one event id", "true then false", &format!("{first:?} {replay:?}"), "backbone-outbox/src/inbox.rs");
 
+    // 11. the notification requests the triggers staged reach a registered delivery, once each
+    use backbone_core::notification::{DeliveryOutcome, NotificationDispatcher, RecordingDelivery, RetryPolicy};
+    const NOTIFY: &str = "backbone-core/src/notification.rs (NotificationDispatcher, ADR-0034)";
+    let company = c.org.company_a;
+    let stage_incident = |corr: &'static str| {
+        let (app, ta, body) = (app.clone(), ta.to_string(), json!({ "companyId": company, "title": uniq("NTF"), "severity": 2 }));
+        async move { app.send("POST", "/incidents", Some(&ta), Some(body.to_string()), &[("x-correlation-id", corr)]).await }
+    };
+    let delivery = RecordingDelivery::new();
+    let dispatcher = std::sync::Arc::new(NotificationDispatcher::new(c.owner.clone(), "conformance", std::sync::Arc::new(delivery.clone())).with_retry(RetryPolicy::immediate(2)));
+    let made = stage_incident("notif-corr").await;
+    let incident = made.id();
+    let marked = relay::drain_once(&c.owner, "conformance", 1000, dispatcher.sink()).await;
+    let got = delivery.received();
+    let email = got.iter().find(|n| n.request.channel == "email");
+    let notify = got.iter().find(|n| n.request.channel == "notify");
+    r.check(
+        "D",
+        "Notification delivery",
+        "the relay hands the NotificationRequested rows a trigger staged to the registered delivery, once each, under the request's correlation id",
+        made.status == 201
+            && marked.is_ok()
+            && got.len() == 2
+            && email.is_some_and(|n| n.request.template.as_deref() == Some("incident_opened") && n.request.trigger == "Incident.after_create" && n.aggregate_id == incident && n.correlation_id.as_deref() == Some("notif-corr") && n.attempt == 1)
+            && notify.is_some_and(|n| n.request.body.as_deref().is_some_and(|b| b.starts_with("Incident ")) && n.correlation_id.as_deref() == Some("notif-corr"))
+            && staged(c, &incident).await.iter().all(|x| x.published),
+        &made.request,
+        "two requests (email, notify) delivered with correlation notif-corr; every row of the incident published",
+        &format!("{marked:?} {:?}", got.iter().map(|n| (n.request.channel.clone(), n.correlation_id.clone())).collect::<Vec<_>>()),
+        NOTIFY,
+    );
+    sqlx::query("UPDATE conformance.outbox_events SET published_at = NULL WHERE aggregate_id = $1").bind(&incident).execute(&c.owner).await.unwrap();
+    let replayed = relay::drain_once(&c.owner, "conformance", 1000, dispatcher.sink()).await;
+    r.check("D", "Notification delivery", "a replayed row is deduped by the inbox: the delivery is not called again", replayed.is_ok() && delivery.calls() == 2, "published_at cleared, relay drained again", "no further delivery call (two in all)", &format!("{replayed:?}, {} calls", delivery.calls()), NOTIFY);
+
+    let flaky = RecordingDelivery::always(DeliveryOutcome::Retry("mail provider busy".into()));
+    let retrying = std::sync::Arc::new(NotificationDispatcher::new(c.owner.clone(), "conformance", std::sync::Arc::new(flaky.clone())).with_retry(RetryPolicy::immediate(2)));
+    let doomed = stage_incident("notif-retry").await.id();
+    relay::drain_once(&c.owner, "conformance", 1000, retrying.sink()).await.unwrap();
+    let pending_after_first = !staged(c, &doomed).await.iter().filter(|x| x.event_type == "NotificationRequested").all(|x| x.published) && outbox::dead_count(&c.owner, "conformance").await.unwrap() == 0;
+    relay::drain_once(&c.owner, "conformance", 1000, retrying.sink()).await.unwrap();
+    let dead = relay::list_dead(&c.owner, "conformance", 10).await.unwrap();
+    r.check(
+        "D",
+        "Notification delivery",
+        "a Retry leaves the request pending, and the limit dead-letters it with the reason",
+        pending_after_first && dead.len() == 2 && dead.iter().all(|d| d.failure_reason.as_deref().is_some_and(|m| m.contains("gave up after 2 attempts") && m.contains("mail provider busy"))) && flaky.calls() == 4,
+        "a delivery answering Retry, two relay passes",
+        "pending after pass one; both requests dead after pass two with the reason; four delivery calls",
+        &format!("pending-after-first {pending_after_first}; {} dead; {} calls", dead.len(), flaky.calls()),
+        NOTIFY,
+    );
+    relay::reemit_all(&c.owner, "conformance").await.unwrap();
+    let refusing = RecordingDelivery::always(DeliveryOutcome::Reject("no template named `incident_opened`".into()));
+    let rejecting = std::sync::Arc::new(NotificationDispatcher::new(c.owner.clone(), "conformance", std::sync::Arc::new(refusing.clone())));
+    relay::drain_once(&c.owner, "conformance", 1000, rejecting.sink()).await.unwrap();
+    let dead = relay::list_dead(&c.owner, "conformance", 10).await.unwrap();
+    r.check(
+        "D",
+        "Notification delivery",
+        "a Reject dead-letters the request at once with the delivery's reason",
+        dead.len() == 2 && dead.iter().all(|d| d.failure_reason.as_deref() == Some("no template named `incident_opened`")) && refusing.calls() == 2,
+        "a delivery answering Reject",
+        "both requests dead with the reason, each offered once",
+        &format!("{} dead; {} calls", dead.len(), refusing.calls()),
+        NOTIFY,
+    );
+    // Leave the outbox as the probes after this one found it: nothing dead, nothing pending.
+    relay::reemit_all(&c.owner, "conformance").await.unwrap();
+    relay::drain_once(&c.owner, "conformance", 1000, |_rec| async { Ok(()) }).await.unwrap();
 }
 
 // =============================================================================
