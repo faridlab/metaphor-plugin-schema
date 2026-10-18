@@ -7,6 +7,31 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- The webapp entity schema (`<Entity>.schema.ts`) exports `<entity>IncludableRelations`: the names the
+  service expands for `?include=<name>`, as `export const <entity>IncludableRelations = ["project",
+  "manager"] as const;`, spelled exactly as the service reads them (camelCase). The service refuses any other
+  name with a `400 invalid_query` (reason `unknown_relation`), so a screen that configures its includes by
+  hand drifts out of step; it can read this list instead. The list comes from the same function that builds
+  the Rust entity's `relations()` (`generators::includable_relations`), so the two cannot disagree. An entity
+  with no includable relation exports `[]`, which tells it apart from a schema generated before this release
+  (no export at all). A to-one relation is includable when its target is a model of the module and it names
+  its key (a same-module `@foreign_key(Entity.id)` field derives one, named after the field without `_id`,
+  or `<field>_<entity>` when the field has no `_id`); a key into another module is includable only when the
+  field says `@include("name", "schema.table")`.
+- Conformance area A probes the order of a list (11 probes, 569 PASS / 0 FAIL / 0 UNSUPPORTED in all): an
+  unsorted list is ordered by `id`; offset paging and a keyset walk return every row once, unsorted and
+  sorted by a key that ties, filtered, and (offset only) over the trash; updating every row between page
+  fetches neither repeats nor skips a row. They need backbone-orm with the total order and the enum-cursor
+  fix, released after 3.17. The trash route offers offset paging only: it hands out no cursor.
+
+### Changed
+
+- A same-module relation that names no `@foreign_key` no longer contributes a `relation_secret_fields` arm:
+  it was never in `relations()`, so the arm could not be reached. The generated entity otherwise reads the
+  same.
+
 ## [0.40.0] - 2026-10-18
 
 ### Fixed
