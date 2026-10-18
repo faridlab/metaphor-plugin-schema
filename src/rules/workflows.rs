@@ -441,7 +441,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// A path: `context.a.b`, `event.x`, `result[0].id`, a bare name a step writes, or `now`.
-    fn path(&mut self, e: &Expression, place: Place) -> Result<J, String> {
+    fn path(&mut self, e: &Expression, _place: Place) -> Result<J, String> {
         let (root, segs) = flatten(e).ok_or_else(|| match context_root(e) {
             Some(c) => format!("`${c}` is not available in a workflow expression"),
             None => "this is not a path the engine can read".to_string(),
@@ -459,12 +459,8 @@ impl<'a> Compiler<'a> {
             "context" | "result" | "error" | "config" | "steps" => {
                 Ok(json!({ "path": { "root": root, "path": json_segs(&segs) } }))
             }
-            "event" => {
-                if place == Place::Plain {
-                    return Err("`event` is only readable in `extract`, a wait's condition and its `on_event` outcome".into());
-                }
-                Ok(json!({ "path": { "root": "event", "path": json_segs(&segs) } }))
-            }
+            // The payload of the latest event: the start event until a wait receives another.
+            "event" => Ok(json!({ "path": { "root": "event", "path": json_segs(&segs) } })),
             name if self.written.contains(name) => {
                 let mut all = vec![Seg::Key(name.to_string())];
                 all.extend(segs);
@@ -1099,39 +1095,28 @@ impl<'a> Compiler<'a> {
         }))
     }
 
-    /// The entity must have a machine with that verb, on an enum state field.
+    /// The entity must have a machine with that verb, on an enum state field, whose verbs the
+    /// generator mounts (`verbs: generated`): a machine with hand-written verbs has no generated
+    /// path to go through, and moving its state field directly would skip what the verb does.
     fn check_transition(&mut self, at: &str, entity: &str, verb: &str) {
         let Some(model) = self.model(entity) else {
-            self.problem(
-                at,
-                format!("the entity `{entity}` is not a model of this module"),
-            );
+            self.problem(at, format!("the entity `{entity}` is not a model of this module"));
             return;
         };
-        let hook = self
-            .schema
-            .hooks
-            .iter()
-            .find(|h| h.model_ref == entity && h.state_machine.is_some());
-        let Some(sm) = hook.and_then(|h| h.state_machine.as_ref()) else {
-            self.problem(
-                at,
-                format!("`{entity}` has no state machine, so `{verb}` is not a transition"),
-            );
+        let Some(sm) = self.schema.hook_for(entity).and_then(|h| h.state_machine.as_ref()) else {
+            self.problem(at, format!("`{entity}` has no state machine, so `{verb}` is not a transition"));
             return;
         };
         if !sm.transitions.iter().any(|t| t.name == verb) {
             let known: Vec<&str> = sm.transitions.iter().map(|t| t.name.as_str()).collect();
+            self.problem(at, format!("`{entity}`'s machine has no transition `{verb}` (it has {})", known.join(", ")));
+        } else if !crate::rules::compile::state_field_is_enum(model, &sm.field) {
+            self.problem(at, format!("the state field `{}` of `{entity}` is not an enum, so no transition route is generated for it", sm.field));
+        } else if !crate::rules::compile::mounts_generated_verbs(self.schema, model) {
             self.problem(
                 at,
-                format!(
-                    "`{entity}`'s machine has no transition `{verb}` (it has {})",
-                    known.join(", ")
-                ),
+                format!("`{entity}`'s machine does not declare `verbs: generated`, so `{verb}` is a hand-written verb: write the step as a bespoke verb that calls it"),
             );
-        }
-        if !crate::rules::compile::state_field_is_enum(model, &sm.field) {
-            self.problem(at, format!("the state field `{}` of `{entity}` is not an enum, so no transition route is generated for it", sm.field));
         }
     }
 
@@ -1150,7 +1135,8 @@ impl<'a> Compiler<'a> {
                 continue;
             };
             self.next_target(at, &next);
-            let when = match (get(b, "if").and_then(Y::as_str), get(b, "else")) {
+            // `else:` is written with no value as often as with `true`: its presence is the branch.
+            let when = match (get(b, "if").and_then(Y::as_str), b.get("else")) {
                 (Some(c), _) => Some(self.expr(&format!("{at}, if"), c, Place::Plain)),
                 (None, Some(_)) => {
                     has_else = true;
@@ -1537,9 +1523,8 @@ pub fn transition_target(
     verb: &str,
 ) -> Option<(String, Option<String>, String)> {
     let hook = schema
-        .hooks
-        .iter()
-        .find(|h| h.model_ref == entity && h.state_machine.is_some())?;
+        .hook_for(entity)
+        .filter(|h| h.state_machine.is_some())?;
     let sm = hook.state_machine.as_ref()?;
     let t = sm.transitions.iter().find(|t| t.name == verb)?;
     let to = if t.to == crate::ast::NULL_STATE {
@@ -1599,6 +1584,12 @@ pub(crate) mod test_support {
             .push(Field::new("status", TypeRef::Custom("TicketStatus".into())));
         s.models.push(ticket);
         s.models.push(model("Account", &["name"]));
+        s.rule_register.read_file(
+            "ticket.hook.yaml",
+            "name: Ticket\nmodel: Ticket\nstates:\n  field: status\n  verbs: generated\n  values:\n    open: { initial: true }\n    closed: { final: true }\n  transitions:\n    close: { from: open, to: closed }\n",
+        );
+        let models = s.models.clone();
+        s.rule_register.bind(&models);
         let mut hook = Hook::new("ticket", "Ticket");
         hook.state_machine = Some(StateMachine {
             field: "status".into(),
@@ -1737,6 +1728,30 @@ mod tests {
         assert_eq!(c.emits, vec!["TicketClosed".to_string()]);
         assert_eq!(c.required_methods(), 1);
         assert!(c.entities.contains("Ticket") && c.entities.contains("Account"));
+    }
+
+    #[test]
+    fn an_else_with_no_value_is_an_else_and_event_reads_the_latest_event_in_any_step() {
+        let yaml = BASE.replace(
+            "  - name: page\n    type: action\n    action: notify_on_call\n    params: { severity: high }\n    on_success: { next: close }\n",
+            "  - name: page\n    type: condition\n    conditions:\n      - if: \"event.severity == 'high' && event.who != null\"\n        next: close\n      - else:\n        next: close\n",
+        );
+        let c = compiled(&yaml);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.spec["steps"][2]["branches"][1].get("when"), None, "the else branch has no condition");
+        assert_eq!(c.spec["steps"][2]["branches"][0]["when"]["bin"]["l"]["bin"]["l"]["path"]["root"], "event");
+    }
+
+    #[test]
+    fn a_transition_of_a_machine_with_hand_written_verbs_is_refused() {
+        let mut s = schema_with(BASE);
+        s.rule_register.machines.iter_mut().for_each(|m| m.verbs = Some("hand".into()));
+        let c = compile(&s, &s.workflows[0]);
+        assert!(
+            c.problems.iter().any(|p| p.contains("step `close`") && p.contains("`verbs: generated`") && p.contains("hand-written verb")),
+            "{:?}",
+            c.problems
+        );
     }
 
     #[test]
@@ -1892,7 +1907,7 @@ mod tests {
                 "not part of the workflow expression set",
             ),
             ("$actor.id == 1", "not available"),
-            ("event.a == 1", "only readable in"),
+            ("context.a +", "the expression ends too early"),
         ] {
             let yaml = BASE.replace(
                 "params: { severity: high }",

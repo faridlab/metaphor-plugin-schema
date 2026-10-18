@@ -730,10 +730,7 @@ fn transition_code(schema: &ModuleSchema, entity: &str, verb: &str, step: &str) 
         writeln!(out, "            {step:?} => Err(ServiceError::Internal(\"`{entity}` has no transition `{verb}`\".into())),").unwrap();
         return out;
     };
-    let hook = schema
-        .hooks
-        .iter()
-        .find(|h| h.model_ref == entity && h.state_machine.is_some());
+    let hook = schema.hook_for(entity).filter(|h| h.state_machine.is_some());
     let nullable = hook
         .and_then(|h| h.state_machine.as_ref())
         .is_some_and(|sm| sm.is_nullable());
