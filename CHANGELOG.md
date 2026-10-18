@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-18
+
 ### Fixed
 
 - The nested history route of an `audited: true` model (`create_<model>_history_route`, ADR-0025) read the
