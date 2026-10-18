@@ -765,16 +765,44 @@ events:
     payload: [order_id, company_id, confirmed_at]
 ```
 
-**No triggers.** A hook declares no `triggers:` and no `on_enter` / `on_exit`
-actions on its states: nothing is generated from them, so `schema validate`
-fails on them (a module that sets `generators: legacy_triggers: true` sees
-warnings instead). What a trigger would have done belongs in the service: a verb,
-or a `ServiceLifecycle` hook for a value set before the row is written.
+**Triggers run in the write's transaction** (ADR-0034). A hook's `triggers:` and a state's
+`on_enter` / `on_exit` lists are generated into the model's write hooks. A key is
+`before_` or `after_` with `create`, `update` or `delete`; `after_update_<field>[_<value>]`
+(the field changed, to that value when one is named); `after_<verb>` of the model's state
+machine; a free key with `timing:` (the event) or `schedule:` (a job); `entity:` binds an entry
+to another model of the file; `if:` (alias `condition:`) guards it.
 
-**Events are a contract.** `events:` names what the module publishes, with when
-and what payload. Nothing is generated from it; the service stages each event in
-its write's transaction. `schema doctor` reports a declared event no hand-written
-source names.
+```yaml
+triggers:
+  before_create:
+    actions:
+      - "set: sla = 'standard'"                      # fills the row before it is stored
+  after_update_status:
+    if: "status != $old.status"
+    actions:
+      - "log(ticket.moved, { id: id })"              # a line carrying the correlation id
+      - "emit: TicketMoved(ticket_id: id)"           # the declared event, staged in the transaction
+      - "send_email(moved, owner_email)"             # a NotificationRequested outbox row
+      - "trigger: refresh_counters"                  # anything else: a required trait method
+```
+
+What compiles runs (`emit:`, `log`, `set:` / `increment:` before the write, `send_email`, `notify`,
+`if: cond { action }`); everything else becomes a method of the generated
+`<Model>Triggers` trait with no default body, implemented as `<Model>TriggersImpl` in
+`<model>_triggers.ext.rs` (so the module needs `generators: extensions: true`). A trigger that fails
+rolls the write back with everything it staged. `schema rules` shows what each trigger does and
+`schema doctor` what hand code owes. A module that sets `generators: legacy_triggers: true` keeps
+the old behaviour: nothing is generated and `schema validate` warns.
+
+**Events are a contract.** `events:` names what the module publishes, with when and what payload,
+and generates a typed payload per event. An event with `on:` is staged by the model's write hooks; one a
+trigger `emit:`s is staged by that trigger; the service stages any other by hand, in its write's
+transaction. `schema doctor` reports a declared event nothing stages.
+
+**Public reference data.** A model declares `public: true` (the reads) or `public: [read, ...]` to
+serve those generic actions without a permission or a login where the host mounts the module's
+`public_routes()` outside its authentication layer; `public_scoped: true` acknowledges a fenced
+model (ADR-0033, amendment).
 
 Both the rich map-based form shown above and the canonical list/sequence
 authoring form are accepted everywhere `*.hook.yaml` is consumed. The webgen
