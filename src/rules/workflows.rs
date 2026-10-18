@@ -858,11 +858,19 @@ impl<'a> Compiler<'a> {
 
     fn failure(&mut self, at: &str, f: &Y) -> J {
         let at = format!("{at}, on_failure");
-        self.unsupported_keys(&at, f, &["next", "retry", "backoff", "on_exhausted"]);
+        self.unsupported_keys(&at, f, &["next", "set", "retry", "backoff", "on_exhausted"]);
         let mut out = json!({});
         if let Some(n) = text(f, "next") {
             self.next_target(&at, &n);
             out["next"] = J::String(n);
+        }
+        if let Some(m) = get(f, "set") {
+            let mut set = Vec::new();
+            for (k, v) in entries(m) {
+                let inner = self.tpl(&at, v, Place::Plain);
+                set.push((k, inner));
+            }
+            out["set"] = Self::pairs(set);
         }
         if let Some(r) = get(f, "retry").and_then(Y::as_u64) {
             let backoff = text(f, "backoff");
@@ -1752,6 +1760,18 @@ mod tests {
             "{:?}",
             c.problems
         );
+    }
+
+    #[test]
+    fn a_failure_branch_can_set_context_keys() {
+        let yaml = BASE.replace(
+            "    params: { severity: high }\n    on_success: { next: close }",
+            "    params: { severity: high }\n    on_success: { next: close }\n    on_failure:\n      set: { paged: false }\n      next: close",
+        );
+        let c = compiled(&yaml);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.spec["steps"][2]["on_failure"]["set"][0][0], "paged");
+        assert_eq!(c.spec["steps"][2]["on_failure"]["next"], "close");
     }
 
     #[test]
