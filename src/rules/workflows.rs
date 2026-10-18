@@ -853,7 +853,7 @@ impl<'a> Compiler<'a> {
         }
         if let Some(t) = get(s, "timeout").and_then(Y::as_str) {
             match parse_duration(t) {
-                Some(secs) => out["timeout"] = J::from(secs),
+                Some(secs) => out["call_timeout"] = J::from(secs),
                 None => self.problem(&at, format!("`timeout: {t}` is not a duration")),
             }
         }
@@ -1737,6 +1737,16 @@ mod tests {
         assert_eq!(c.emits, vec!["TicketClosed".to_string()]);
         assert_eq!(c.required_methods(), 1);
         assert!(c.entities.contains("Ticket") && c.entities.contains("Account"));
+    }
+
+    #[test]
+    fn a_step_timeout_bounds_its_hand_call_and_a_waits_timeout_stays_part_of_the_wait() {
+        let c = compiled(&BASE.replace("params: { severity: high }", "params: { severity: high }\n    timeout: 30s"));
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.spec["steps"][2]["call_timeout"], 30);
+        assert!(c.spec["steps"][2].get("timeout").is_none(), "the step's own `timeout` key is never the hand call's");
+        assert_eq!(c.spec["steps"][1]["timeout"], serde_json::json!({ "secs": 900 }), "the wait keeps its own");
+        assert!(c.spec["steps"][1].get("call_timeout").is_none());
     }
 
     #[test]
