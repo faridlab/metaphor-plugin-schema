@@ -165,6 +165,13 @@ the doctor names a missing extension file or method and a documented saga naming
 exist, that the register labels `WORKFLOW RUNS`, `WORKFLOW DOCUMENTS` and `WORKFLOW DOCUMENTED`, and that
 the build refuses an implementation lacking a required method.
 
+The module is built with `backbone-outbox`'s `multi_tenant` feature, so its outbox is fenced by org unit as
+serpa's is, and (because the fixture declares `org_fence: strict`) so are the workflow tables. The probes assert
+that every row the engine stages (`emit_event`, `send_email`, a terminal's `emit`, a compensation's emit, a
+branch the sweep resumed) is under the org unit of the event that started the instance, that the instance and
+its step rows carry it, that an event of the same company under another unit does not resume the instance, and
+that a scope with no unit or another unit cannot read it.
+
 ## What it cannot cover
 
 - Row history of an `audited: true` model: the capture trigger and the history provider come

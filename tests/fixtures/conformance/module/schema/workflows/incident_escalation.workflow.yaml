@@ -144,6 +144,10 @@ steps:
     status: completed
     result:
       outcome: "{{ context.outcome }}"
+    emit:
+      event: IncidentEscalationClosed
+      data:
+        incident_id: "{{ context.incident_id }}"
 
   - name: missing
     type: terminal

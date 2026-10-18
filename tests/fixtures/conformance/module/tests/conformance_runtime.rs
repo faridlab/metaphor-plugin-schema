@@ -37,6 +37,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use backbone_core::workflow::Tenant;
 use backbone_module_skeleton::ConformanceModule;
 
 const SECRET: &[u8] = b"conformance-signing-secret";
@@ -1502,8 +1503,8 @@ async fn area_f(c: &Ctx) {
 
 /// One staged outbox row of an aggregate, as the engine's relay would hand it to the engine.
 async fn outbox_record(c: &Ctx, aggregate_id: &str, event_type: &str) -> Option<backbone_core::write_hooks::OutboxRecord> {
-    let row: Option<(Uuid, String, String, String, Uuid, Value, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, i32)> = sqlx::query_as(
-        "SELECT id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version \
+    let row: Option<(Uuid, String, String, String, Uuid, Value, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, i32, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version, org_unit_id \
          FROM conformance.outbox_events WHERE aggregate_id = $1 AND event_type = $2 ORDER BY created_at DESC LIMIT 1",
     )
     .bind(aggregate_id)
@@ -1511,15 +1512,16 @@ async fn outbox_record(c: &Ctx, aggregate_id: &str, event_type: &str) -> Option<
     .fetch_optional(&c.owner)
     .await
     .unwrap();
-    row.map(|(id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version)| {
-        backbone_core::write_hooks::OutboxRecord { id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version }
+    row.map(|(id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version, org_unit_id)| {
+        backbone_core::write_hooks::OutboxRecord { id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version, org_unit_id }
     })
 }
 
-/// A request event for the engine, as another module's publisher would stage it.
+/// A request event for the engine, as another module's publisher would stage it: at the company's own
+/// org node, the unit a request scoped to the company acts at (the relay reads it back from the outbox).
 fn request_event(kind: &str, company: Uuid, payload: Value, correlation: &str) -> backbone_core::write_hooks::OutboxRecord {
     let aggregate = payload["incident_id"].as_str().unwrap_or("-").to_string();
-    backbone_core::write_hooks::OutboxRecord::new(kind, "Incident", aggregate, company, payload, chrono::Utc::now()).with_correlation_id(correlation)
+    backbone_core::write_hooks::OutboxRecord::new(kind, "Incident", aggregate, company, payload, chrono::Utc::now()).with_correlation_id(correlation).with_org_unit_id(company)
 }
 
 #[derive(Debug, Clone)]
@@ -1679,7 +1681,7 @@ async fn area_f_workflows(c: &Ctx) {
         let follow_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM conformance.incidents WHERE title = $1").bind(&boom_title).fetch_optional(&c.owner).await.unwrap();
         match follow_id { Some(id) => kinds(&staged(c, &id.to_string()).await).contains(&"IncidentDeleted"), None => false }
     }, "SELECT the follow-up and its events", "metadata.deleted_at set; IncidentDeleted staged; the log shows compensate:retire_followup", &format!("{cs:?}"), WF);
-    engine.compensate(company, cinst.id).await.unwrap();
+    engine.compensate(Tenant::unit(company, company), cinst.id).await.unwrap();
     let cs_again = steps_of(c, cinst.id).await;
     r.check("F", "Workflow engine", "compensation is idempotent: running it again repeats nothing and changes nothing", cs_again == cs && instance_of(c, "IncidentChecklist", cstart.id).await.unwrap().status == "compensated", "engine.compensate again", "the step log is unchanged", &format!("{} -> {} rows", cs.len(), cs_again.len()), WF);
 
@@ -1720,8 +1722,8 @@ async fn area_f_workflows(c: &Ctx) {
     let b_report = engine.on_event(&b_event).await.unwrap();
     let hstill = instance_of(c, "IncidentEscalation", hstart.id).await.unwrap();
     r.check("F", "Workflow engine", "an event of company B for company A's key never resumes company A's instance", b_report.resumed.is_empty() && hstill.status == "waiting", "deliver IncidentAcknowledged under company B with A's incident id", "A's instance still waiting", &format!("{:?} {}", b_report.resumed, hstill.status), WF);
-    let seen_by_b = engine.describe(c.org.company_b, hinst.id).await.unwrap();
-    let seen_by_a = engine.describe(company, hinst.id).await.unwrap();
+    let seen_by_b = engine.describe(Tenant::unit(c.org.company_b, c.org.company_b), hinst.id).await.unwrap();
+    let seen_by_a = engine.describe(Tenant::unit(company, company), hinst.id).await.unwrap();
     r.check("F", "Workflow engine", "another company's scope cannot read the instance or its step log; its own company can", seen_by_b.is_none() && seen_by_a.as_ref().is_some_and(|(i, s)| i.status == "waiting" && !s.is_empty()), "describe the instance under company B and under company A", "none; found", &format!("{:?} / {:?}", seen_by_b.as_ref().map(|(i, _)| i.status.clone()), seen_by_a.as_ref().map(|(i, _)| i.status.clone())), WF);
     let unscoped: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_instances").fetch_one(&c.pool).await.unwrap();
     let steps_unscoped: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_steps").fetch_one(&c.pool).await.unwrap();
@@ -1731,6 +1733,53 @@ async fn area_f_workflows(c: &Ctx) {
     r.check("F", "Workflow engine", "the sweep still serves every company: company A's due wait runs under company A's scope", a_sweep.timed_out.contains(&hinst.id) && instance_of(c, "IncidentEscalation", hstart.id).await.unwrap().status == "completed", "force A's wait due and sweep", "timed out and completed", &format!("{:?}", a_sweep.timed_out), WF);
     let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_instances WHERE company_id <> $1 AND workflow = 'IncidentEscalation'").bind(company).fetch_one(&c.owner).await.unwrap();
     r.check("F", "Workflow engine", "every instance carries its event's company", owned == 0, "SELECT instances of another company", "0", &owned.to_string(), WF);
+
+    // 8b. The org fence (ADR-0029): the engine acts under the org unit of the event that started an instance,
+    // so what it stages lands under that unit on an outbox fenced by it, and an event of another unit is not
+    // the instance's.
+    let engine_rows: Vec<(String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT event_type, org_unit_id FROM conformance.outbox_events WHERE aggregate_type IN ('IncidentEscalation', 'IncidentChecklist') ORDER BY event_type",
+    )
+    .fetch_all(&c.owner)
+    .await
+    .unwrap();
+    let staged_kinds: Vec<&str> = engine_rows.iter().map(|r| r.0.as_str()).collect();
+    for (kind, what) in [
+        ("IncidentEscalationHandled", "`emit_event`, also on the branch the sweep resumed"),
+        ("NotificationRequested", "`send_email`"),
+        ("IncidentEscalationClosed", "a terminal step's `emit`"),
+        ("IncidentChecklistRetired", "a compensation step's `emit_event`"),
+    ] {
+        let mine: Vec<&(String, Option<Uuid>)> = engine_rows.iter().filter(|r| r.0 == kind).collect();
+        r.check("F", "Workflow engine", &format!("{what} stages its row under the org unit of the event that started the instance, on an outbox fenced by org unit"), !mine.is_empty() && mine.iter().all(|r| r.1 == Some(company)), "SELECT event_type, org_unit_id of the rows the engine staged", &format!("{kind} rows, each under company A's unit"), &format!("{mine:?} of {staged_kinds:?}"), WF);
+    }
+    let a_rows_elsewhere = engine_rows.iter().filter(|r| r.1.is_none()).count();
+    r.check("F", "Workflow engine", "no row the engine staged has no org unit (the fence refuses one, loudly, rather than lose it)", a_rows_elsewhere == 0, "rows of the engine's aggregates with a NULL org_unit_id", "0", &a_rows_elsewhere.to_string(), WF);
+    let step_units: Vec<Option<Uuid>> = sqlx::query_scalar("SELECT DISTINCT org_unit_id FROM conformance.bb_workflow_steps WHERE instance_id = $1").bind(hinst.id).fetch_all(&c.owner).await.unwrap();
+    let inst_unit: Option<Uuid> = sqlx::query_scalar("SELECT org_unit_id FROM conformance.bb_workflow_instances WHERE id = $1").bind(hinst.id).fetch_one(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "the instance and each of its step rows carry the org unit of its start event", inst_unit == Some(company) && step_units == vec![Some(company)], "SELECT org_unit_id of the instance and its steps", "company A's node, everywhere", &format!("{inst_unit:?} {step_units:?}"), WF);
+
+    let outbox_policy: Option<String> = sqlx::query_scalar("SELECT polname FROM pg_policy WHERE polrelid = 'conformance.outbox_events'::regclass").fetch_optional(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "the outbox the engine stages into is fenced by org unit, as serpa's is (backbone-outbox `multi_tenant`): a row staged with no unit in scope would be refused", outbox_policy.as_deref() == Some("outbox_events_org_unit_isolation"), "SELECT polname FROM pg_policy for outbox_events", "outbox_events_org_unit_isolation", &format!("{outbox_policy:?}"), WF);
+
+    let ne = new_incident(uniq("WFN"), 1).await.id();
+    let nstart = escalation(&ne, "wf-ne");
+    tasks.deliver(nstart.clone()).await.unwrap();
+    let ninst = instance_of(c, "IncidentEscalation", nstart.id).await.unwrap();
+    let foreign_unit = outbox_record(c, &ne, "IncidentOpened").await.expect("the incident staged IncidentOpened");
+    let outside = backbone_core::write_hooks::OutboxRecord::new("IncidentAcknowledged", "Incident", ne.clone(), company, json!({ "incident_id": ne }), chrono::Utc::now()).with_org_unit_id(c.org.company_b);
+    let outside_report = engine.on_event(&outside).await.unwrap();
+    let still_waiting = instance_of(c, "IncidentEscalation", nstart.id).await.unwrap();
+    r.check("F", "Workflow engine", "an event of company A staged under an org unit outside the instance's unit cannot resume it: the fence, not the key, refuses", outside_report.resumed.is_empty() && still_waiting.status == "waiting" && foreign_unit.org_unit_id == Some(company), "deliver IncidentAcknowledged with the instance's key and company A, but company B's unit", "not resumed; still waiting", &format!("{:?} {}", outside_report.resumed, still_waiting.status), WF);
+    let no_unit = engine.describe(Tenant::company(company), ninst.id).await.unwrap();
+    let wrong_unit = engine.describe(Tenant::unit(company, c.org.company_b), ninst.id).await.unwrap();
+    let right_unit = engine.describe(Tenant::unit(company, company), ninst.id).await.unwrap();
+    r.check("F", "Workflow engine", "an instance of an org-fenced module is readable only under its own unit: a company scope with no unit and another unit see nothing", no_unit.is_none() && wrong_unit.is_none() && right_unit.is_some(), "describe the instance under no unit, company B's unit and its own", "none, none, found", &format!("{} {} {}", no_unit.is_some(), wrong_unit.is_some(), right_unit.is_some()), WF);
+    let inside = backbone_core::write_hooks::OutboxRecord::new("IncidentAcknowledged", "Incident", ne.clone(), company, json!({ "incident_id": ne }), chrono::Utc::now()).with_org_unit_id(company);
+    let inside_report = engine.on_event(&inside).await.unwrap();
+    r.check("F", "Workflow engine", "the same event under the instance's own unit resumes it", inside_report.resumed == vec![ninst.id], "deliver IncidentAcknowledged under company A's unit", "resumed", &format!("{:?}", inside_report.resumed), WF);
+    let enum_fence: Option<String> = sqlx::query_scalar("SELECT polname FROM pg_policy WHERE polrelid = 'conformance.bb_workflow_instances'::regclass").fetch_optional(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "an org-fenced module's workflow tables carry the org-unit policy, not the company one", enum_fence.as_deref() == Some("bb_workflow_instances_org_unit_isolation"), "SELECT polname FROM pg_policy for bb_workflow_instances", "bb_workflow_instances_org_unit_isolation", &format!("{enum_fence:?}"), WF);
 
     // 9. What the module hands the composing service.
     let events = tasks.subscribed_events();

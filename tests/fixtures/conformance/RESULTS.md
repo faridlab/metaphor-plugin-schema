@@ -5,7 +5,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.38.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 125s
+- Generation: 2s; whole run: 169s
 
 ## Summary
 
@@ -16,11 +16,11 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | C. Custom validation | 15 | 0 | 0 |
 | D. Hooks and events | 75 | 0 | 0 |
 | E. State machine | 20 | 0 | 0 |
-| F. Extension | 55 | 0 | 0 |
+| F. Extension | 66 | 0 | 0 |
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 35 | 0 | 0 |
 | I. Permissions | 142 | 0 | 0 |
-| **Total** | **477** | **0** | **1** |
+| **Total** | **488** | **0** | **1** |
 
 ## Matrix
 
@@ -278,6 +278,17 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | F | Workflow engine | the fence is the database: the app role with no company scope sees no instance and no step | PASS |
 | F | Workflow engine | the sweep still serves every company: company A's due wait runs under company A's scope | PASS |
 | F | Workflow engine | every instance carries its event's company | PASS |
+| F | Workflow engine | `emit_event`, also on the branch the sweep resumed stages its row under the org unit of the event that started the instance, on an outbox fenced by org unit | PASS |
+| F | Workflow engine | `send_email` stages its row under the org unit of the event that started the instance, on an outbox fenced by org unit | PASS |
+| F | Workflow engine | a terminal step's `emit` stages its row under the org unit of the event that started the instance, on an outbox fenced by org unit | PASS |
+| F | Workflow engine | a compensation step's `emit_event` stages its row under the org unit of the event that started the instance, on an outbox fenced by org unit | PASS |
+| F | Workflow engine | no row the engine staged has no org unit (the fence refuses one, loudly, rather than lose it) | PASS |
+| F | Workflow engine | the instance and each of its step rows carry the org unit of its start event | PASS |
+| F | Workflow engine | the outbox the engine stages into is fenced by org unit, as serpa's is (backbone-outbox `multi_tenant`): a row staged with no unit in scope would be refused | PASS |
+| F | Workflow engine | an event of company A staged under an org unit outside the instance's unit cannot resume it: the fence, not the key, refuses | PASS |
+| F | Workflow engine | an instance of an org-fenced module is readable only under its own unit: a company scope with no unit and another unit see nothing | PASS |
+| F | Workflow engine | the same event under the instance's own unit resumes it | PASS |
+| F | Workflow engine | an org-fenced module's workflow tables carry the org-unit policy, not the company one | PASS |
 | F | Workflow engine | the module's background tasks list the events the engine reacts to: each trigger and each awaited event | PASS |
 | F | Workflow engine | deliver accepts an event nobody subscribed to and does nothing (the relay's sink can be shared) | PASS |
 | F | Workflow | generation says a workflow with no executor and no `implemented_by` is documentation only, and names it (and no other) | PASS |

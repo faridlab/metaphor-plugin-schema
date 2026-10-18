@@ -63,6 +63,12 @@ events:
   IncidentEscalationHandled:
     aggregate: Incident
     fields: { incident_id: uuid, outcome: string }
+  IncidentEscalationClosed:
+    aggregate: Incident
+    fields: { incident_id: uuid }
+  IncidentChecklistRetired:
+    aggregate: Incident
+    fields: { followup_id: uuid }
 
 triggers:
   # Values the client does not send, filled before the row is stored.

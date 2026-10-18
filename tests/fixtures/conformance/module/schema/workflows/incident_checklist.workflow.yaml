@@ -48,3 +48,9 @@ compensation:
     action: delete
     entity: Incident
     id: "{{ context.followup_id }}"
+  - name: say_retired
+    action: emit_event
+    params:
+      event: IncidentChecklistRetired
+      data:
+        followup_id: "{{ context.followup_id }}"

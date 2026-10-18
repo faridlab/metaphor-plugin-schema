@@ -130,7 +130,7 @@ fn patch_manifest(module: &Path, framework: Option<&Path>) {
                  tower = { version = \"0.4\", features = [\"util\"] }\n\
                  http-body-util = \"0.1\"\n\
                  futures = \"0.3\"\n\
-                 backbone-outbox = \"3.0.0\"\n";
+                 backbone-outbox = { version = \"3.0.0\", features = [\"multi_tenant\"] }\n";
     text = text.replacen(marker, &format!("{marker}{extra}"), 1);
     if let Some(fw) = framework {
         text.push_str("\n[patch.crates-io]\n");
