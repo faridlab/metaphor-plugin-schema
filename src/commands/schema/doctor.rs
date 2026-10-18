@@ -300,6 +300,13 @@ pub(super) fn execute_doctor(module: &str) -> Result<()> {
         anyhow::bail!("{} trigger problem(s)", trigger_failures.len());
     }
 
+    // Workflows: what hand code owes the generated Actions traits, and the saga functions a
+    // workflow says carry it out.
+    let workflow_failures = workflow_report(&module_schema, &consumer_root);
+    if !workflow_failures.is_empty() && findings.is_empty() {
+        anyhow::bail!("{} workflow problem(s)", workflow_failures.len());
+    }
+
     // A raw write of a literal an enum column's type lacks fails at run time: a gate.
     let literals = crate::rules::writers::enum_literal_mismatches(&module_schema, &consumer_root);
     for l in &literals {
@@ -436,6 +443,28 @@ fn trigger_report(schema: &crate::ast::ModuleSchema, root: &Path) -> Vec<String>
     );
     for warning in crate::resolver::validator::trigger_warnings(schema) {
         println!("  {} {warning}", "!".yellow().bold());
+    }
+    for w in &report.warnings {
+        println!("  {} {w}", "!".yellow().bold());
+    }
+    for f in &report.failures {
+        println!("  {} {f}", "✗".red().bold());
+    }
+    report.failures
+}
+
+/// Print the workflow section of the report and return the failures (each already printed).
+fn workflow_report(schema: &crate::ast::ModuleSchema, root: &Path) -> Vec<String> {
+    if schema.workflows.is_empty() {
+        return Vec::new();
+    }
+    let report = super::workflows_check::scan(schema, root);
+    println!(
+        "  workflows: {} run on the engine ({} hand method(s) of the generated `<Name>Actions` traits to implement in src/application/workflows/*.ext.rs), {} documented sagas name the function that runs them, {} documentation only",
+        report.engine, report.hand_methods, report.documents, report.documentation_only
+    );
+    for note in &report.notes {
+        println!("    {note}");
     }
     for w in &report.warnings {
         println!("  {} {w}", "!".yellow().bold());

@@ -17,6 +17,7 @@ mod permissions_check;
 mod rules;
 mod tenancy;
 mod triggers_check;
+mod workflows_check;
 mod undeclared;
 mod validate;
 mod validate_workspace;

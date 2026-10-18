@@ -117,6 +117,16 @@ pub(super) fn execute_rules(
                         "notes": t.notes,
                     })
                 }).collect::<Vec<_>>(),
+                "workflows": module_schema.workflows.iter().map(|w| {
+                    let (label, hand, problems) = workflow_labels(&module_schema, w);
+                    serde_json::json!({
+                        "name": w.name,
+                        "trigger": w.trigger.event,
+                        "label": label,
+                        "hand": hand,
+                        "problems": problems,
+                    })
+                }).collect::<Vec<_>>(),
                 "permissions": permissions_json(&module_schema, mode),
                 "warnings": register.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
                 "proposals": proposals(register),
@@ -206,6 +216,36 @@ fn trigger_labels(schema: &crate::ast::ModuleSchema, t: &crate::rules::triggers:
 }
 
 /// The check state of an expression, with what stands in its way.
+/// How a workflow is held: run by the engine (`WORKFLOW RUNS`), documenting the hand function that
+/// runs it (`WORKFLOW DOCUMENTS`), or only documentation (`WORKFLOW DOCUMENTED`); the hand methods
+/// an engine workflow requires, and what stops it from running.
+fn workflow_labels(schema: &crate::ast::ModuleSchema, w: &crate::ast::workflow::Workflow) -> (String, Vec<String>, Vec<String>) {
+    use crate::ast::workflow::Executor;
+    match w.executor_kind() {
+        None => (
+            "WORKFLOW UNRESOLVED".to_string(),
+            Vec::new(),
+            vec![format!("`config.executor: {}` is neither `engine` nor `hand`", w.executor.as_deref().unwrap_or_default())],
+        ),
+        Some(Executor::Engine) => {
+            let compiled = crate::rules::workflows::compile(schema, w);
+            let event = w.trigger.event.as_deref().unwrap_or("?");
+            let persisted = if compiled.inline { "one transaction" } else { "persisted" };
+            let hand = compiled
+                .hand
+                .iter()
+                .map(|h| format!("WORKFLOW HAND ({})", h.method))
+                .chain(compiled.functions.iter().map(|f| format!("WORKFLOW HAND ({})", crate::rules::workflows::function_method(f))))
+                .collect();
+            (format!("WORKFLOW RUNS (on {event}, {persisted}, executor=engine)"), hand, compiled.problems)
+        }
+        Some(Executor::Hand) => match &w.implemented_by {
+            Some(claim) => (format!("WORKFLOW DOCUMENTS ({claim})"), Vec::new(), Vec::new()),
+            None => ("WORKFLOW DOCUMENTED".to_string(), Vec::new(), Vec::new()),
+        },
+    }
+}
+
 fn describe(check: &ExpressionCheck) -> String {
     match check {
         ExpressionCheck::NotAnExpression => String::new(),
@@ -388,6 +428,26 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
             }
         }
     }
+    if !schema.workflows.is_empty() {
+        println!("{}", "Workflows:".bold());
+        for w in &schema.workflows {
+            let (label, hand, problems) = workflow_labels(schema, w);
+            let label = if !problems.is_empty() {
+                label.red()
+            } else if label.starts_with("WORKFLOW DOCUMENTED") {
+                label.yellow()
+            } else {
+                label.green()
+            };
+            println!("  {}  {}", w.name.bold(), label);
+            for h in hand {
+                println!("      {}", h.yellow());
+            }
+            for problem in &problems {
+                println!("      {} {problem}", "problem:".red());
+            }
+        }
+    }
     print_permissions(schema, mode);
     if !register.warnings.is_empty() {
         println!("{} ({})", "Warnings:".yellow().bold(), register.warnings.len());
@@ -479,4 +539,27 @@ fn permissions_json(schema: &crate::ast::ModuleSchema, mode: super::permissions_
             "name": r.name, "permissions": r.permissions,
         })).collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod workflow_label_tests {
+    use super::*;
+    use crate::rules::workflows::test_support::{schema_with, BASE};
+
+    #[test]
+    fn the_register_says_whether_a_workflow_runs_documents_a_function_or_only_documents() {
+        let s = schema_with(BASE);
+        let (label, hand, problems) = workflow_labels(&s, &s.workflows[0]);
+        assert_eq!(label, "WORKFLOW RUNS (on TicketRaised, persisted, executor=engine)");
+        assert_eq!(hand, vec!["WORKFLOW HAND (notify_on_call)".to_string()]);
+        assert!(problems.is_empty(), "{problems:?}");
+
+        let mut s = schema_with(&BASE.replace("executor: engine", "executor: hand"));
+        assert_eq!(workflow_labels(&s, &s.workflows[0]).0, "WORKFLOW DOCUMENTED");
+        s.workflows[0].implemented_by = Some("src/service.rs::post".into());
+        assert_eq!(workflow_labels(&s, &s.workflows[0]).0, "WORKFLOW DOCUMENTS (src/service.rs::post)");
+
+        let s = schema_with(&BASE.replace("executor: engine", "executor: robot"));
+        assert_eq!(workflow_labels(&s, &s.workflows[0]).0, "WORKFLOW UNRESOLVED");
+    }
 }

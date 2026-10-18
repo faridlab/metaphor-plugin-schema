@@ -29,7 +29,7 @@ pub struct TriggerReport {
 
 /// Clients that perform an effect outside the database. A mention in a triggers extension is a
 /// call made while the write's transaction is open.
-const CLIENTS: &[&str] = &[
+pub(super) const CLIENTS: &[&str] = &[
     "reqwest",
     "lettre",
     "ureq",
