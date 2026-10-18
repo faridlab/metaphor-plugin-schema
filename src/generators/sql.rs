@@ -2703,7 +2703,7 @@ impl SqlGenerator {
             let ts = Self::timestamp_for(counter + 3);
             output.add_file(
                 PathBuf::from(format!("migrations/{}_create_workflow_tables.up.sql", ts)),
-                super::workflows::migration_up(&workflow_schema),
+                super::workflows::migration_up(&workflow_schema, super::workflows::org_fenced(&schema.schema)),
             );
             output.add_file(
                 PathBuf::from(format!("migrations/{}_create_workflow_tables.down.sql", ts)),

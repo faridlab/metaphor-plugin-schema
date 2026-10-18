@@ -1792,6 +1792,17 @@ mod tests {
     }
 
     #[test]
+    fn a_compensation_can_emit_an_event_with_a_nested_data_map() {
+        let yaml = format!(
+            "{BASE}\ncompensation:\n  - name: say_so\n    action: emit_event\n    params:\n      event: TicketClosed\n      data:\n        ticket: \"{{{{ context.ticket_id }}}}\"\n"
+        );
+        let c = compiled(&yaml);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.spec["compensation"][0]["params"][1][0], "data");
+        assert!(c.spec["compensation"][0]["params"][1][1]["map"].is_array());
+    }
+
+    #[test]
     fn a_step_timeout_bounds_its_hand_call_and_a_waits_timeout_stays_part_of_the_wait() {
         let c = compiled(&BASE.replace("params: { severity: high }", "params: { severity: high }\n    timeout: 30s"));
         assert!(c.problems.is_empty(), "{:?}", c.problems);

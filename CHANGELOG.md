@@ -42,6 +42,13 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
   that resumes, instances fenced by company) and its variants prove the refusals, the doctor's findings and
   that an absent `executor` generates nothing.
 
+- The workflow tables carry a nullable `org_unit_id` (the org unit of the event that started the instance),
+  and in a module that declares an `org_fence` the migration fences both by org unit (the sweep-aware policy,
+  the acting-unit fill trigger and the kind guard) instead of by company, so the engine can act under the
+  unit on an outbox fenced by it.
+- A compensation step's `params` may hold any YAML value (an `emit_event` compensation carries a nested
+  `data:` map); the typed parser used to refuse the file.
+
 ### Changed
 
 - The `flow` (`workflow`) target is no longer retired: it generates for a workflow with `executor: engine` and

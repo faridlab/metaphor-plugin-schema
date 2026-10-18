@@ -1428,6 +1428,15 @@ impl YamlTaskForm {
     }
 }
 
+/// A compensation parameter as the text the typed tree keeps: a string as written, anything else
+/// (a nested map, a number) as its compact YAML.
+fn yaml_param_text(v: serde_yaml::Value) -> String {
+    match v {
+        serde_yaml::Value::String(s) => s,
+        other => serde_yaml::to_string(&other).map(|t| t.trim().to_string()).unwrap_or_default(),
+    }
+}
+
 impl YamlCompensation {
     /// Convert to AST CompensationStep
     pub fn into_compensation(self) -> CompensationStep {
@@ -1440,7 +1449,7 @@ impl YamlCompensation {
                     .params
                     .map(|p| {
                         p.into_iter()
-                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .map(|(k, v)| (k, Expression::Raw(yaml_param_text(v))))
                             .collect()
                     })
                     .unwrap_or_default(),
@@ -1465,7 +1474,7 @@ impl YamlCompensation {
                     .params
                     .map(|p| {
                         p.into_iter()
-                            .map(|(k, v)| (k, Expression::Raw(v)))
+                            .map(|(k, v)| (k, Expression::Raw(yaml_param_text(v))))
                             .collect()
                     })
                     .unwrap_or_default(),

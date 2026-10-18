@@ -1003,6 +1003,11 @@ of `background_tasks().subscribed_events()` to `background_tasks().deliver` (the
 `migrate_outbox` at startup. A module that owns its `lib.rs` or `application/mod.rs` declares
 `pub mod workflows;` and builds the engine itself with `build_background_tasks`.
 
+**Tenancy.** The engine tables carry `company_id` and the org unit of the event that started the instance. A
+module that declares an `org_fence` gets them fenced by org unit; the engine acts under the instance's company
+and unit (the outbox record carries the unit). A service that installs org fencing through its `tenancy.yaml`
+lists `bb_workflow_instances` and `bb_workflow_steps` there as `migration_only` tables with their schema.
+
 `schema rules` labels each workflow `WORKFLOW RUNS (on <Event>, persisted | one transaction,
 executor=engine)`, `WORKFLOW DOCUMENTS (<file>::<fn>)` or `WORKFLOW DOCUMENTED`, and lists the hand methods an
 engine workflow requires; `schema doctor` fails on a missing extension file or method.

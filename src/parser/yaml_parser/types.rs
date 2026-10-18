@@ -2266,9 +2266,9 @@ pub struct YamlCompensation {
     /// Where clause
     #[serde(rename = "where", default)]
     pub where_clause: Option<String>,
-    /// Parameters
+    /// Parameters. Any YAML value: an `emit_event` compensation carries a nested `data:` map.
     #[serde(default)]
-    pub params: Option<IndexMap<String, String>>,
+    pub params: Option<IndexMap<String, serde_yaml::Value>>,
     /// Transition
     #[serde(default)]
     pub transition: Option<String>,
