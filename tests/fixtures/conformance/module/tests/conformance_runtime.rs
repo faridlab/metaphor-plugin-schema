@@ -504,6 +504,7 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         ("D", AssertUnwindSafe(area_d(&ctx)).boxed()),
         ("E", AssertUnwindSafe(area_e(&ctx)).boxed()),
         ("F", AssertUnwindSafe(area_f(&ctx)).boxed()),
+        ("F", AssertUnwindSafe(area_f_workflows(&ctx)).boxed()),
         ("G", AssertUnwindSafe(area_g(&ctx)).boxed()),
         ("I", AssertUnwindSafe(area_i(&ctx)).boxed()),
         ("I", AssertUnwindSafe(area_i_public(&ctx)).boxed()),
@@ -1493,6 +1494,249 @@ async fn area_f(c: &Ctx) {
     r.check("F", "Extension routes", "the extension's generic routes sit behind the stack (no token answers 401)", hp.status == 401, &hp.request, "401", &hp.got(), X);
     let hl = app.get(&format!("/hooked-projects?id={pid}"), &c.tb).await;
     r.check("F", "Extension routes", "the extension's generic routes are fenced (company B sees none of A's projects)", hl.status == 200 && hl.items().is_empty(), &hl.request, "200, empty", &hl.got(), X);
+}
+
+// =============================================================================
+// F. Workflows run by the engine
+// =============================================================================
+
+/// One staged outbox row of an aggregate, as the engine's relay would hand it to the engine.
+async fn outbox_record(c: &Ctx, aggregate_id: &str, event_type: &str) -> Option<backbone_core::write_hooks::OutboxRecord> {
+    let row: Option<(Uuid, String, String, String, Uuid, Value, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version \
+         FROM conformance.outbox_events WHERE aggregate_id = $1 AND event_type = $2 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(aggregate_id)
+    .bind(event_type)
+    .fetch_optional(&c.owner)
+    .await
+    .unwrap();
+    row.map(|(id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version)| {
+        backbone_core::write_hooks::OutboxRecord { id, event_type, aggregate_type, aggregate_id, company_id, payload, occurred_at, correlation_id, causation_id, version }
+    })
+}
+
+/// A request event for the engine, as another module's publisher would stage it.
+fn request_event(kind: &str, company: Uuid, payload: Value, correlation: &str) -> backbone_core::write_hooks::OutboxRecord {
+    let aggregate = payload["incident_id"].as_str().unwrap_or("-").to_string();
+    backbone_core::write_hooks::OutboxRecord::new(kind, "Incident", aggregate, company, payload, chrono::Utc::now()).with_correlation_id(correlation)
+}
+
+#[derive(Debug, Clone)]
+struct Inst {
+    id: Uuid,
+    status: String,
+    step: Option<String>,
+    attempts: i32,
+    context: Value,
+    correlation: Option<String>,
+    trigger: Uuid,
+    due: bool,
+}
+
+async fn instance_of(c: &Ctx, workflow: &str, trigger: Uuid) -> Option<Inst> {
+    let row: Option<(Uuid, String, Option<String>, i32, Value, Option<String>, Uuid, bool)> = sqlx::query_as(
+        "SELECT id, status, current_step, attempts, context, correlation_id, trigger_event_id, wait_due_at IS NOT NULL \
+         FROM conformance.bb_workflow_instances WHERE workflow = $1 AND trigger_event_id = $2",
+    )
+    .bind(workflow)
+    .bind(trigger)
+    .fetch_optional(&c.owner)
+    .await
+    .unwrap();
+    row.map(|(id, status, step, attempts, context, correlation, trigger, due)| Inst { id, status, step, attempts, context, correlation, trigger, due })
+}
+
+async fn steps_of(c: &Ctx, id: Uuid) -> Vec<(String, String)> {
+    sqlx::query_as("SELECT step, outcome FROM conformance.bb_workflow_steps WHERE instance_id = $1 ORDER BY seq")
+        .bind(id)
+        .fetch_all(&c.owner)
+        .await
+        .unwrap()
+}
+
+async fn force_due(c: &Ctx, id: Uuid) {
+    sqlx::query("UPDATE conformance.bb_workflow_instances SET wait_due_at = now() - interval '1 second' WHERE id = $1").bind(id).execute(&c.owner).await.unwrap();
+}
+
+async fn area_f_workflows(c: &Ctx) {
+    use backbone_core::write_hooks::OutboxRecord;
+    let (r, app, ta) = (&c.rec, &c.app, c.ta.as_str());
+    const WF: &str = "workflows/incident_escalation.workflow.yaml and incident_checklist.workflow.yaml (executor: engine): the generated *_workflow.rs, backbone-core's workflow engine";
+    let tasks = c.module.background_tasks();
+    let engine = tasks.engine().clone();
+    let company = c.org.company_a;
+    let new_incident = |title: String, severity: i64| {
+        let body = json!({ "companyId": company, "title": title, "severity": severity });
+        async move { app.post("/incidents", ta, body).await }
+    };
+    let escalation = |incident: &str, corr: &str| request_event("IncidentEscalationRequested", company, json!({ "incident_id": incident }), corr);
+
+    // 1. An event starts one instance, and the same event delivered twice still makes one.
+    let low = new_incident(uniq("WFL"), 1).await.id();
+    let corr = format!("wf-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let start = escalation(&low, &corr);
+    let first = tasks.deliver(start.clone()).await;
+    let again = tasks.deliver(start.clone()).await;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_instances WHERE workflow = 'IncidentEscalation' AND trigger_event_id = $1").bind(start.id).fetch_one(&c.owner).await.unwrap();
+    let inst = instance_of(c, "IncidentEscalation", start.id).await;
+    r.check("F", "Workflow engine", "an event starts one instance, and the same event delivered twice still makes one", first.is_ok() && again.is_ok() && count == 1, "deliver IncidentEscalationRequested twice", "ok, ok; one instance", &format!("{first:?} {again:?} instances {count}"), WF);
+    let inst = inst.expect("the instance exists");
+    let steps = steps_of(c, inst.id).await;
+    r.check("F", "Workflow engine", "the instance runs its steps to the wait and stops there: waiting on await_ack, each step logged, the start event's correlation id kept", inst.status == "waiting" && inst.step.as_deref() == Some("await_ack") && steps.iter().map(|s| s.0.as_str()).collect::<Vec<_>>() == ["fetch_incident", "choose", "await_ack"] && inst.correlation.as_deref() == Some(corr.as_str()), "SELECT the instance and its step log", "waiting, [fetch_incident, choose, await_ack], correlation kept", &format!("{} {:?} {:?} {:?}", inst.status, inst.step, steps, inst.correlation), WF);
+    r.check("F", "Workflow engine", "a step's `set:` and the trigger's `extract:` land in the instance context (severity read from the incident through the generated service)", inst.context["incident_id"] == json!(low) && inst.context["severity"] == json!(1), "SELECT context", "incident_id and severity 1", &inst.context.to_string(), WF);
+    let paged_low = outbox_record(c, &low, "ResponderPaged").await;
+    r.check("F", "Workflow engine", "a condition step takes its branch: a severity 1 incident is not paged", paged_low.is_none() && !steps.iter().any(|s| s.0 == "page_now"), "look for the page_now step and a ResponderPaged row", "none", &format!("{paged_low:?}"), WF);
+
+    // 2. A bespoke verb runs inside the step; a declared function is called by an expression.
+    let high = new_incident(uniq("WFH"), 4).await.id();
+    let hstart = escalation(&high, "wf-high");
+    tasks.deliver(hstart.clone()).await.unwrap();
+    let hinst = instance_of(c, "IncidentEscalation", hstart.id).await.unwrap();
+    let paged = outbox_record(c, &high, "ResponderPaged").await;
+    r.check("F", "Workflow engine", "a bespoke verb runs through the Actions method of the extension, inside the step's transaction, and a declared function evaluates in an expression (who = on_call_name(severity))", paged.as_ref().is_some_and(|p| p.payload["who"] == json!("responder-sev4")) && steps_of(c, hinst.id).await.iter().any(|s| s.0 == "page_now" && s.1 == "ok"), "start the workflow for a severity 4 incident", "a ResponderPaged row naming responder-sev4; page_now ok", &format!("{:?}", paged.map(|p| p.payload)), WF);
+    let requested = outbox_record(c, &hinst.id.to_string(), "NotificationRequested").await;
+    r.check("F", "Workflow engine", "`send_email` stages a NotificationRequested on the step's transaction (the effect is the relay's, never the step's): channel, template, recipient, variables and the step that asked", requested.as_ref().is_some_and(|n| n.payload["channel"] == json!("email") && n.payload["template"] == json!("incident_paged") && n.payload["to"] == json!("responder-sev4") && n.payload["data"]["incident_id"] == json!(high) && n.payload["data"]["subject"] == json!("Incident paged") && n.payload["trigger"] == json!("IncidentEscalation.tell_oncall") && n.correlation_id.as_deref() == Some("wf-high")), "the NotificationRequested row of the instance", "email, incident_paged, responder-sev4, trigger IncidentEscalation.tell_oncall", &format!("{:?}", requested.map(|n| n.payload)), WF);
+    r.check("F", "Workflow engine", "a row a step stages carries the instance's correlation id and the starting event as its cause", {
+        let p = outbox_record(c, &high, "ResponderPaged").await;
+        p.is_some_and(|p| p.correlation_id.as_deref() == Some("wf-high") && p.causation_id.as_deref() == Some(hstart.id.to_string().as_str()))
+    }, "read the staged row", "correlation wf-high, causation the start event's id", "see the staged row", WF);
+
+    // 3. A wait resumes on the matching event only. The event is the one the Incident write hooks stage
+    // when the machine enters `acknowledged`, taken from the outbox as the relay would.
+    let other = new_incident(uniq("WFO"), 1).await.id();
+    let ack_other = app.post(&format!("/incidents/{other}/transitions/acknowledge"), ta, json!({})).await;
+    let other_event = outbox_record(c, &other, "IncidentAcknowledged").await;
+    let ignored = match &other_event {
+        Some(e) => tasks.deliver(e.clone()).await.is_ok(),
+        None => false,
+    };
+    let still = instance_of(c, "IncidentEscalation", start.id).await.unwrap();
+    r.check("F", "Workflow engine", "a wait ignores an event whose key does not match: another incident's acknowledgement leaves the instance waiting", ack_other.status == 200 && ignored && still.status == "waiting", "acknowledge a different incident and deliver its IncidentAcknowledged", "the first instance is still waiting", &format!("{} {}", ack_other.got(), still.status), WF);
+    let ack = app.post(&format!("/incidents/{low}/transitions/acknowledge"), ta, json!({})).await;
+    let ack_event = outbox_record(c, &low, "IncidentAcknowledged").await.expect("the write hooks staged IncidentAcknowledged");
+    let delivered = tasks.deliver(ack_event.clone()).await;
+    let done = instance_of(c, "IncidentEscalation", start.id).await.unwrap();
+    let done_steps = steps_of(c, done.id).await;
+    r.check("F", "Workflow engine", "a wait resumes on the matching event: acknowledging the incident (the real transition, the real staged event) completes the instance", ack.status == 200 && delivered.is_ok() && done.status == "completed" && done.context["outcome"] == json!("resolved"), "acknowledge, then deliver the staged IncidentAcknowledged", "completed, outcome resolved", &format!("{} {:?} {}", ack.got(), done.status, done.context["outcome"]), WF);
+    let stored: Option<String> = sqlx::query_scalar("SELECT status::text FROM conformance.incidents WHERE id = $1").bind(Uuid::parse_str(&low).unwrap()).fetch_optional(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "a transition step moves the record through its state machine: the incident is `resolved`", stored.as_deref() == Some("resolved"), "SELECT status", "resolved", &format!("{stored:?}"), WF);
+    let resolved_events = staged(c, &low).await;
+    r.check("F", "Workflow engine", "an entity action goes through the generated service, so the entity's own triggers and declared events apply: the machine's `after_update_status_resolved` staged IncidentResolved", kinds(&resolved_events).contains(&"IncidentResolved"), "the events staged for the incident", "IncidentResolved among them", &format!("{:?}", kinds(&resolved_events)), WF);
+    r.check("F", "Workflow engine", "the step log shows each stage: waiting, resumed, then the transition, the event and the terminal", done_steps.iter().map(|s| (s.0.as_str(), s.1.as_str())).collect::<Vec<_>>().ends_with(&[("await_ack", "waiting"), ("await_ack", "resumed"), ("resolve_now", "ok"), ("announce", "ok"), ("done", "terminal")]), "SELECT the step log", "... await_ack waiting, await_ack resumed, resolve_now ok, announce ok, done terminal", &format!("{done_steps:?}"), WF);
+    // The event is staged under the workflow instance (its aggregate), carrying the incident in its payload.
+    let handled = outbox_record(c, &done.id.to_string(), "IncidentEscalationHandled").await;
+    r.check("F", "Workflow engine", "`emit_event` stages a declared event on the step's transaction with the instance's correlation and causation", handled.as_ref().is_some_and(|h| h.payload["outcome"] == json!("resolved") && h.correlation_id.as_deref() == Some(corr.as_str()) && h.causation_id.as_deref() == Some(start.id.to_string().as_str())), "the IncidentEscalationHandled row", "outcome resolved; correlation and causation of the instance", &format!("{:?}", handled.map(|h| (h.payload, h.correlation_id, h.causation_id))), WF);
+    let replay = tasks.deliver(ack_event).await;
+    let after = steps_of(c, done.id).await;
+    r.check("F", "Workflow engine", "a resume event delivered again changes nothing (the relay delivers at least once)", replay.is_ok() && after.len() == done_steps.len(), "deliver the same IncidentAcknowledged again", "no new step", &format!("{} -> {} steps", done_steps.len(), after.len()), WF);
+
+    // 4. A wait that times out takes its branch through the sweep; the refused transition takes the failure branch.
+    let quiet = new_incident(uniq("WFQ"), 1).await.id();
+    let qstart = escalation(&quiet, "wf-quiet");
+    tasks.deliver(qstart.clone()).await.unwrap();
+    let qinst = instance_of(c, "IncidentEscalation", qstart.id).await.unwrap();
+    let idle = engine.sweep().await.unwrap();
+    force_due(c, qinst.id).await;
+    let swept = engine.sweep().await.unwrap();
+    let qdone = instance_of(c, "IncidentEscalation", qstart.id).await.unwrap();
+    let qsteps = steps_of(c, qinst.id).await;
+    let handled_by: Option<Option<String>> = sqlx::query_scalar("SELECT handled_by FROM conformance.incidents WHERE id = $1").bind(Uuid::parse_str(&quiet).unwrap()).fetch_optional(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "a wait expires through workflow_timer_sweep when its due time is in the past (and not before): the on_timeout branch runs", idle.timed_out.is_empty() && swept.timed_out == vec![qinst.id] && qsteps.iter().any(|s| s == &("await_ack".to_string(), "timed_out".to_string())) && handled_by == Some(Some("escalated".into())), "sweep, force wait_due_at into the past, sweep", "the first sweep finds nothing; the second times the wait out and runs reassign", &format!("{:?} {:?} {handled_by:?}", idle.timed_out, swept.timed_out), WF);
+    r.check("F", "Workflow engine", "a transition the machine refuses (resolve from open) is a step failure: the failure branch runs and the error reaches the expression", qdone.status == "completed" && qsteps.iter().any(|s| s == &("try_resolve".to_string(), "failed".to_string())) && qsteps.iter().any(|s| s == &("refused".to_string(), "ok".to_string())) && qdone.context["outcome"] == json!("escalated") && qdone.context["error"].as_str().is_some_and(|e| e.contains("not allowed") || e.contains("transition")), "let the wait time out; try_resolve asks the machine for resolve from open", "try_resolve failed, refused ok, outcome escalated", &format!("{:?} {qsteps:?} {}", qdone.status, qdone.context["error"]), WF);
+    let still_open: Option<String> = sqlx::query_scalar("SELECT status::text FROM conformance.incidents WHERE id = $1").bind(Uuid::parse_str(&quiet).unwrap()).fetch_optional(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "the refused transition changed nothing: the incident is still open", still_open.as_deref() == Some("open"), "SELECT status", "open", &format!("{still_open:?}"), WF);
+
+    // 5. An instance past its deadline expires.
+    let slow = new_incident(uniq("WFD"), 1).await.id();
+    let sstart = escalation(&slow, "wf-slow");
+    tasks.deliver(sstart.clone()).await.unwrap();
+    let sinst = instance_of(c, "IncidentEscalation", sstart.id).await.unwrap();
+    sqlx::query("UPDATE conformance.bb_workflow_instances SET wait_due_at = NULL, deadline_at = now() - interval '1 second' WHERE id = $1").bind(sinst.id).execute(&c.owner).await.unwrap();
+    let report = engine.sweep().await.unwrap();
+    let expired = instance_of(c, "IncidentEscalation", sstart.id).await.unwrap();
+    r.check("F", "Workflow engine", "an instance past the workflow's deadline (config.timeout) ends `expired`", report.expired.contains(&sinst.id) && expired.status == "expired", "force deadline_at into the past and sweep", "expired", &format!("{:?} {}", report.expired, expired.status), WF);
+
+    // 6. Atomic steps, retries with backoff, compensation in reverse, idempotent compensation.
+    let before_probe: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events WHERE event_type = 'WorkflowProbe'").fetch_one(&c.owner).await.unwrap();
+    let boom_title = uniq("boom");
+    let cstart = request_event("IncidentChecklistRequested", company, json!({ "company_id": company, "title": boom_title, "incident_id": "-" }), "wf-boom");
+    tasks.deliver(cstart.clone()).await.unwrap();
+    let cinst = instance_of(c, "IncidentChecklist", cstart.id).await.unwrap();
+    let probes: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events WHERE event_type = 'WorkflowProbe'").fetch_one(&c.owner).await.unwrap();
+    let followups = |title: String| async move { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conformance.incidents WHERE title = $1 AND metadata->>'deleted_at' IS NULL").bind(title).fetch_one(&c.owner).await.unwrap() };
+    r.check("F", "Workflow engine", "a step that fails after writing leaves none of its writes: the row it staged is gone, the earlier step's follow-up stayed, and the failure is logged", probes == before_probe && cinst.status == "running" && cinst.attempts == 1 && cinst.step.as_deref() == Some("risky") && followups(boom_title.clone()).await == 1 && steps_of(c, cinst.id).await.contains(&("risky".to_string(), "failed".to_string())), "start the checklist for a boom... title", "no WorkflowProbe row; running on risky, attempt 1; the follow-up incident exists", &format!("probe rows {before_probe}->{probes}; {} {:?} attempts {}", cinst.status, cinst.step, cinst.attempts), WF);
+    r.check("F", "Workflow engine", "a transient failure stores its backoff and waits: nothing is retried before it passes", cinst.due && engine.sweep().await.unwrap().retried.is_empty(), "sweep right after the failure", "nothing due", "see the instance", WF);
+    force_due(c, cinst.id).await;
+    let retry1 = engine.sweep().await.unwrap();
+    let second = instance_of(c, "IncidentChecklist", cstart.id).await.unwrap();
+    force_due(c, cinst.id).await;
+    let retry2 = engine.sweep().await.unwrap();
+    let ended = instance_of(c, "IncidentChecklist", cstart.id).await.unwrap();
+    let cs = steps_of(c, cinst.id).await;
+    r.check("F", "Workflow engine", "a failing step is tried three times (backoff observable between them), then the instance fails and compensates: compensated", retry1.retried == vec![cinst.id] && second.attempts == 2 && retry2.retried == vec![cinst.id] && ended.status == "compensated" && cs.iter().filter(|s| s.0 == "risky" && s.1 == "failed").count() == 3, "force the backoff due twice", "three failed attempts, then compensated", &format!("attempts {} -> {}; {} {cs:?}", cinst.attempts, second.attempts, ended.status), WF);
+    r.check("F", "Workflow engine", "compensation runs through the generated service: the follow-up is soft-deleted and its IncidentDeleted event staged", followups(boom_title.clone()).await == 0 && cs.iter().any(|s| s == &("compensate:retire_followup".to_string(), "compensated".to_string())) && {
+        let follow_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM conformance.incidents WHERE title = $1").bind(&boom_title).fetch_optional(&c.owner).await.unwrap();
+        match follow_id { Some(id) => kinds(&staged(c, &id.to_string()).await).contains(&"IncidentDeleted"), None => false }
+    }, "SELECT the follow-up and its events", "metadata.deleted_at set; IncidentDeleted staged; the log shows compensate:retire_followup", &format!("{cs:?}"), WF);
+    engine.compensate(company, cinst.id).await.unwrap();
+    let cs_again = steps_of(c, cinst.id).await;
+    r.check("F", "Workflow engine", "compensation is idempotent: running it again repeats nothing and changes nothing", cs_again == cs && instance_of(c, "IncidentChecklist", cstart.id).await.unwrap().status == "compensated", "engine.compensate again", "the step log is unchanged", &format!("{} -> {} rows", cs.len(), cs_again.len()), WF);
+
+    // A refusal the caller can fix is not retried.
+    let refuse_title = uniq("refuse");
+    let rstart = request_event("IncidentChecklistRequested", company, json!({ "company_id": company, "title": refuse_title, "incident_id": "-" }), "wf-refuse");
+    tasks.deliver(rstart.clone()).await.unwrap();
+    let rinst = instance_of(c, "IncidentChecklist", rstart.id).await.unwrap();
+    let rsteps = steps_of(c, rinst.id).await;
+    r.check("F", "Workflow engine", "a business failure (the verb refuses with a validation error) is not retried: one failed attempt, then compensation", rinst.status == "compensated" && rsteps.iter().filter(|s| s.1 == "failed").count() == 1, "start the checklist for a refuse... title", "compensated after one failed attempt", &format!("{} {rsteps:?}", rinst.status), WF);
+
+    // 7. A step cut short leaves the instance on it; the sweep resumes without repeating a completed step.
+    let linger_title = uniq("linger");
+    let lstart = request_event("IncidentChecklistRequested", company, json!({ "company_id": company, "title": linger_title, "incident_id": "-" }), "wf-linger");
+    {
+        let run = tasks.deliver(lstart.clone());
+        tokio::select! {
+            _ = run => {}
+            _ = backbone_module_skeleton::application::workflows::lingering().notified() => {}
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let linst = instance_of(c, "IncidentChecklist", lstart.id).await.unwrap();
+    let lprobe: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.outbox_events WHERE event_type = 'WorkflowProbe' AND aggregate_id = $1").bind(&linger_title).fetch_one(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "a run cut inside a step's transaction (a crash) leaves the instance running on that step, with the step's row rolled back and the completed step logged once", linst.status == "running" && linst.step.as_deref() == Some("risky") && lprobe == 0 && steps_of(c, linst.id).await.iter().map(|s| s.0.as_str()).collect::<Vec<_>>() == ["open_followup"], "cut the run while the linger step is inside its transaction", "running on risky; no WorkflowProbe row; one logged step", &format!("{} {:?} probe rows {lprobe}", linst.status, linst.step), WF);
+    sqlx::query("UPDATE conformance.bb_workflow_instances SET context = jsonb_set(context, '{title}', to_jsonb($2::text)), updated_at = now() - interval '1 hour' WHERE id = $1")
+        .bind(linst.id)
+        .bind(&linger_title.replacen("linger", "fine", 1))
+        .execute(&c.owner)
+        .await
+        .unwrap();
+    let recovered = engine.sweep().await.unwrap();
+    let lend = instance_of(c, "IncidentChecklist", lstart.id).await.unwrap();
+    r.check("F", "Workflow engine", "the sweep drives an instance nobody is running and the completed step is not repeated (one follow-up incident, never two)", recovered.recovered.contains(&linst.id) && lend.status == "completed" && followups(linger_title.clone()).await == 1, "age the instance and sweep", "completed; one follow-up", &format!("{:?} {}; follow-ups {}", recovered.recovered, lend.status, followups(linger_title.clone()).await), WF);
+
+    // 8. Tenancy: instances are fenced by company.
+    let b_event = request_event("IncidentAcknowledged", c.org.company_b, json!({ "incident_id": high }), "wf-b");
+    let b_report = engine.on_event(&b_event).await.unwrap();
+    let hstill = instance_of(c, "IncidentEscalation", hstart.id).await.unwrap();
+    r.check("F", "Workflow engine", "an event of company B for company A's key never resumes company A's instance", b_report.resumed.is_empty() && hstill.status == "waiting", "deliver IncidentAcknowledged under company B with A's incident id", "A's instance still waiting", &format!("{:?} {}", b_report.resumed, hstill.status), WF);
+    let seen_by_b = engine.describe(c.org.company_b, hinst.id).await.unwrap();
+    let seen_by_a = engine.describe(company, hinst.id).await.unwrap();
+    r.check("F", "Workflow engine", "another company's scope cannot read the instance or its step log; its own company can", seen_by_b.is_none() && seen_by_a.as_ref().is_some_and(|(i, s)| i.status == "waiting" && !s.is_empty()), "describe the instance under company B and under company A", "none; found", &format!("{:?} / {:?}", seen_by_b.as_ref().map(|(i, _)| i.status.clone()), seen_by_a.as_ref().map(|(i, _)| i.status.clone())), WF);
+    let unscoped: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_instances").fetch_one(&c.pool).await.unwrap();
+    let steps_unscoped: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_steps").fetch_one(&c.pool).await.unwrap();
+    r.check("F", "Workflow engine", "the fence is the database: the app role with no company scope sees no instance and no step", unscoped == 0 && steps_unscoped == 0, "SELECT count(*) as the app role, unscoped", "0, 0", &format!("{unscoped}, {steps_unscoped}"), WF);
+    force_due(c, hinst.id).await;
+    let a_sweep = engine.sweep().await.unwrap();
+    r.check("F", "Workflow engine", "the sweep still serves every company: company A's due wait runs under company A's scope", a_sweep.timed_out.contains(&hinst.id) && instance_of(c, "IncidentEscalation", hstart.id).await.unwrap().status == "completed", "force A's wait due and sweep", "timed out and completed", &format!("{:?}", a_sweep.timed_out), WF);
+    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.bb_workflow_instances WHERE company_id <> $1 AND workflow = 'IncidentEscalation'").bind(company).fetch_one(&c.owner).await.unwrap();
+    r.check("F", "Workflow engine", "every instance carries its event's company", owned == 0, "SELECT instances of another company", "0", &owned.to_string(), WF);
+
+    // 9. What the module hands the composing service.
+    let events = tasks.subscribed_events();
+    r.check("F", "Workflow engine", "the module's background tasks list the events the engine reacts to: each trigger and each awaited event", ["IncidentEscalationRequested", "IncidentAcknowledged", "IncidentChecklistRequested"].iter().all(|e| events.iter().any(|x| x == e)) && events.len() == 3, "background_tasks().subscribed_events()", "the two triggers and the awaited event", &format!("{events:?}"), WF);
+    let unrelated = tasks.deliver(OutboxRecord::new("SomethingElse", "X", "x", company, json!({}), chrono::Utc::now())).await;
+    r.check("F", "Workflow engine", "deliver accepts an event nobody subscribed to and does nothing (the relay's sink can be shared)", unrelated.is_ok(), "deliver SomethingElse", "ok", &format!("{unrelated:?}"), WF);
 }
 
 // =============================================================================

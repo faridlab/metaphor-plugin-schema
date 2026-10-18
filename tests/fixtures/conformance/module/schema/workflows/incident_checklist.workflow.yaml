@@ -1,0 +1,50 @@
+# A follow-up incident is opened and a verb that can fail runs after it. A failure that is not the
+# caller's to fix retries (three tries, exponential backoff); when the tries are used up the instance
+# fails and compensates: the follow-up is retired through the generated service, which runs its
+# triggers and stages its events like any other write.
+
+name: IncidentChecklist
+description: "Open a follow-up, run a risky step, undo the follow-up when it cannot be run"
+version: 1
+
+trigger:
+  event: IncidentChecklistRequested
+  extract:
+    company: "event.company_id"
+    title: "event.title"
+
+config:
+  executor: engine
+  timeout: 1d
+  persistence: true
+
+steps:
+  - name: open_followup
+    type: action
+    action: create
+    entity: Incident
+    params:
+      companyId: "{{ context.company }}"
+      title: "{{ context.title }}"
+      severity: 1
+    on_success:
+      set:
+        followup_id: "{{ result.id }}"
+      next: risky
+  - name: risky
+    type: action
+    action: risky_step
+    params:
+      title: "{{ context.title }}"
+    on_success:
+      next: done
+  - name: done
+    type: terminal
+    status: completed
+
+compensation:
+  - name: retire_followup
+    condition: "steps.open_followup.completed == true"
+    action: delete
+    entity: Incident
+    id: "{{ context.followup_id }}"

@@ -3,9 +3,9 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.37.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.38.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 1s; whole run: 57s
+- Generation: 2s; whole run: 102s
 
 ## Summary
 
@@ -16,11 +16,11 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | C. Custom validation | 15 | 0 | 0 |
 | D. Hooks and events | 75 | 0 | 0 |
 | E. State machine | 20 | 0 | 0 |
-| F. Extension | 12 | 0 | 1 |
+| F. Extension | 55 | 0 | 0 |
 | G. Scoping | 36 | 0 | 0 |
-| H. Debuggability | 32 | 0 | 0 |
+| H. Debuggability | 35 | 0 | 0 |
 | I. Permissions | 142 | 0 | 0 |
-| **Total** | **431** | **0** | **2** |
+| **Total** | **477** | **0** | **1** |
 
 ## Matrix
 
@@ -247,8 +247,50 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | F | Custom service method | the custom service method consults the generated machine: archiving an open ticket answers 422 transition_not_allowed | PASS |
 | F | Extension routes | the extension's generic routes sit behind the stack (no token answers 401) | PASS |
 | F | Extension routes | the extension's generic routes are fenced (company B sees none of A's projects) | PASS |
-| F | Workflow | generation says the workflow is declaration-only | PASS |
-| F | Workflow | schema/workflows/ticket_escalation.workflow.yaml does something at runtime | UNSUPPORTED |
+| F | Workflow engine | an event starts one instance, and the same event delivered twice still makes one | PASS |
+| F | Workflow engine | the instance runs its steps to the wait and stops there: waiting on await_ack, each step logged, the start event's correlation id kept | PASS |
+| F | Workflow engine | a step's `set:` and the trigger's `extract:` land in the instance context (severity read from the incident through the generated service) | PASS |
+| F | Workflow engine | a condition step takes its branch: a severity 1 incident is not paged | PASS |
+| F | Workflow engine | a bespoke verb runs through the Actions method of the extension, inside the step's transaction, and a declared function evaluates in an expression (who = on_call_name(severity)) | PASS |
+| F | Workflow engine | `send_email` stages a NotificationRequested on the step's transaction (the effect is the relay's, never the step's): channel, template, recipient, variables and the step that asked | PASS |
+| F | Workflow engine | a row a step stages carries the instance's correlation id and the starting event as its cause | PASS |
+| F | Workflow engine | a wait ignores an event whose key does not match: another incident's acknowledgement leaves the instance waiting | PASS |
+| F | Workflow engine | a wait resumes on the matching event: acknowledging the incident (the real transition, the real staged event) completes the instance | PASS |
+| F | Workflow engine | a transition step moves the record through its state machine: the incident is `resolved` | PASS |
+| F | Workflow engine | an entity action goes through the generated service, so the entity's own triggers and declared events apply: the machine's `after_update_status_resolved` staged IncidentResolved | PASS |
+| F | Workflow engine | the step log shows each stage: waiting, resumed, then the transition, the event and the terminal | PASS |
+| F | Workflow engine | `emit_event` stages a declared event on the step's transaction with the instance's correlation and causation | PASS |
+| F | Workflow engine | a resume event delivered again changes nothing (the relay delivers at least once) | PASS |
+| F | Workflow engine | a wait expires through workflow_timer_sweep when its due time is in the past (and not before): the on_timeout branch runs | PASS |
+| F | Workflow engine | a transition the machine refuses (resolve from open) is a step failure: the failure branch runs and the error reaches the expression | PASS |
+| F | Workflow engine | the refused transition changed nothing: the incident is still open | PASS |
+| F | Workflow engine | an instance past the workflow's deadline (config.timeout) ends `expired` | PASS |
+| F | Workflow engine | a step that fails after writing leaves none of its writes: the row it staged is gone, the earlier step's follow-up stayed, and the failure is logged | PASS |
+| F | Workflow engine | a transient failure stores its backoff and waits: nothing is retried before it passes | PASS |
+| F | Workflow engine | a failing step is tried three times (backoff observable between them), then the instance fails and compensates: compensated | PASS |
+| F | Workflow engine | compensation runs through the generated service: the follow-up is soft-deleted and its IncidentDeleted event staged | PASS |
+| F | Workflow engine | compensation is idempotent: running it again repeats nothing and changes nothing | PASS |
+| F | Workflow engine | a business failure (the verb refuses with a validation error) is not retried: one failed attempt, then compensation | PASS |
+| F | Workflow engine | a run cut inside a step's transaction (a crash) leaves the instance running on that step, with the step's row rolled back and the completed step logged once | PASS |
+| F | Workflow engine | the sweep drives an instance nobody is running and the completed step is not repeated (one follow-up incident, never two) | PASS |
+| F | Workflow engine | an event of company B for company A's key never resumes company A's instance | PASS |
+| F | Workflow engine | another company's scope cannot read the instance or its step log; its own company can | PASS |
+| F | Workflow engine | the fence is the database: the app role with no company scope sees no instance and no step | PASS |
+| F | Workflow engine | the sweep still serves every company: company A's due wait runs under company A's scope | PASS |
+| F | Workflow engine | every instance carries its event's company | PASS |
+| F | Workflow engine | the module's background tasks list the events the engine reacts to: each trigger and each awaited event | PASS |
+| F | Workflow engine | deliver accepts an event nobody subscribed to and does nothing (the relay's sink can be shared) | PASS |
+| F | Workflow | generation says a workflow with no executor and no `implemented_by` is documentation only, and names it (and no other) | PASS |
+| F | Workflow | a workflow with no `executor` generates nothing and runs nothing: no generated file mentions it | PASS |
+| F | Workflow | the two engine workflows generate their spec, trait and definition; the module hands over its engine; one new migration creates the tables | PASS |
+| F | Workflow | a bespoke verb and a declared function are required methods of the generated trait with no default body; the doc-only file generates none | PASS |
+| F | Workflow engine | a function call in a workflow condition fails generation unless it is listed under `functions:`, naming the function and the step | PASS |
+| F | Workflow engine | a wait condition that is not an equality key fails validation: an instance is found by key, not by evaluating a condition against every waiting instance | PASS |
+| F | Workflow engine | with `executor` absent a workflow generates nothing: no workflows module, no engine in the module, no tables, and generation says it is documentation only | PASS |
+| F | Workflow engine | `schema doctor` fails on an extension that lacks a required workflow method, naming the method and what needs it | PASS |
+| F | Workflow engine | `schema doctor` fails on a missing extension file, saying how many methods it owes | PASS |
+| F | Workflow engine | `schema doctor` fails on a documented saga whose `implemented_by` names a function that does not exist | PASS |
+| F | Workflow engine | an implementation of the generated Actions trait that lacks a required method breaks the build with a named error | PASS |
 | G | RLS | the app connects as a role that is neither superuser nor BYPASSRLS | PASS |
 | G | Setup | company A creates a project and a branch ticket | PASS |
 | G | Read fence | list: B sees none of A's projects | PASS |
@@ -314,7 +356,10 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | H | Rules register | machine `Ticket.status` is labelled MOVES REFUSED and the transition trigger refuses a raw UPDATE | PASS |
 | H | Rules register | machine `Ticket.status` is labelled GUARDS IN GENERATED VERBS and the generated verb refuses a failing guard | PASS |
 | H | Rules register | machine `Approval.state` (hand_set) is labelled MOVES REFUSED and its verbs refuse a wrong-state move | PASS |
+| H | Rules register | `schema rules` labels a workflow the engine runs WORKFLOW RUNS (on its event, persisted, executor=engine) and lists its hand methods | PASS |
+| H | Rules register | `schema rules` labels a saga that names its hand function WORKFLOW DOCUMENTS and one with neither executor nor function WORKFLOW DOCUMENTED | PASS |
 | H | Schema doctor | `schema doctor .` counts the module's triggers and the hand methods they owe | PASS |
+| H | Schema doctor | `schema doctor .` counts the workflows the engine runs, the hand methods they owe, and points at where a stuck instance shows | PASS |
 | H | Schema doctor | `schema doctor .` accepts the freshly generated module with its extension files | PASS |
 | H | Diagnostics | a hook file with an `assert:` rule (no message) beside its `states:` generates, or names the offending rule | PASS |
 | I | Seeds | the seed migration writes every permission the routes require, the declared custom verbs and the system roles' grants | PASS |
@@ -462,7 +507,6 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 ## Failures (0)
 
-## Unsupported (2)
+## Unsupported (1)
 
 - **A / History / row history of an `audited: true` model** — needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither
-- **F / Workflow / schema/workflows/ticket_escalation.workflow.yaml does something at runtime** — declaration-only: it is parsed and validated (resolver/validator.rs:55) and no generated file mentions it; the flow target is retired (generators/mod.rs:621) — the hand-written escalate route is the executable flow (proven in F)

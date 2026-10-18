@@ -70,9 +70,13 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 | `module/schema/hooks/ticket.hook.yaml` | the `Ticket.status` machine (a final state, a guarded edge, a `from: "*"` edge, `verbs: generated`) and one rule per register label: GUARD, SHADOW, VERB (`enforced_by`), UNENFORCED; declared `events:`: five staged by the generated write hooks (`on: create`, `transition(resolve)` with an `if:`, `enter(archived)`, `update(title)`, `delete`) and one staged by hand (`TicketEscalated`) |
 | `module/schema/hooks/incident.hook.yaml` | `Incident.status` machine (verbs generated, `on_enter` / `on_exit` lists), declared events, and the `triggers:`: `before_create` and a `timing:` + `condition:` entry that `set:`, `after_create` (`log`, `emit:`, `notify`, `send_email`, and two hand actions), `after_update_status`, `after_update_status_resolved`, `after_update_title` with an `if:` over `$old`, `after_reopen` (a machine verb with a hand action), `before_delete` / `after_delete`, `after_page` (named for no write: hand-fired), and `sweep_stale` (a `schedule:` entry) |
 | `module/schema/hooks/approval_state.hook.yaml` | the `Approval.state` machine (`verbs: generated`) over the hand_set field |
-| `module/schema/workflows/ticket_escalation.workflow.yaml` | a workflow declaration, to prove it is declaration-only |
+| `module/schema/workflows/incident_escalation.workflow.yaml` | `executor: engine`: an event starts it, a condition pages (a bespoke verb, with a declared function in its parameters, and a `send_email`), a wait for the `IncidentAcknowledged` event the Incident write hooks stage (keyed by incident, 15 minutes), a state-machine transition on the answer, an update and a refused transition on the timeout, an `emit_event`, a terminal `result`, a 7 day deadline |
+| `module/schema/workflows/incident_checklist.workflow.yaml` | `executor: engine`: opens a follow-up incident through the generated service, runs a verb that can fail (by title: `boom` stages a row then breaks, `refuse` is refused, `linger` never returns), and compensates by retiring the follow-up through the service |
+| `module/schema/workflows/ticket_triage.workflow.yaml` | a saga with `implemented_by` naming the hand function that runs it (`ticket_handler.ext.rs::escalate`): documented, never run by the engine |
+| `module/schema/workflows/ticket_escalation.workflow.yaml` | a workflow with no `executor` and no `implemented_by`: documentation only, generates nothing, so nothing runs it |
 | `module/schema/rules.baseline.yaml` | the rule ratchet, accepting the one deliberately unenforced rule |
 | `module/src/application/service/project_service.ext.rs` | lifecycle hooks (`ServiceLifecycle`), an event publisher, a hand-written `WriteGuard` check composed with the generated one, and hand-written `WriteHooks` that stage an event and can fail after staging it |
+| `module/src/application/workflows/incident_escalation_workflow.ext.rs`, `incident_checklist_workflow.ext.rs` | the hand halves of the two engine workflows: `page_responder` (stages a row on the step's transaction) and `on_call_name` (the declared function), and `risky_step`, whose behaviour the incident's title chooses |
 | `module/src/application/triggers/incident_triggers.ext.rs` | `IncidentTriggersImpl`, the hand half of the triggers: a refusal after the hooks staged their rows, a follow-up written through the generated service (nesting), two rows staged on the write's transaction, the scheduled method, and the service handle a build step binds |
 | `module/src/presentation/http/incident_handler.ext.rs` | `POST /incidents/:id/page`, a hand verb that fires the hand-fired trigger with `fire_after_page` in its own transaction |
 | `module/src/application/service/ticket_service.ext.rs` | a custom service method (`archive_with_reason`), the function the VERB rule names |
@@ -135,6 +139,32 @@ extension layout; that `legacy_triggers: true` keeps the old behaviour; that the
 extension file or method and warns on a client called inside the transaction; and that the build refuses
 an implementation lacking a required method.
 
+## Workflows run by the engine (area F)
+
+`IncidentEscalation` and `IncidentChecklist` run on `backbone-core`'s workflow engine; the probes deliver
+events to the module's `background_tasks()` as the outbox relay would (the real `IncidentAcknowledged` row
+the write hooks staged is taken from the outbox and handed over) and call the engine's sweep as the scheduled
+job `workflow_timer_sweep` would. They assert that an event starts one instance and a replay of it starts
+none; that the instance runs to its wait and stops, with each step logged and the start event's correlation
+id kept; that a condition takes its branch, a bespoke verb runs through the extension inside the step's
+transaction, and a declared function evaluates in an expression; that a wait ignores an event whose key does
+not match, resumes on the matching one (the acknowledgement of the incident through its real transition
+route), and does nothing when the same event is delivered again; that a wait expires through the sweep only
+when its due time has passed, and an instance past its deadline ends `expired`; that entity actions go
+through the generated services (the machine's `after_update_status_resolved` trigger staged its event),
+a transition step uses the state machine and its refusal (resolve from open) takes the failure branch and
+leaves the record alone; that a step failing after it wrote leaves none of its writes, a transient failure
+stores its backoff and is tried three times, then the instance fails and compensates through the service,
+and compensating again changes nothing; that a refusal the caller can fix is not retried; that a run cut
+inside a step's transaction leaves the instance on that step and the sweep resumes it without repeating the
+completed one; and that instances are fenced by company: an event of company B never resumes company A's
+instance, company B's scope cannot read it, the app role with no scope sees nothing, and the sweep still
+serves company A. Variants prove that a function call in a condition (unless listed under `functions:`) and a
+wait condition that is not an equality key fail generation, that `executor` absent generates nothing, that
+the doctor names a missing extension file or method and a documented saga naming a function that does not
+exist, that the register labels `WORKFLOW RUNS`, `WORKFLOW DOCUMENTS` and `WORKFLOW DOCUMENTED`, and that
+the build refuses an implementation lacking a required method.
+
 ## What it cannot cover
 
 - Row history of an `audited: true` model: the capture trigger and the history provider come
@@ -144,6 +174,11 @@ an implementation lacking a required method.
 - Delivery to a real broker or in-process bus: the relay is driven with test sinks (success, a
   failing publish, an exhausted one); `relay::drain_once`, `reemit` and `inbox::once` are the
   framework's own and run against the scratch database.
+- The relay and the scheduler: the probes hand events to `background_tasks().deliver` and call
+  `timer_sweep` themselves. The composing service wires the first into its relay and runs the second as the
+  job `workflow_timer_sweep`, every minute; neither is a module concern.
+- A consumer of the `NotificationRequested` a workflow stages (`send_email`, `notify`): the probes read the
+  row from the outbox, as for the triggers' requests.
 - A consumer of `NotificationRequested`: no mail or notification module consumes the row yet, so the
   probes read it from the outbox table.
 

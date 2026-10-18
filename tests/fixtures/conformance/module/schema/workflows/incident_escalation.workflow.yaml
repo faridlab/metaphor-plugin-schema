@@ -1,0 +1,151 @@
+# An incident is raised: look it up, page a responder when it is severe, wait for someone to
+# acknowledge it (the `IncidentAcknowledged` event the Incident write hooks stage when its state
+# machine enters `acknowledged`), then resolve it through the machine. If nobody acknowledges in
+# time the workflow escalates: it reassigns the incident and tries to resolve it, which the
+# machine refuses from `open`, and the refusal takes the failure branch.
+#
+# It runs on the engine (`executor: engine`): the generated spec and definition, the entity actions
+# through the generated Incident service, a state-machine verb through the machine's own checks,
+# one bespoke verb (`page_responder`) and one declared function (`on_call_name`), both implemented in
+# src/application/workflows/incident_escalation_workflow.ext.rs.
+
+name: IncidentEscalation
+description: "Page, wait for an acknowledgement, resolve or escalate"
+version: 1
+
+trigger:
+  event: IncidentEscalationRequested
+  extract:
+    incident_id: "event.incident_id"
+
+config:
+  executor: engine
+  timeout: 7d
+  persistence: true
+
+functions:
+  - on_call_name
+
+context:
+  outcome: null
+
+steps:
+  - name: fetch_incident
+    type: action
+    action: find_by_id
+    entity: Incident
+    id: "{{ context.incident_id }}"
+    on_success:
+      set:
+        severity: "{{ result.severity }}"
+      next: choose
+    on_failure:
+      next: missing
+
+  - name: choose
+    type: condition
+    conditions:
+      - if: "context.severity >= 3"
+        next: page_now
+      - else: true
+        next: await_ack
+
+  - name: page_now
+    type: action
+    action: page_responder
+    params:
+      incident_id: "{{ context.incident_id }}"
+      who: "{{ on_call_name(context.severity) }}"
+    on_success:
+      next: tell_oncall
+
+  - name: tell_oncall
+    type: action
+    action: send_email
+    params:
+      template: incident_paged
+      to: "{{ on_call_name(context.severity) }}"
+      subject: "Incident paged"
+      data:
+        incident_id: "{{ context.incident_id }}"
+    on_success:
+      next: await_ack
+
+  - name: await_ack
+    type: wait
+    wait_for:
+      event: IncidentAcknowledged
+      condition: "event.incident_id == context.incident_id"
+      timeout: 15m
+    on_event:
+      next: resolve_now
+    on_timeout:
+      next: reassign
+
+  - name: resolve_now
+    type: transition
+    entity: Incident
+    id: "{{ context.incident_id }}"
+    transition: resolve
+    on_success:
+      set:
+        outcome: resolved
+      next: announce
+
+  - name: reassign
+    type: action
+    action: update
+    entity: Incident
+    id: "{{ context.incident_id }}"
+    params:
+      handled_by: escalated
+    on_success:
+      next: try_resolve
+
+  - name: try_resolve
+    type: transition
+    entity: Incident
+    id: "{{ context.incident_id }}"
+    transition: resolve
+    on_success:
+      set:
+        outcome: resolved_late
+      next: announce
+    on_failure:
+      next: refused
+
+  - name: refused
+    type: action
+    action: audit_log
+    params:
+      action: resolve_refused
+      severity: warning
+      details:
+        incident_id: "{{ context.incident_id }}"
+        reason: "{{ error }}"
+    on_success:
+      set:
+        outcome: escalated
+      next: announce
+
+  - name: announce
+    type: action
+    action: emit_event
+    params:
+      event: IncidentEscalationHandled
+      data:
+        incident_id: "{{ context.incident_id }}"
+        outcome: "{{ context.outcome }}"
+    on_success:
+      next: done
+
+  - name: done
+    type: terminal
+    status: completed
+    result:
+      outcome: "{{ context.outcome }}"
+
+  - name: missing
+    type: terminal
+    status: failed
+    reason: "the incident does not exist"

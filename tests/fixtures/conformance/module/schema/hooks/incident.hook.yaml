@@ -60,6 +60,9 @@ events:
   IncidentPaged:
     aggregate: Incident
     fields: { incident_id: uuid }
+  IncidentEscalationHandled:
+    aggregate: Incident
+    fields: { incident_id: uuid, outcome: string }
 
 triggers:
   # Values the client does not send, filled before the row is stored.

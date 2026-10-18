@@ -494,6 +494,34 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         "metaphor-plugin-schema/src/commands/schema/rules.rs (print_permissions)",
     ));
 
+    // Workflows: the register labels what runs, what documents a function and what only documents.
+    let workflows = register.get("workflows").and_then(Value::as_array).cloned().unwrap_or_default();
+    let workflow = |name: &str| workflows.iter().find(|w| w.get("name").and_then(Value::as_str) == Some(name)).cloned().unwrap_or(Value::Null);
+    let label_of = |name: &str| workflow(name).get("label").and_then(Value::as_str).unwrap_or("absent").to_string();
+    let hand_of = |name: &str| -> Vec<String> { workflow(name).get("hand").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default() };
+    rows.push(gen_row(
+        "H",
+        "Rules register",
+        "`schema rules` labels a workflow the engine runs WORKFLOW RUNS (on its event, persisted, executor=engine) and lists its hand methods",
+        label_of("IncidentEscalation") == "WORKFLOW RUNS (on IncidentEscalationRequested, persisted, executor=engine)"
+            && hand_of("IncidentEscalation") == ["WORKFLOW HAND (page_responder)", "WORKFLOW HAND (fn_on_call_name)"]
+            && hand_of("IncidentChecklist") == ["WORKFLOW HAND (risky_step)"],
+        "metaphor-schema schema rules . -f json",
+        "WORKFLOW RUNS (on IncidentEscalationRequested, persisted, executor=engine); WORKFLOW HAND (page_responder), (fn_on_call_name); (risky_step)",
+        &format!("{}; {:?}; {:?}", label_of("IncidentEscalation"), hand_of("IncidentEscalation"), hand_of("IncidentChecklist")),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (workflow_labels)",
+    ));
+    rows.push(gen_row(
+        "H",
+        "Rules register",
+        "`schema rules` labels a saga that names its hand function WORKFLOW DOCUMENTS and one with neither executor nor function WORKFLOW DOCUMENTED",
+        label_of("TicketTriage") == "WORKFLOW DOCUMENTS (src/presentation/http/ticket_handler.ext.rs::escalate)" && label_of("TicketEscalation") == "WORKFLOW DOCUMENTED",
+        "metaphor-schema schema rules . -f json",
+        "TicketTriage: WORKFLOW DOCUMENTS (<file>::escalate); TicketEscalation: WORKFLOW DOCUMENTED",
+        &format!("{} / {}", label_of("TicketTriage"), label_of("TicketEscalation")),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (workflow_labels)",
+    ));
+
     let out = run(Command::new(bin).args(["schema", "doctor", "."]).current_dir(module).env("NO_COLOR", "1"), "schema doctor");
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     rows.push(gen_row(
@@ -515,6 +543,19 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         "triggers: 13 entries on 1 model(s) run in the write's transaction; 5 hand method(s)",
         &one_line(&text.lines().filter(|l| l.contains("triggers:")).collect::<Vec<_>>().join(" | ")),
         "metaphor-plugin-schema/src/commands/schema/doctor.rs (trigger_report)",
+    ));
+    rows.push(gen_row(
+        "H",
+        "Schema doctor",
+        "`schema doctor .` counts the workflows the engine runs, the hand methods they owe, and points at where a stuck instance shows",
+        out.status.success()
+            && text.contains("workflows: 2 run on the engine (3 hand method(s)")
+            && text.contains("1 documented sagas name the function that runs them, 1 documentation only")
+            && text.contains("bb_workflow_instances"),
+        "metaphor-schema schema doctor .",
+        "workflows: 2 run on the engine (3 hand method(s) ...), 1 documented sagas ..., 1 documentation only; the stuck-instance query",
+        &one_line(&text.lines().filter(|l| l.contains("workflows:") || l.contains("bb_workflow")).collect::<Vec<_>>().join(" | ")),
+        "metaphor-plugin-schema/src/commands/schema/doctor.rs (workflow_report), workflows_check.rs",
     ));
     rows.push(gen_row(
         "H",
@@ -819,29 +860,61 @@ fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, main_output: &st
     rows.push(gen_row(
         "F",
         "Workflow",
-        "generation says the workflow is declaration-only",
-        said("workflow").is_some(),
-        "generate the fixture (schema/workflows/ticket_escalation.workflow.yaml)",
-        "a warning naming the workflow as declaration-only",
-        &said("workflow").unwrap_or_else(|| "no such warning".into()),
+        "generation says a workflow with no executor and no `implemented_by` is documentation only, and names it (and no other)",
+        said("TicketEscalation").is_some() && said("IncidentEscalation").is_none() && said("IncidentChecklist").is_none() && said("TicketTriage").is_none(),
+        "generate the fixture (ticket_escalation has no executor; incident_escalation and incident_checklist run on the engine; ticket_triage names implemented_by)",
+        "a declaration-only warning naming TicketEscalation only",
+        &said("TicketEscalation").unwrap_or_else(|| "no such warning".into()),
         "metaphor-plugin-schema/src/resolver/validator.rs (declaration_only_warnings)",
     ));
 
-    // Workflows: declaration-only.
+    // A workflow with no `executor` generates nothing, so nothing runs it.
     let hits = grep_tree(&main.join("src"), "TicketEscalation");
-    rows.push(Row {
-        area: "F".into(),
-        feature: "Workflow".into(),
-        probe: "schema/workflows/ticket_escalation.workflow.yaml does something at runtime".into(),
-        status: "UNSUPPORTED".into(),
-        request: "generate with the workflow file present".into(),
-        expected: String::new(),
-        got: format!(
-            "declaration-only: it is parsed and validated (resolver/validator.rs:55) and {} generated file mentions it; the flow target is retired (generators/mod.rs:621) — the hand-written escalate route is the executable flow (proven in F)",
-            if hits.is_empty() { "no".to_string() } else { format!("{} (unexpected)", hits.len()) }
-        ),
-        diagnosis: String::new(),
-    });
+    rows.push(gen_row(
+        "F",
+        "Workflow",
+        "a workflow with no `executor` generates nothing and runs nothing: no generated file mentions it",
+        hits.is_empty() && !main.join("src/application/workflows/ticket_escalation_workflow.rs").exists() && !main.join("src/application/workflows/ticket_triage_workflow.rs").exists(),
+        "generate with schema/workflows/ticket_escalation.workflow.yaml (no executor) and ticket_triage.workflow.yaml (implemented_by) present",
+        "no generated file for either",
+        &format!("{} generated file(s) mention TicketEscalation", hits.len()),
+        "metaphor-plugin-schema/src/generators/workflows.rs (engine_workflows)",
+    ));
+    let workflows_dir = main.join("src/application/workflows");
+    let generated_files: Vec<String> = fs::read_dir(&workflows_dir)
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    let migration = fs::read_dir(main.join("migrations"))
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.contains("create_workflow_tables")).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let lib = fs::read_to_string(main.join("src/lib.rs")).unwrap_or_default();
+    rows.push(gen_row(
+        "F",
+        "Workflow",
+        "the two engine workflows generate their spec, trait and definition; the module hands over its engine; one new migration creates the tables",
+        generated_files.iter().any(|f| f == "incident_escalation_workflow.rs")
+            && generated_files.iter().any(|f| f == "incident_checklist_workflow.rs")
+            && generated_files.iter().any(|f| f == "mod.rs")
+            && lib.contains("pub fn background_tasks(&self)")
+            && migration.len() == 2,
+        "generate the fixture",
+        "incident_escalation_workflow.rs, incident_checklist_workflow.rs, mod.rs; background_tasks() in lib.rs; <ts>_create_workflow_tables.{up,down}.sql",
+        &format!("{generated_files:?}; background_tasks: {}; migrations {migration:?}", lib.contains("pub fn background_tasks(&self)")),
+        "metaphor-plugin-schema/src/generators/workflows.rs, module.rs, sql.rs",
+    ));
+    let escalation_rs = fs::read_to_string(workflows_dir.join("incident_escalation_workflow.rs")).unwrap_or_default();
+    rows.push(gen_row(
+        "F",
+        "Workflow",
+        "a bespoke verb and a declared function are required methods of the generated trait with no default body; the doc-only file generates none",
+        escalation_rs.contains("async fn page_responder(&self, ctx: &WriteCtx, params: &Value, wf: &Value) -> ServiceResult<Value>;")
+            && escalation_rs.contains("async fn fn_on_call_name(&self, ctx: &WriteCtx, args: &[Value]) -> ServiceResult<Value>;")
+            && !escalation_rs.lines().any(|l| l == "pub struct IncidentEscalationActionsImpl;"),
+        "read incident_escalation_workflow.rs",
+        "page_responder and fn_on_call_name declared without a body; no empty implementation (the extension defines it)",
+        &one_line(&escalation_rs.lines().filter(|l| l.contains("async fn ")).collect::<Vec<_>>().join(" | ")),
+        "metaphor-plugin-schema/src/generators/workflows.rs (workflow_file)",
+    ));
 }
 
 /// Run `schema doctor .` in `module`: whether it passed, and what it said.
@@ -1163,6 +1236,140 @@ fn trigger_variant_probes(skeleton: &Path, fixture: &Path, framework: Option<&Pa
     ));
 }
 
+/// The files of `src/application/workflows` the generator wrote: everything but the hand-written extensions.
+fn generated_in_workflows(module: &Path) -> Vec<String> {
+    fs::read_dir(module.join("src/application/workflows"))
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| !n.ends_with(".ext.rs")).collect())
+        .unwrap_or_default()
+}
+
+fn workflow_variant_probes(skeleton: &Path, fixture: &Path, framework: Option<&Path>, rows: &mut Vec<Row>) {
+    const ESC: &str = "schema/workflows/incident_escalation.workflow.yaml";
+    const ESC_EXT: &str = "src/application/workflows/incident_escalation_workflow.ext.rs";
+    const CHK: &str = "schema/workflows/incident_checklist.workflow.yaml";
+
+    // A workflow that cannot run is refused when the schema is read, never half generated.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(ESC), |t| t.replacen("if: \"context.severity >= 3\"", "if: \"get_comment(context.incident_id) != null\"", 1)));
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "a function call in a workflow condition fails generation unless it is listed under `functions:`, naming the function and the step",
+        !out.status.success() && text.contains("get_comment") && text.contains("step `choose`") && text.contains("`functions:`"),
+        "write `get_comment(context.incident_id) != null` as a condition of incident_escalation and generate",
+        "generation fails: the function `get_comment` is not in the expression set; list it under `functions:`",
+        &format!("exit {:?}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("get_comment")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/rules/workflows.rs (lower)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(ESC), |t| t.replacen("event.incident_id == context.incident_id", "event.incident_id != context.incident_id", 1)));
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "a wait condition that is not an equality key fails validation: an instance is found by key, not by evaluating a condition against every waiting instance",
+        !out.status.success() && text.contains("is not a wait key") && text.contains("wait_for.condition"),
+        "write `event.incident_id != context.incident_id` as the wait condition and generate",
+        "generation fails: not a wait key; every part must be an equality `event.<field> == <context expression>`",
+        &format!("exit {:?}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("wait key")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/rules/workflows.rs (wait_key)",
+    ));
+
+    // `executor` absent: nothing is generated, so nothing can run.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(ESC), |t| t.replacen("  executor: engine\n", "", 1));
+        edit(&m.join(CHK), |t| t.replacen("  executor: engine\n", "", 1));
+    });
+    let lib = fs::read_to_string(module.join("src/lib.rs")).unwrap_or_default();
+    let (ok, doctor_text) = doctor(&module);
+    let said = output_text(&out);
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "with `executor` absent a workflow generates nothing: no workflows module, no engine in the module, no tables, and generation says it is documentation only",
+        out.status.success()
+            && generated_in_workflows(&module).is_empty()
+            && !lib.contains("background_tasks")
+            && !fs::read_dir(module.join("migrations")).map(|d| d.flatten().any(|e| e.file_name().to_string_lossy().contains("workflow"))).unwrap_or(false)
+            && said.lines().any(|l| l.contains("IncidentEscalation") && l.contains("declaration-only"))
+            && ok,
+        "remove `executor: engine` from both engine workflows and generate",
+        "success; no src/application/workflows, no background_tasks, no workflow migration; both named declaration-only; doctor passes",
+        &format!("generate exit {:?}; generated files in src/application/workflows: {:?}; background_tasks: {}; doctor ok={ok} {}", out.status.code(), generated_in_workflows(&module), lib.contains("background_tasks"), one_line(&doctor_text.lines().filter(|l| l.contains("workflows:")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/generators/workflows.rs",
+    ));
+
+    // The doctor says what hand code owes the generated trait, and what a documented saga names.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(ESC_EXT), |t| without_method(&t, "fn_on_call_name")));
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "`schema doctor` fails on an extension that lacks a required workflow method, naming the method and what needs it",
+        out.status.success() && !ok && text.contains("incident_escalation_workflow.ext.rs: no method `fn_on_call_name`") && text.contains("the function `on_call_name`") && text.contains("the build would refuse"),
+        "remove fn_on_call_name from incident_escalation_workflow.ext.rs and run doctor",
+        "exit 1; no method `fn_on_call_name` (the function on_call_name)",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("fn_on_call_name")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/commands/schema/workflows_check.rs (scan)",
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |_| {});
+    fs::remove_file(module.join(ESC_EXT)).unwrap();
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "`schema doctor` fails on a missing extension file, saying how many methods it owes",
+        out.status.success() && !ok && text.contains("incident_escalation_workflow.ext.rs: missing") && text.contains("needs 2 hand method(s) of `IncidentEscalationActions`"),
+        "delete incident_escalation_workflow.ext.rs and run doctor",
+        "exit 1; the extension file is missing and 2 methods are owed",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("incident_escalation_workflow.ext.rs")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/commands/schema/workflows_check.rs (scan)",
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join("schema/workflows/ticket_triage.workflow.yaml"), |t| t.replacen("::escalate\"", "::escalate_nothing\"", 1)));
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "`schema doctor` fails on a documented saga whose `implemented_by` names a function that does not exist",
+        out.status.success() && !ok && text.contains("workflow 'TicketTriage' says it is implemented by") && text.contains("escalate_nothing"),
+        "point ticket_triage's implemented_by at a function that does not exist and run doctor",
+        "exit 1; the saga's claim names a missing function",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("TicketTriage")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/commands/schema/workflows_check.rs (scan)",
+    ));
+
+    // The compiler enforces that the declaration and the code agree: a missing method is a named build error.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(ESC_EXT), |t| without_method(&t, "page_responder")));
+    patch_manifest(&module, framework);
+    let jobs = std::env::var("CONFORMANCE_JOBS").unwrap_or_else(|_| "2".into());
+    let mut cargo = Command::new(env!("CARGO"));
+    cargo.args(["test", "-j", &jobs, "--lib", "--no-run"]).current_dir(&module);
+    if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
+        cargo.env("CARGO_TARGET_DIR", target);
+    } else {
+        cargo.env("CARGO_TARGET_DIR", dir.path().join("target"));
+    }
+    let build = run(&mut cargo, "cargo test --lib --no-run (workflow variant)");
+    let stderr = String::from_utf8_lossy(&build.stderr).to_string();
+    rows.push(gen_row(
+        "F",
+        "Workflow engine",
+        "an implementation of the generated Actions trait that lacks a required method breaks the build with a named error",
+        out.status.success() && !build.status.success() && stderr.contains("E0046") && stderr.contains("page_responder"),
+        "remove the page_responder method from incident_escalation_workflow.ext.rs and build the module",
+        "the build fails: E0046, not all trait items implemented, missing `page_responder`",
+        &one_line(&stderr.lines().filter(|l| l.contains("E0046") || l.contains("missing")).take(3).collect::<Vec<_>>().join(" | ")),
+        "the generated incident_escalation_workflow.rs (no default method bodies)",
+    ));
+}
+
 #[test]
 #[ignore = "generates a module, builds it and drives it against a scratch Postgres database; run with --ignored"]
 fn every_backbone_feature_works_at_runtime_through_the_generator() {
@@ -1235,6 +1442,7 @@ fn every_backbone_feature_works_at_runtime_through_the_generator() {
     variant_probes(&skeleton, &fixture, &module, &output_text(&generate), &mut rows);
     permission_variant_probes(&skeleton, &fixture, &mut rows);
     trigger_variant_probes(&skeleton, &fixture, framework.as_deref(), &mut rows);
+    workflow_variant_probes(&skeleton, &fixture, framework.as_deref(), &mut rows);
     rows.sort_by_key(|r| AREAS.iter().position(|(k, _)| *k == r.area).unwrap_or(99));
 
     let header = format!(

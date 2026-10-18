@@ -1,0 +1,29 @@
+# A saga a hand-written service already carries out: the escalate route
+# (src/presentation/http/ticket_handler.ext.rs) moves the ticket and records the note in one
+# transaction. The file documents it and names the function, which `schema doctor` checks exists;
+# the engine does not run it (it would run twice).
+
+name: TicketTriage
+description: "Escalate a ticket: move it, then record the note, in one transaction"
+version: 1
+implemented_by: "src/presentation/http/ticket_handler.ext.rs::escalate"
+
+trigger:
+  event: TicketTriageRequested
+  extract:
+    ticket_id: "event.ticket_id"
+
+config:
+  timeout: 30s
+  persistence: false
+
+steps:
+  - name: move
+    type: action
+    action: update
+    entity: Ticket
+    on_success:
+      next: done
+  - name: done
+    type: terminal
+    status: completed

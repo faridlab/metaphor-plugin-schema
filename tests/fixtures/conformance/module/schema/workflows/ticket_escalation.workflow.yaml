@@ -1,6 +1,8 @@
-# A two-step saga, to prove what a workflow declaration does at runtime: the generator reads
-# and validates it, and nothing executes it. The hand-written escalate verb
-# (src/presentation/http/ticket_handler.ext.rs) is the flow's executable truth.
+# A two-step saga with no `config.executor` and no `implemented_by`: the generator reads and
+# validates it, says it is documentation only, and generates nothing for it, so nothing runs it.
+# The hand-written escalate verb (src/presentation/http/ticket_handler.ext.rs) is the flow's
+# executable truth. (`incident_escalation` and `incident_checklist` run on the engine;
+# `ticket_triage` documents the function that runs it.)
 
 name: TicketEscalation
 description: "Escalate a ticket: start it, then record the escalation note"
