@@ -900,7 +900,7 @@ pub(crate) fn rust_seeders_opted_in(
     turned_on(config, GenerationTarget::Seeder)
 }
 
-fn filter_targets_by_config(
+pub(crate) fn filter_targets_by_config(
     targets: &[GenerationTarget],
     config: &Option<crate::parser::yaml_parser::GeneratorsConfig>,
 ) -> Vec<GenerationTarget> {

@@ -2019,6 +2019,31 @@ mod tests {
     }
 
     #[test]
+    fn an_engine_workflow_in_a_module_that_disabled_the_workflow_generator_is_refused() {
+        let mut s = schema_with(BASE);
+        s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig {
+            extensions: Some(true),
+            disabled: Some(vec!["grpc".into(), "workflow".into()]),
+            ..Default::default()
+        });
+        let p = crate::resolver::validator::workflow_problems(&s);
+        assert!(p.iter().any(|m| m.contains("exclude the workflow target") && m.contains("remove `workflow` from `disabled:`")), "{p:?}");
+        s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig {
+            extensions: Some(true),
+            disabled: Some(vec!["grpc".into()]),
+            ..Default::default()
+        });
+        assert!(crate::resolver::validator::workflow_problems(&s).is_empty());
+        // A whitelist that omits it excludes it too.
+        s.generators_config = Some(crate::parser::yaml_parser::GeneratorsConfig {
+            extensions: Some(true),
+            enabled: Some(vec!["rust".into(), "sql".into()]),
+            ..Default::default()
+        });
+        assert!(crate::resolver::validator::workflow_problems(&s).iter().any(|m| m.contains("exclude the workflow target")));
+    }
+
+    #[test]
     fn a_workflow_documented_or_implemented_by_hand_is_not_an_engine_workflow() {
         let s = schema_with(&BASE.replace("executor: engine", "executor: hand"));
         assert!(!has_engine_workflows(&s));

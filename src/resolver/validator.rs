@@ -1078,6 +1078,18 @@ pub fn workflow_problems(schema: &ModuleSchema) -> Vec<String> {
             }
         }
         if w.runs_on_engine() {
+            // A module that turned the workflow generator off would get nothing generated, in
+            // silence: say so rather than let `executor: engine` be a declaration nothing honours.
+            let targets = crate::generators::filter_targets_by_config(
+                &crate::generators::GenerationTarget::all(),
+                &schema.generators_config,
+            );
+            if !targets.contains(&crate::generators::GenerationTarget::Flow) {
+                out.push(format!(
+                    "workflow '{}' runs on the engine, but this module's generators exclude the workflow target (`generators: disabled:` names `workflow`, or `enabled:` omits it), so nothing would be generated for it: remove `workflow` from `disabled:`",
+                    w.name
+                ));
+            }
             let compiled = crate::rules::workflows::compile(schema, w);
             if compiled.problems.is_empty() && compiled.required_methods() > 0 && !extensions {
                 out.push(format!(
