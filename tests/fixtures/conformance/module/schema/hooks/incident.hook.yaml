@@ -1,0 +1,126 @@
+# Incident: the state machine on `status` (verbs generated) and the hook triggers. Every trigger
+# runs inside the write's transaction. What compiles runs in the generated write hooks (`set:`
+# before the write, `log`, `emit:`, `send_email`, `notify`); the rest is a required method of the
+# generated `IncidentTriggers` trait, implemented in
+# src/application/triggers/incident_triggers.ext.rs.
+
+name: Incident
+model: Incident
+
+states:
+  field: status
+  verbs: generated
+  values:
+    open:
+      initial: true
+      on_exit:
+        - "emit: IncidentLeftOpen(incident_id: id)"
+    acknowledged:
+      on_enter:
+        - "emit: IncidentAcknowledged(incident_id: id)"
+    resolved: {}
+    closed:
+      final: true
+  transitions:
+    acknowledge:
+      from: open
+      to: acknowledged
+    resolve:
+      from: acknowledged
+      to: resolved
+    close:
+      from: resolved
+      to: closed
+    reopen:
+      from: resolved
+      to: open
+
+events:
+  IncidentOpened:
+    aggregate: Incident
+    fields: { incident_id: uuid, severity: int }
+  IncidentStatusChanged:
+    aggregate: Incident
+    fields: { incident_id: uuid, status: string, was: "string?" }
+  IncidentResolved:
+    aggregate: Incident
+    fields: { incident_id: uuid }
+  IncidentRetitled:
+    aggregate: Incident
+    fields: { incident_id: uuid, title: string }
+  IncidentAcknowledged:
+    aggregate: Incident
+    fields: { incident_id: uuid }
+  IncidentLeftOpen:
+    aggregate: Incident
+    fields: { incident_id: uuid }
+  IncidentDeleted:
+    aggregate: Incident
+    fields: { incident_id: uuid }
+  IncidentPaged:
+    aggregate: Incident
+    fields: { incident_id: uuid }
+
+triggers:
+  # Values the client does not send, filled before the row is stored.
+  before_create:
+    actions:
+      - "set: sla = 'standard'"
+      - "set: handled_by = 'unassigned'"
+  # A label with `timing:` and a `condition:`: runs after the one above, so it wins.
+  urgent_sla:
+    timing: before_create
+    condition: "severity >= 3"
+    actions:
+      - "set: sla = 'urgent'"
+
+  after_create:
+    actions:
+      - "log(incident.opened, { incident_id: id, severity: severity, ip: $context.ip_address })"
+      - "emit: IncidentOpened(incident_id: id, severity: severity)"
+      - "notify([id], Incident #{title} opened, { severity: severity })"
+      - "send_email(incident_opened, handled_by, { title: title })"
+      - "trigger: screen_title"
+      - "trigger: spawn_follow_up"
+
+  # Any change of the state field; and the same change only into `resolved`.
+  after_update_status:
+    actions:
+      - "emit: IncidentStatusChanged(incident_id: id, status: status, was: $old.status)"
+  after_update_status_resolved:
+    actions:
+      - "emit: IncidentResolved(incident_id: id)"
+
+  # A generic write that changes the title.
+  after_update_title:
+    if: "title != $old.title"
+    actions:
+      - "emit: IncidentRetitled(incident_id: id, title: title)"
+
+  # A verb of the machine, with a hand action.
+  after_reopen:
+    actions:
+      - "trigger: note_reopen"
+
+  before_delete:
+    actions:
+      - "log(incident.deleting, { incident_id: id })"
+  after_delete:
+    actions:
+      - "emit: IncidentDeleted(incident_id: id)"
+
+  # Names no write, field or transition: a hand verb fires it (`fire_after_page`).
+  after_page:
+    actions:
+      - "emit: IncidentPaged(incident_id: id)"
+      - "trigger: page_on_call"
+
+  # A job: registered in the module's scheduled jobs, run by the composing service's scheduler.
+  sweep_stale:
+    schedule: "every 5.minutes"
+    posture: pull
+    pickup_lock: true
+    description: "Close incidents nobody has touched"
+    actions:
+      - "update: Incident(status: 'resolved') WHERE status == 'acknowledged'"
+      - "log(incident.swept)"

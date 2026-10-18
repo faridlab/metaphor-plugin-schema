@@ -64,13 +64,17 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 | `module/schema/models/project.model.yaml` | `Project`, company-fenced (`company_id`): string, `@email`/`@url` attributes on strings, `email?` and `url?` types, decimal, money, int with `@range` and a literal default, int64 with `@min`/`@max`, bool default, date, datetime, json, enum default, `@unique`, `@immutable`, `@private`, `@exclude_from_dto`, `@length(min,max)`, `@pattern`, `@non_negative`, `@positive`, audit metadata and soft delete |
 | `module/schema/models/ticket.model.yaml` | `Ticket`, org-fenced (`org_unit_id`): a foreign key to `Project`, a state field, a `projection` lifecycle field, nullable decimals and text, `@default(uuid)` on a non-id field, a composite `indexes: unique` |
 | `module/schema/models/label.model.yaml` | `Label`, public reference data declared `public: true`: its reads need no permission and no login where the host mounts `public_routes()` outside its auth layer, its writes still need `label:<action>`; it has no company or org column, so it carries no fence |
+| `module/schema/models/incident.model.yaml` | `Incident`, company-fenced: a `severity` int, a `status` machine, fields (`sla`, `handled_by`) that a trigger fills, carrying the hook triggers |
 | `module/schema/models/approval.model.yaml` | `Approval`, company-fenced, a `hand_set` state bound to a machine |
 | `module/schema/hooks/project.hook.yaml` | a declared uniqueness rule (`count(...) == 0` → coded partial unique index) and a row rule |
 | `module/schema/hooks/ticket.hook.yaml` | the `Ticket.status` machine (a final state, a guarded edge, a `from: "*"` edge, `verbs: generated`) and one rule per register label: GUARD, SHADOW, VERB (`enforced_by`), UNENFORCED; declared `events:`: five staged by the generated write hooks (`on: create`, `transition(resolve)` with an `if:`, `enter(archived)`, `update(title)`, `delete`) and one staged by hand (`TicketEscalated`) |
+| `module/schema/hooks/incident.hook.yaml` | `Incident.status` machine (verbs generated, `on_enter` / `on_exit` lists), declared events, and the `triggers:`: `before_create` and a `timing:` + `condition:` entry that `set:`, `after_create` (`log`, `emit:`, `notify`, `send_email`, and two hand actions), `after_update_status`, `after_update_status_resolved`, `after_update_title` with an `if:` over `$old`, `after_reopen` (a machine verb with a hand action), `before_delete` / `after_delete`, `after_page` (named for no write: hand-fired), and `sweep_stale` (a `schedule:` entry) |
 | `module/schema/hooks/approval_state.hook.yaml` | the `Approval.state` machine (`verbs: generated`) over the hand_set field |
 | `module/schema/workflows/ticket_escalation.workflow.yaml` | a workflow declaration, to prove it is declaration-only |
 | `module/schema/rules.baseline.yaml` | the rule ratchet, accepting the one deliberately unenforced rule |
 | `module/src/application/service/project_service.ext.rs` | lifecycle hooks (`ServiceLifecycle`), an event publisher, a hand-written `WriteGuard` check composed with the generated one, and hand-written `WriteHooks` that stage an event and can fail after staging it |
+| `module/src/application/triggers/incident_triggers.ext.rs` | `IncidentTriggersImpl`, the hand half of the triggers: a refusal after the hooks staged their rows, a follow-up written through the generated service (nesting), two rows staged on the write's transaction, the scheduled method, and the service handle a build step binds |
+| `module/src/presentation/http/incident_handler.ext.rs` | `POST /incidents/:id/page`, a hand verb that fires the hand-fired trigger with `fire_after_page` in its own transaction |
 | `module/src/application/service/ticket_service.ext.rs` | a custom service method (`archive_with_reason`), the function the VERB rule names |
 | `module/src/presentation/http/ticket_handler.ext.rs` | custom routes, each wrapped in `guarded(..)`: the custom method over HTTP (`ticket:archive_with_reason`), and an `escalate` flow (`ticket:escalate`) that reads the org scope, moves the ticket through the generic service and stages the hand-declared `TicketEscalated` in the same transaction |
 | `module/src/lib.ext.rs` | builds the hooked project service and mounts `extension_routes()`, the hooked service's generic routes through `routes_guarded` |
@@ -110,6 +114,27 @@ tenant, and that the seed holds `label:create` and not `label:read`. Variants pr
 company fence fails generation unless it says `public_scoped: true`, and that a malformed or
 contradictory declaration is refused.
 
+## Hook triggers (area D)
+
+`Incident` carries the triggers. The probes assert that a `before_create` `set:` is persisted and that a
+trigger keyed by a label with `timing:` and a `condition:` runs after it and only when it holds; that
+`after_create` stages what its compiled actions say (an `emit:` payload built from its arguments, a
+`NotificationRequested` per `notify` and `send_email`) with the request's correlation id and the `log()`
+line carrying it, leaving out a field the write cannot know (`$context`); that `after_update_status`
+fires when a transition changes the state (not for a write that leaves it alone), with `$old`, that the
+value-suffixed `after_update_status_resolved` fires only into `resolved`, and that `on_enter` and
+`on_exit` fire on a transition into and out of a state; that a verb trigger (`after_reopen`) runs its
+hand method; that a hand method returning an error refuses the write with its code and takes down
+everything the hooks staged before it; that triggers writing through the generated service nest and
+commit together up to depth 8, and the run past it is refused (`trigger_depth_exceeded`) and rolls the
+chain back; that a hand-fired trigger runs through `fire_after_page`; that a soft delete fires
+`before_delete` and `after_delete`; and that a `schedule:` entry registers a job whose method the
+generated runner calls. Variants prove that generation refuses an `emit:` of an undeclared event, a guard
+the rule language cannot compile, a key naming no field, and hand methods in a module without the
+extension layout; that `legacy_triggers: true` keeps the old behaviour; that the doctor names a missing
+extension file or method and warns on a client called inside the transaction; and that the build refuses
+an implementation lacking a required method.
+
 ## What it cannot cover
 
 - Row history of an `audited: true` model: the capture trigger and the history provider come
@@ -119,6 +144,8 @@ contradictory declaration is refused.
 - Delivery to a real broker or in-process bus: the relay is driven with test sinks (success, a
   failing publish, an exhausted one); `relay::drain_once`, `reemit` and `inbox::once` are the
   framework's own and run against the scratch database.
+- A consumer of `NotificationRequested`: no mail or notification module consumes the row yet, so the
+  probes read it from the outbox table.
 
 ## Adding a probe
 

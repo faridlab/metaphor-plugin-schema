@@ -1059,6 +1059,7 @@ async fn area_d(c: &Ctx) {
     r.check("D", "Lifecycle hooks", "bulk patch fires the update hooks once per item", bp.status == 200 && count(&e, "before_update:") == 2 && count(&e, "after_update:") == 2, &bp.request, "2 before_update, 2 after_update", &format!("{e:?}"), "backbone-core/src/service.rs:882 (bulk_partial_update)");
 
     area_d_events(c).await;
+    area_d_triggers(c).await;
 }
 
 // =============================================================================
@@ -1099,6 +1100,143 @@ fn kinds(rows: &[Staged]) -> Vec<&str> {
 
 async fn ticket_count(c: &Ctx, title: &str) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM conformance.tickets WHERE title = $1").bind(title).fetch_one(&c.owner).await.unwrap()
+}
+
+/// The `backbone::trigger` log lines the probes capture, as field maps.
+#[derive(Clone, Default)]
+struct LogCapture(Arc<Mutex<Vec<std::collections::BTreeMap<String, String>>>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogCapture {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if event.metadata().target() != "backbone::trigger" {
+            return;
+        }
+        struct Fields(std::collections::BTreeMap<String, String>);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0.insert(field.name().to_string(), format!("{value:?}"));
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+        }
+        let mut fields = Fields(Default::default());
+        event.record(&mut fields);
+        self.0.lock().unwrap().push(fields.0);
+    }
+}
+
+/// D. Hook triggers: they run in the write's transaction, around the write, in file order.
+async fn area_d_triggers(c: &Ctx) {
+    use tracing_subscriber::layer::SubscriberExt;
+    let (r, app, ta) = (&c.rec, &c.app, c.ta.as_str());
+    const TRIG: &str = "generated incident_write_hooks.rs and incident_triggers.rs (generators/triggers.rs), incident.hook.yaml triggers:, the hand half in incident_triggers.ext.rs";
+    let capture = LogCapture::default();
+    let installed = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(capture.clone())).is_ok();
+    let company = c.org.company_a;
+    let body = |title: &str, severity: i64| json!({ "companyId": company, "title": title, "severity": severity });
+    let kinds_of = |rows: &[Staged], kind: &str| rows.iter().filter(|x| x.event_type == kind).count();
+
+    // before_create `set:` is persisted; a label with `timing:` and `condition:` runs after it.
+    let t1 = uniq("INC");
+    let made = app.post("/incidents", ta, body(&t1, 1)).await;
+    let id = made.id();
+    let stored: Option<(Option<String>, Option<String>)> = sqlx::query_as("SELECT sla, handled_by FROM conformance.incidents WHERE id = $1").bind(Uuid::parse_str(&id).unwrap()).fetch_optional(&c.owner).await.unwrap();
+    r.check("D", "Hook triggers", "a before_create `set:` is persisted (sla, handled_by)", made.status == 201 && stored == Some((Some("standard".into()), Some("unassigned".into()))) && made.data()["sla"] == json!("standard"), &made.request, "201; sla standard, handled_by unassigned, stored and answered", &format!("{} {stored:?}", made.got()), TRIG);
+    let urgent = app.post("/incidents", ta, body(&uniq("INC"), 4)).await;
+    r.check("D", "Hook triggers", "a trigger keyed by a label with `timing: before_create` and a `condition:` runs after the one before it, and only when it holds", urgent.status == 201 && urgent.data()["sla"] == json!("urgent") && made.data()["sla"] == json!("standard"), &urgent.request, "severity 4 -> urgent; severity 1 -> standard", &format!("{} / {}", urgent.data()["sla"], made.data()["sla"]), TRIG);
+
+    // after_create: the inline actions stage in the write's transaction, with the request's correlation id.
+    let cid = format!("trg-{}", &Uuid::new_v4().simple().to_string()[..10]);
+    let t2 = uniq("INC");
+    let cr = app.send("POST", "/incidents", Some(ta), Some(body(&t2, 2).to_string()), &[("x-correlation-id", cid.as_str())]).await;
+    let id2 = cr.id();
+    let rows = staged(c, &id2).await;
+    r.check("D", "Hook triggers", "after_create stages what its compiled actions say: the emitted event and a request per notify and send_email", cr.status == 201 && kinds(&rows) == ["IncidentOpened", "NotificationRequested", "NotificationRequested"], &cr.request, "201; IncidentOpened, NotificationRequested x2", &format!("{} {:?}", cr.status, kinds(&rows)), TRIG);
+    r.check("D", "Hook triggers", "every row a trigger staged carries the request's correlation id", rows.iter().all(|x| x.correlation_id.as_deref() == Some(cid.as_str())), &cr.request, &format!("correlation_id {cid} on every row"), &format!("{:?}", rows.iter().map(|x| x.correlation_id.clone()).collect::<Vec<_>>()), TRIG);
+    r.check("D", "Hook triggers", "`emit:` builds the declared payload from its arguments", rows.first().is_some_and(|x| x.payload["incident_id"] == json!(id2) && x.payload["severity"] == json!(2)), &cr.request, "incident_id and severity", &format!("{:?}", rows.first().map(|x| x.payload.clone())), TRIG);
+    let notify = rows.iter().find(|x| x.payload["channel"] == json!("notify"));
+    let email = rows.iter().find(|x| x.payload["channel"] == json!("email"));
+    r.check("D", "Hook triggers", "`notify` stages a NotificationRequested with its text interpolated, its recipients and variables", notify.is_some_and(|x| x.payload["body"] == json!(format!("Incident {t2} opened")) && x.payload["to"] == json!([id2]) && x.payload["data"]["severity"] == json!(2) && x.payload["trigger"] == json!("Incident.after_create")), &cr.request, "channel notify; body 'Incident <title> opened'; to [id]", &format!("{:?}", notify.map(|x| x.payload.clone())), TRIG);
+    r.check("D", "Hook triggers", "`send_email` stages a NotificationRequested naming its template and recipient", email.is_some_and(|x| x.payload["template"] == json!("incident_opened") && x.payload["to"] == json!("unassigned") && x.payload["data"]["title"] == json!(t2)), &cr.request, "channel email; template incident_opened; to the value `set:` filled in before the write", &format!("{:?}", email.map(|x| x.payload.clone())), TRIG);
+
+    // log() carries the correlation id (and the audit tag), and leaves out a field the hook cannot know.
+    if installed {
+        let lines = capture.0.lock().unwrap().clone();
+        let line = lines.iter().find(|l| l.get("log_event").map(String::as_str) == Some("incident.opened") && l.get("correlation_id").map(String::as_str) == Some(cid.as_str()));
+        r.check("D", "Hook triggers", "`log()` writes a line carrying the correlation id, the trigger it came from and its fields", line.is_some_and(|l| l.get("trigger").map(String::as_str) == Some("Incident.after_create") && l.get("incident_id").is_some_and(|v| v.contains(&id2)) && l.get("severity").map(String::as_str) == Some("2")), &cr.request, "a backbone::trigger line: correlation_id, trigger Incident.after_create, incident_id, severity", &format!("{line:?}"), TRIG);
+        r.check("D", "Hook triggers", "a `log()` field the write cannot know ($context.ip_address) is left out, not invented", line.is_some_and(|l| !l.contains_key("ip")), &cr.request, "no `ip` field", &format!("{line:?}"), TRIG);
+    } else {
+        r.unsupported("D", "Hook triggers", "`log()` writes a line carrying the correlation id", "the probe process already had a global tracing subscriber");
+    }
+
+    // after_update_<field>: fires only when the field changed.
+    let t3 = uniq("INC");
+    let id3 = app.post("/incidents", ta, body(&t3, 1)).await.id();
+    let before = staged(c, &id3).await.len();
+    let sev = app.patch(&format!("/incidents/{id3}"), ta, json!({ "severity": 2 })).await;
+    let unchanged = staged(c, &id3).await;
+    r.check("D", "Hook triggers", "a write that leaves status and title alone fires neither after_update_status nor after_update_title", sev.status == 200 && unchanged.len() == before && kinds_of(&unchanged, "IncidentStatusChanged") == 0 && kinds_of(&unchanged, "IncidentRetitled") == 0, &sev.request, "no new outbox row", &format!("{} {before} -> {}", sev.status, unchanged.len()), TRIG);
+    let retitle = app.patch(&format!("/incidents/{id3}"), ta, json!({ "title": format!("{t3}-new") })).await;
+    let after_title = staged(c, &id3).await;
+    r.check("D", "Hook triggers", "after_update_title fires when a generic write changes the title (its `if:` over $old holds)", retitle.status == 200 && kinds_of(&after_title, "IncidentRetitled") == 1 && after_title.iter().find(|x| x.event_type == "IncidentRetitled").is_some_and(|x| x.payload["title"] == json!(format!("{t3}-new"))), &retitle.request, "one IncidentRetitled", &format!("{} {:?}", retitle.status, kinds(&after_title)), TRIG);
+
+    // after_update_status, with and without a value suffix; on_enter and on_exit of a state.
+    let ack = app.post(&format!("/incidents/{id3}/transitions/acknowledge"), ta, json!({})).await;
+    let rows = staged(c, &id3).await;
+    let changed = rows.iter().find(|x| x.event_type == "IncidentStatusChanged");
+    r.check("D", "Hook triggers", "after_update_status fires when a transition changes the state, and carries the state it left ($old)", ack.status == 200 && changed.is_some_and(|x| x.payload["status"] == json!("acknowledged") && x.payload["was"] == json!("open")), &ack.request, "IncidentStatusChanged status acknowledged, was open", &format!("{} {:?}", ack.status, changed.map(|x| x.payload.clone())), TRIG);
+    r.check("D", "Hook triggers", "on_enter emits on a transition into the state, on_exit on a transition out of it", kinds_of(&rows, "IncidentAcknowledged") == 1 && kinds_of(&rows, "IncidentLeftOpen") == 1, &ack.request, "IncidentAcknowledged and IncidentLeftOpen, once each", &format!("{:?}", kinds(&rows)), TRIG);
+    r.check("D", "Hook triggers", "after_update_status_resolved does not fire for a change to another state", kinds_of(&rows, "IncidentResolved") == 0, &ack.request, "no IncidentResolved after acknowledge", &format!("{:?}", kinds(&rows)), TRIG);
+    let res = app.post(&format!("/incidents/{id3}/transitions/resolve"), ta, json!({})).await;
+    let rows = staged(c, &id3).await;
+    r.check("D", "Hook triggers", "after_update_status_resolved fires when the state becomes resolved, beside after_update_status", res.status == 200 && kinds_of(&rows, "IncidentResolved") == 1 && kinds_of(&rows, "IncidentStatusChanged") == 2, &res.request, "IncidentResolved once; IncidentStatusChanged twice in all", &format!("{} {:?}", res.status, kinds(&rows)), TRIG);
+
+    // after_<verb> of the machine runs its hand method, in the transaction.
+    let reopen = app.post(&format!("/incidents/{id3}/transitions/reopen"), ta, json!({})).await;
+    let rows = staged(c, &id3).await;
+    let noted = rows.iter().find(|x| x.event_type == "ReopenNoted");
+    r.check("D", "Hook triggers", "an after_<verb> trigger runs its hand-written method on that transition and no other", reopen.status == 200 && kinds_of(&rows, "ReopenNoted") == 1 && noted.is_some_and(|x| x.payload["was"] == json!("resolved") && x.payload["is"] == json!("open")), &reopen.request, "one ReopenNoted: was resolved, is open", &format!("{} {:?}", reopen.status, noted.map(|x| x.payload.clone())), TRIG);
+
+    // A trigger that returns an error rolls back the write and everything it staged.
+    let veto_title = format!("{} veto", uniq("INC"));
+    let before_total = staged_total(c).await;
+    let veto = app.post("/incidents", ta, body(&veto_title, 1)).await;
+    let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.incidents WHERE title = $1").bind(&veto_title).fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Hook triggers", "a hand method returning an error refuses the write with its code (422) and leaves no row", veto.status == 422 && veto.violation("title", "trigger_refused") && kept == 0, &veto.request, "422 {path: title, code: trigger_refused}; no incident row", &format!("{} rows {kept}", veto.got()), TRIG);
+    r.check("D", "Hook triggers", "and takes down what the hooks staged before it failed (the event and both requests)", staged_total(c).await == before_total, &veto.request, "the outbox row count is unchanged", &format!("{before_total} -> {}", staged_total(c).await), TRIG);
+
+    // Nesting: triggers that write through the service nest up to the cap.
+    let chain_ok = app.post("/incidents", ta, body("chain:1/3", 1)).await;
+    let committed: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.incidents WHERE title LIKE 'chain:%/3'").fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Hook triggers", "triggers that write through the generated service join the transaction: a chain of three commits all three rows", chain_ok.status == 201 && committed == 3, &chain_ok.request, "201; three incidents", &format!("{} rows {committed}", chain_ok.status), TRIG);
+    let before_total = staged_total(c).await;
+    let chain_deep = app.post("/incidents", ta, body("chain:1/50", 1)).await;
+    let leaked: i64 = sqlx::query_scalar("SELECT count(*) FROM conformance.incidents WHERE title LIKE 'chain:%/50'").fetch_one(&c.owner).await.unwrap();
+    r.check("D", "Hook triggers", "nesting beyond depth 8 is refused with the code trigger_depth_exceeded", chain_deep.status == 422 && chain_deep.has_code("trigger_depth_exceeded"), &chain_deep.request, "422 trigger_depth_exceeded", &chain_deep.got(), TRIG);
+    r.check("D", "Hook triggers", "and the refusal rolls the whole chain back: no row, no staged request", leaked == 0 && staged_total(c).await == before_total, &chain_deep.request, "no chain row; the outbox row count is unchanged", &format!("rows {leaked}, outbox {before_total} -> {}", staged_total(c).await), TRIG);
+
+    // A trigger no write fires is fired by hand code, in its transaction.
+    let page = app.send("POST", &format!("/incidents/{id2}/page"), Some(ta), Some("{}".into()), &[("x-correlation-id", cid.as_str())]).await;
+    let rows = staged(c, &id2).await;
+    r.check("D", "Hook triggers", "a hand-fired trigger (after_page) runs when hand code calls fire_after_page: its emit and its hand method stage in one transaction", page.status == 200 && kinds_of(&rows, "IncidentPaged") == 1 && kinds_of(&rows, "OnCallPaged") == 1, &page.request, "200; IncidentPaged and OnCallPaged staged", &format!("{} {:?}", page.status, kinds(&rows)), TRIG);
+
+    // A delete fires before_delete (a log line) and after_delete (an event).
+    let del = app.delete(&format!("/incidents/{id2}"), ta).await;
+    let rows = staged(c, &id2).await;
+    r.check("D", "Hook triggers", "a soft delete fires after_delete", del.status == 200 && kinds_of(&rows, "IncidentDeleted") == 1, &del.request, "one IncidentDeleted", &format!("{} {:?}", del.status, kinds(&rows)), TRIG);
+    if installed {
+        let lines = capture.0.lock().unwrap().clone();
+        r.check("D", "Hook triggers", "and before_delete, which runs before the row goes", lines.iter().any(|l| l.get("log_event").map(String::as_str) == Some("incident.deleting") && l.get("incident_id").is_some_and(|v| v.contains(&id2))), &del.request, "a before_delete log line for the incident", &format!("{} lines", lines.len()), TRIG);
+    }
+
+    // A schedule: entry is a registered job whose method the scheduler runs.
+    use backbone_module_skeleton::application::triggers::{run_incident_scheduled, sweeps_run, IncidentTriggersImpl, INCIDENT_SCHEDULED};
+    let registered = INCIDENT_SCHEDULED.iter().any(|s| s.name == "sweep_stale" && s.schedule == "every 5.minutes");
+    let runs = sweeps_run();
+    let ran = run_incident_scheduled(&IncidentTriggersImpl::default(), "sweep_stale").await;
+    let unknown = run_incident_scheduled(&IncidentTriggersImpl::default(), "nope").await;
+    r.check("D", "Hook triggers", "a `schedule:` entry registers a scheduled job (its name and schedule) and the generated runner calls its required method", registered && matches!(ran, Ok(true)) && sweeps_run() == runs + 1 && matches!(unknown, Ok(false)), "run_incident_scheduled(\"sweep_stale\")", "registered; the method ran once; an unknown name is not run", &format!("registered {registered}, ran {ran:?}, sweeps {runs} -> {}, unknown {unknown:?}", sweeps_run()), TRIG);
 }
 
 async fn area_d_events(c: &Ctx) {

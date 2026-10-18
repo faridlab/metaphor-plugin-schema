@@ -28,6 +28,7 @@ config:
 authorization:
   permissions:
     tickets: [escalate, archive_with_reason]
+    incidents: [page]
   roles:
     ADMIN:
       description: "Holds every permission"
@@ -60,3 +61,4 @@ imports:
   - ticket.model.yaml
   - approval.model.yaml
   - label.model.yaml
+  - incident.model.yaml

@@ -1,0 +1,50 @@
+# Incident: a company-scoped record that carries the hook triggers (schema/hooks/incident.hook.yaml):
+# a state machine moved by generated verbs, values filled before the write, events and requests
+# staged after it, a hand-written half, a hand-fired moment and a scheduled entry.
+
+models:
+  - name: Incident
+    collection: incidents
+    description: "Conformance fixture: a company-scoped record whose triggers run in the write's transaction"
+
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+
+      company_id:
+        type: uuid
+        attributes: ["@required", "@exclude_from_foreign_key_check"]
+        description: "The company fence (RLS on app.company_id)"
+
+      title:
+        type: string
+        attributes: ["@required", "@length(max=120)"]
+
+      severity:
+        type: int
+        attributes: ["@default(1)"]
+
+      status:
+        type: IncidentStatus
+        attributes: ["@default(open)"]
+
+      sla:
+        type: string?
+        description: "Filled by a before_create trigger, never by the client"
+
+      handled_by:
+        type: string?
+
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]
+
+enums:
+  - name: IncidentStatus
+    variants:
+      - name: open
+        default: true
+      - name: acknowledged
+      - name: resolved
+      - name: closed

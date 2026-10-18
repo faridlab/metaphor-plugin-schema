@@ -335,6 +335,53 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         ));
     }
 
+    // Hook triggers: the register labels what runs, what is left to hand code, and what is scheduled.
+    let triggers = register.get("triggers").and_then(Value::as_array).cloned().unwrap_or_default();
+    let trigger = |key: &str| triggers.iter().find(|t| t.get("key").and_then(Value::as_str) == Some(key) && t.get("model").and_then(Value::as_str) == Some("Incident")).cloned().unwrap_or(Value::Null);
+    let label_of = |t: &Value| t.get("label").and_then(Value::as_str).unwrap_or("absent").to_string();
+    let hand_of = |t: &Value| t.get("hand").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+    for (key, label, phrase) in [
+        ("after_update_status", "TRIGGER RUNS (after_update status, in tx)", "after_update_status fires when a transition changes the state"),
+        ("after_create", "TRIGGER RUNS (after_create, in tx)", "after_create stages what its compiled actions say"),
+        ("before_create", "TRIGGER RUNS (before_create, in tx)", "a before_create `set:` is persisted"),
+        ("on_enter acknowledged", "TRIGGER RUNS (on_enter acknowledged, in tx)", "on_enter emits on a transition into the state"),
+        ("sweep_stale", "TRIGGER SCHEDULED (every 5.minutes)", "a `schedule:` entry registers a scheduled job"),
+        ("after_page", "TRIGGER RUNS (hand-fired by fire_after_page, in tx)", "a hand-fired trigger (after_page) runs when hand code calls fire_after_page"),
+    ] {
+        let got = label_of(&trigger(key));
+        rows.push(gen_row(
+            "H",
+            "Rules register",
+            &format!("trigger `{key}` is labelled {label} and the runtime agrees"),
+            got == label && passed_probe(phrase),
+            "metaphor-schema schema rules . -f json; the runtime probe",
+            &format!("label {label}; the probe `{phrase}` passes"),
+            &format!("label {got}"),
+            "metaphor-plugin-schema/src/commands/schema/rules.rs (trigger_labels) vs the generated write hooks",
+        ));
+    }
+    let after_create_hand = hand_of(&trigger("after_create"));
+    rows.push(gen_row(
+        "H",
+        "Rules register",
+        "a trigger's hand actions are labelled TRIGGER HAND with the extension method each needs, and the runtime agrees",
+        after_create_hand == ["TRIGGER HAND (after_create__screen_title)", "TRIGGER HAND (after_create__spawn_follow_up)"] && hand_of(&trigger("sweep_stale")) == ["TRIGGER HAND (scheduled__sweep_stale)"] && passed_probe("a hand method returning an error refuses the write"),
+        "metaphor-schema schema rules . -f json; the runtime probe",
+        "after_create: TRIGGER HAND (after_create__screen_title), TRIGGER HAND (after_create__spawn_follow_up); sweep_stale: TRIGGER HAND (scheduled__sweep_stale)",
+        &format!("{after_create_hand:?}; {:?}", hand_of(&trigger("sweep_stale"))),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (trigger_labels), generators/triggers.rs (hand_methods)",
+    ));
+    let opened = event_status("IncidentOpened");
+    rows.push(gen_row(
+        "H",
+        "Rules register",
+        "an event a trigger emits is labelled EVENT STAGED (by trigger <Model>.<key>, in tx), not hand-staged",
+        opened == "EVENT STAGED (by trigger Incident.after_create, in tx)" && passed_probe("`emit:` builds the declared payload from its arguments"),
+        "metaphor-schema schema rules . -f json; the runtime probe",
+        "label EVENT STAGED (by trigger Incident.after_create, in tx); the emit probe passes",
+        &format!("label {opened}"),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (event_label), generators/triggers.rs (emitted_events)",
+    ));
     // Machine labels are computed in the pretty register only.
     let pretty = run(Command::new(bin).args(["schema", "rules", "."]).current_dir(module).env("NO_COLOR", "1"), "schema rules");
     let text = String::from_utf8_lossy(&pretty.stdout).to_string();
@@ -458,6 +505,16 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         "exit 0; the mode line; a warning naming projects.read and project:read",
         &format!("exit {:?}; {}", out.status.code(), one_line(&text)),
         "metaphor-plugin-schema/src/commands/schema/doctor.rs (permission_report)",
+    ));
+    rows.push(gen_row(
+        "H",
+        "Schema doctor",
+        "`schema doctor .` counts the module's triggers and the hand methods they owe",
+        out.status.success() && text.contains("triggers: 13 entries on 1 model(s) run in the write's transaction; 5 hand method(s)"),
+        "metaphor-schema schema doctor .",
+        "triggers: 13 entries on 1 model(s) run in the write's transaction; 5 hand method(s)",
+        &one_line(&text.lines().filter(|l| l.contains("triggers:")).collect::<Vec<_>>().join(" | ")),
+        "metaphor-plugin-schema/src/commands/schema/doctor.rs (trigger_report)",
     ));
     rows.push(gen_row(
         "H",
@@ -619,26 +676,94 @@ fn variant_probes(skeleton: &Path, fixture: &Path, main: &Path, main_output: &st
         "metaphor-plugin-schema/src/rules/events.rs (check_events) and resolver/validator.rs (event_problems)",
     ));
 
-    // Lifecycle hooks declared in the schema.
+    // Hook triggers: what generation refuses, and what a module on the old behaviour still gets.
+    let incident_hook = "schema/hooks/incident.hook.yaml";
     let dir = tempfile::tempdir().unwrap();
     let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
-        edit(&m.join("schema/hooks/ticket.hook.yaml"), |t| format!("{t}\ntriggers:\n  after_create:\n    actions:\n      - \"emit: TicketOpenedEvent(ticket_id: id)\"\n"))
+        edit(&m.join(incident_hook), |t| t.replace("emit: IncidentDeleted(incident_id: id)", "emit: IncidentVanished(incident_id: id)"))
     });
     let text = output_text(&out);
-    rows.push(Row {
-        area: "D".into(),
-        feature: "Schema lifecycle hooks".into(),
-        probe: "before/after create/update/delete declared as hook `triggers:` produce runtime hooks".into(),
-        status: "UNSUPPORTED".into(),
-        request: "add `triggers: after_create:` to ticket.hook.yaml and generate".into(),
-        expected: String::new(),
-        got: format!(
-            "generation {} — {}; the trigger target is retired (generators/mod.rs:621) and resolver/validator.rs:1916 refuses triggers unless `legacy_triggers: true`; hooks are written by hand as a ServiceLifecycle (proven in D)",
-            if out.status.success() { "succeeds" } else { "fails" },
-            one_line(text.lines().filter(|l| l.contains("rror")).take(2).collect::<Vec<_>>().join(" | ").as_str())
-        ),
-        diagnosis: String::new(),
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "an `emit:` of an event no schema file declares fails generation, naming the event and showing the declaration to add",
+        !out.status.success() && text.contains("emits `IncidentVanished`, which no schema file declares under `events:`") && text.contains("IncidentVanished:\n") && text.contains("fields: { incident_id: <type> }"),
+        "make Incident's after_delete trigger `emit: IncidentVanished(incident_id: id)` and generate",
+        "generation fails naming IncidentVanished and the `events:` entry to add",
+        &one_line(text.lines().filter(|l| l.contains("IncidentVanished")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rules/trigger_compile.rs (compile_action) via resolver/validator.rs (trigger_problems)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(incident_hook), |t| t.replace("condition: \"severity >= 3\"", "condition: \"severity IN (3, 4)\""))
     });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "a trigger's own `if:` or `condition:` the rule language cannot compile fails generation (a guard is never guessed)",
+        !out.status.success() && text.contains("has an `if:` the generator cannot compile") && text.contains("severity IN (3, 4)"),
+        "give the urgent_sla trigger the SQL condition `severity IN (3, 4)` and generate",
+        "generation fails naming the trigger and the condition",
+        &one_line(text.lines().filter(|l| l.contains("if:")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rules/trigger_compile.rs (compile_trigger)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(incident_hook), |t| t.replace("  after_update_title:\n", "  after_update_nope:\n    actions: [\"log(x)\"]\n  after_update_title:\n"))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "a trigger keyed on a field the model does not have fails generation, naming the key",
+        !out.status.success() && text.contains("no field that `nope` spells"),
+        "add an `after_update_nope` trigger to Incident and generate",
+        "generation fails: Incident has no field that `nope` spells",
+        &one_line(text.lines().filter(|l| l.contains("nope")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rules/triggers.rs (resolve_when)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/index.model.yaml"), |t| t.replace("    extensions: true\n", ""))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "triggers that need hand methods fail generation in a module without the extension layout, saying where the implementation lives",
+        !out.status.success() && text.contains("does not use the extension layout") && text.contains("IncidentTriggers"),
+        "drop `generators: extensions: true` from the fixture and generate",
+        "generation fails: the hand methods have no extension file to live in",
+        &one_line(text.lines().filter(|l| l.contains("extension layout")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (trigger_problems)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/index.model.yaml"), |t| t.replace("  generators:\n    extensions: true\n", "  generators:\n    extensions: true\n    legacy_triggers: true\n"))
+    });
+    let validate = run(Command::new(env!("CARGO_BIN_EXE_metaphor-schema")).args(["schema", "validate", "."]).current_dir(&module).env("NO_COLOR", "1"), "schema validate");
+    let vtext = output_text(&validate);
+    let wrote = |rel: &str| module.join(rel).exists();
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "`generators: legacy_triggers: true` keeps the old behaviour: generation succeeds, writes no trigger code, and `schema validate` warns that the triggers run nothing",
+        out.status.success()
+            && vtext.contains("declares trigger 'after_create'")
+            && vtext.contains("nothing runs them")
+            && !wrote("src/application/triggers/incident_triggers.rs")
+            && !wrote("src/application/triggers/mod.rs")
+            && !wrote("src/application/service/incident_write_hooks.rs"),
+        "set `legacy_triggers: true`, generate, run `schema validate`",
+        "generation succeeds; no trigger trait, module or incident write hooks; a warning per trigger",
+        &format!("generate exit {:?}; trait written: {}; hooks written: {}; {}", out.status.code(), wrote("src/application/triggers/incident_triggers.rs"), wrote("src/application/service/incident_write_hooks.rs"), one_line(vtext.lines().filter(|l| l.contains("declares trigger")).take(1).collect::<Vec<_>>().join(" | ").as_str())),
+        "metaphor-plugin-schema/src/resolver/validator.rs (legacy_trigger_findings), generators/triggers.rs (active)",
+    ));
 
     // Declarations nothing runs are said to be declaration-only on generation.
     let said = |needle: &str| main_output.lines().find(|l| l.contains(needle) && l.contains("declaration-only")).map(|l| one_line(l.trim()));
@@ -937,6 +1062,86 @@ fn permission_variant_probes(skeleton: &Path, fixture: &Path, rows: &mut Vec<Row
     ));
 }
 
+/// Trigger probes that need a variant of the fixture: the doctor on a missing or careless hand half,
+/// and the build refusing an implementation that lacks a required method.
+fn trigger_variant_probes(skeleton: &Path, fixture: &Path, framework: Option<&Path>, rows: &mut Vec<Row>) {
+    const EXT: &str = "src/application/triggers/incident_triggers.ext.rs";
+    let sweep = "    async fn scheduled__sweep_stale(&self, _ctx: &WriteCtx) -> ServiceResult<()> {\n        SWEEPS.fetch_add(1, Ordering::SeqCst);\n        Ok(())\n    }\n";
+
+    // The doctor says what hand code owes the generated trait, without a build.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(EXT), |t| t.replace(sweep, "")));
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "`schema doctor` fails on an extension that lacks a required trigger method, naming the method and the trigger that needs it",
+        out.status.success() && !ok && text.contains("incident_triggers.ext.rs: no method `scheduled__sweep_stale`") && text.contains("sweep_stale of incident.hook.yaml") && text.contains("the build would refuse"),
+        "remove the scheduled__sweep_stale method from incident_triggers.ext.rs and run doctor",
+        "exit 1; no method `scheduled__sweep_stale` (the sweep_stale trigger)",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("scheduled__sweep_stale")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/commands/schema/triggers_check.rs (scan) and doctor.rs (trigger_report)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |_| {});
+    fs::remove_file(module.join(EXT)).unwrap();
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "`schema doctor` fails on a missing extension file, saying how many methods it owes",
+        out.status.success() && !ok && text.contains("incident_triggers.ext.rs: missing") && text.contains("5 hand method(s) of `IncidentTriggers`"),
+        "delete incident_triggers.ext.rs and run doctor",
+        "exit 1; the extension file is missing and 5 methods are owed",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("incident_triggers.ext.rs")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/commands/schema/triggers_check.rs (scan)",
+    ));
+
+    // An effect outside the database is not undone by a rollback: the doctor warns on a client call.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(EXT), |t| format!("{t}\nfn _calls_out() {{\n    let _client = reqwest::Client::new();\n}}\n"))
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "`schema doctor` warns, without failing, on a trigger extension that calls an HTTP client inside the write's transaction",
+        out.status.success() && ok && text.contains("calls `reqwest` inside a write's transaction") && text.contains("NotificationRequested"),
+        "make incident_triggers.ext.rs mention reqwest::Client and run doctor",
+        "exit 0; a warning naming the call and saying to stage a request for the relay instead",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("reqwest")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/commands/schema/triggers_check.rs (CLIENTS)",
+    ));
+
+    // The compiler enforces that the declaration and the code agree: a missing method is a named build error.
+    let dir = tempfile::tempdir().unwrap();
+    let page = "    async fn after_page__page_on_call(&self, ctx: &WriteCtx, e: &Incident) -> ServiceResult<()> {\n        ctx.stage(stage_row(ctx, \"OnCallPaged\", e, serde_json::json!({ \"title\": e.title }))).await\n    }\n\n";
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(EXT), |t| t.replace(page, "")));
+    patch_manifest(&module, framework);
+    let jobs = std::env::var("CONFORMANCE_JOBS").unwrap_or_else(|_| "2".into());
+    let mut cargo = Command::new(env!("CARGO"));
+    cargo.args(["test", "-j", &jobs, "--lib", "--no-run"]).current_dir(&module);
+    if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
+        cargo.env("CARGO_TARGET_DIR", target);
+    } else {
+        cargo.env("CARGO_TARGET_DIR", dir.path().join("target"));
+    }
+    let build = run(&mut cargo, "cargo test --lib --no-run (variant)");
+    let stderr = String::from_utf8_lossy(&build.stderr).to_string();
+    rows.push(gen_row(
+        "D",
+        "Hook triggers",
+        "an implementation of the generated trait that lacks a required method breaks the build with a named error",
+        out.status.success() && !build.status.success() && stderr.contains("E0046") && stderr.contains("after_page__page_on_call"),
+        "remove the after_page__page_on_call method from incident_triggers.ext.rs and build the module",
+        "the build fails: E0046, not all trait items implemented, missing `after_page__page_on_call`",
+        &one_line(&stderr.lines().filter(|l| l.contains("E0046") || l.contains("missing")).take(3).collect::<Vec<_>>().join(" | ")),
+        "the generated incident_triggers.rs (no default method bodies)",
+    ));
+}
+
 #[test]
 #[ignore = "generates a module, builds it and drives it against a scratch Postgres database; run with --ignored"]
 fn every_backbone_feature_works_at_runtime_through_the_generator() {
@@ -1008,6 +1213,7 @@ fn every_backbone_feature_works_at_runtime_through_the_generator() {
     register_probes(&module, &mut rows, &runtime);
     variant_probes(&skeleton, &fixture, &module, &output_text(&generate), &mut rows);
     permission_variant_probes(&skeleton, &fixture, &mut rows);
+    trigger_variant_probes(&skeleton, &fixture, framework.as_deref(), &mut rows);
     rows.sort_by_key(|r| AREAS.iter().position(|(k, _)| *k == r.area).unwrap_or(99));
 
     let header = format!(

@@ -5,7 +5,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 - Generator: metaphor-plugin-schema 0.37.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 3s; whole run: 101s
+- Generation: 2s; whole run: 141s
 
 ## Summary
 
@@ -14,13 +14,13 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A. Generic routes | 57 | 0 | 1 |
 | B. Validation | 42 | 0 | 0 |
 | C. Custom validation | 15 | 0 | 0 |
-| D. Hooks and events | 41 | 0 | 1 |
+| D. Hooks and events | 75 | 0 | 0 |
 | E. State machine | 20 | 0 | 0 |
 | F. Extension | 12 | 0 | 1 |
 | G. Scoping | 36 | 0 | 0 |
-| H. Debuggability | 23 | 0 | 0 |
+| H. Debuggability | 32 | 0 | 0 |
 | I. Permissions | 142 | 0 | 0 |
-| **Total** | **388** | **0** | **3** |
+| **Total** | **431** | **0** | **2** |
 
 ## Matrix
 
@@ -179,10 +179,43 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | D | Relay | a failing publish leaves the row pending, an exhausted one makes it dead | PASS |
 | D | Relay | re-emitting a dead row delivers it again | PASS |
 | D | Relay | a consumer's inbox::once dedupes a replay of the same event | PASS |
+| D | Hook triggers | a before_create `set:` is persisted (sla, handled_by) | PASS |
+| D | Hook triggers | a trigger keyed by a label with `timing: before_create` and a `condition:` runs after the one before it, and only when it holds | PASS |
+| D | Hook triggers | after_create stages what its compiled actions say: the emitted event and a request per notify and send_email | PASS |
+| D | Hook triggers | every row a trigger staged carries the request's correlation id | PASS |
+| D | Hook triggers | `emit:` builds the declared payload from its arguments | PASS |
+| D | Hook triggers | `notify` stages a NotificationRequested with its text interpolated, its recipients and variables | PASS |
+| D | Hook triggers | `send_email` stages a NotificationRequested naming its template and recipient | PASS |
+| D | Hook triggers | `log()` writes a line carrying the correlation id, the trigger it came from and its fields | PASS |
+| D | Hook triggers | a `log()` field the write cannot know ($context.ip_address) is left out, not invented | PASS |
+| D | Hook triggers | a write that leaves status and title alone fires neither after_update_status nor after_update_title | PASS |
+| D | Hook triggers | after_update_title fires when a generic write changes the title (its `if:` over $old holds) | PASS |
+| D | Hook triggers | after_update_status fires when a transition changes the state, and carries the state it left ($old) | PASS |
+| D | Hook triggers | on_enter emits on a transition into the state, on_exit on a transition out of it | PASS |
+| D | Hook triggers | after_update_status_resolved does not fire for a change to another state | PASS |
+| D | Hook triggers | after_update_status_resolved fires when the state becomes resolved, beside after_update_status | PASS |
+| D | Hook triggers | an after_<verb> trigger runs its hand-written method on that transition and no other | PASS |
+| D | Hook triggers | a hand method returning an error refuses the write with its code (422) and leaves no row | PASS |
+| D | Hook triggers | and takes down what the hooks staged before it failed (the event and both requests) | PASS |
+| D | Hook triggers | triggers that write through the generated service join the transaction: a chain of three commits all three rows | PASS |
+| D | Hook triggers | nesting beyond depth 8 is refused with the code trigger_depth_exceeded | PASS |
+| D | Hook triggers | and the refusal rolls the whole chain back: no row, no staged request | PASS |
+| D | Hook triggers | a hand-fired trigger (after_page) runs when hand code calls fire_after_page: its emit and its hand method stage in one transaction | PASS |
+| D | Hook triggers | a soft delete fires after_delete | PASS |
+| D | Hook triggers | and before_delete, which runs before the row goes | PASS |
+| D | Hook triggers | a `schedule:` entry registers a scheduled job (its name and schedule) and the generated runner calls its required method | PASS |
 | D | Declared events | an `on:` or `if:` naming a field, verb or state the model lacks fails generation, naming each | PASS |
-| D | Schema lifecycle hooks | before/after create/update/delete declared as hook `triggers:` produce runtime hooks | UNSUPPORTED |
+| D | Hook triggers | an `emit:` of an event no schema file declares fails generation, naming the event and showing the declaration to add | PASS |
+| D | Hook triggers | a trigger's own `if:` or `condition:` the rule language cannot compile fails generation (a guard is never guessed) | PASS |
+| D | Hook triggers | a trigger keyed on a field the model does not have fails generation, naming the key | PASS |
+| D | Hook triggers | triggers that need hand methods fail generation in a module without the extension layout, saying where the implementation lives | PASS |
+| D | Hook triggers | `generators: legacy_triggers: true` keeps the old behaviour: generation succeeds, writes no trigger code, and `schema validate` warns that the triggers run nothing | PASS |
 | D | Declared events | generation says a declared event with no `on:` is staged by hand, and names it | PASS |
 | D | Declared events | events with `on:` generate their typed payloads and the write hooks that stage them | PASS |
+| D | Hook triggers | `schema doctor` fails on an extension that lacks a required trigger method, naming the method and the trigger that needs it | PASS |
+| D | Hook triggers | `schema doctor` fails on a missing extension file, saying how many methods it owes | PASS |
+| D | Hook triggers | `schema doctor` warns, without failing, on a trigger extension that calls an HTTP client inside the write's transaction | PASS |
+| D | Hook triggers | an implementation of the generated trait that lacks a required method breaks the build with a named error | PASS |
 | E | Transitions | an allowed transition (start: open → in_progress) answers 200 and moves the state | PASS |
 | E | Transitions | a disallowed transition (archive from in_progress) is refused with 4xx | PASS |
 | E | Transitions | a disallowed transition names a stable code | PASS |
@@ -270,9 +303,18 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | H | Rules register | event `TicketOpened` is labelled EVENT STAGED (on create, in tx) and the runtime agrees | PASS |
 | H | Rules register | event `TicketResolved` is labelled EVENT STAGED (on transition(resolve), in tx) and the runtime agrees | PASS |
 | H | Rules register | event `TicketEscalated` is labelled EVENT HAND-STAGED and the runtime agrees | PASS |
+| H | Rules register | trigger `after_update_status` is labelled TRIGGER RUNS (after_update status, in tx) and the runtime agrees | PASS |
+| H | Rules register | trigger `after_create` is labelled TRIGGER RUNS (after_create, in tx) and the runtime agrees | PASS |
+| H | Rules register | trigger `before_create` is labelled TRIGGER RUNS (before_create, in tx) and the runtime agrees | PASS |
+| H | Rules register | trigger `on_enter acknowledged` is labelled TRIGGER RUNS (on_enter acknowledged, in tx) and the runtime agrees | PASS |
+| H | Rules register | trigger `sweep_stale` is labelled TRIGGER SCHEDULED (every 5.minutes) and the runtime agrees | PASS |
+| H | Rules register | trigger `after_page` is labelled TRIGGER RUNS (hand-fired by fire_after_page, in tx) and the runtime agrees | PASS |
+| H | Rules register | a trigger's hand actions are labelled TRIGGER HAND with the extension method each needs, and the runtime agrees | PASS |
+| H | Rules register | an event a trigger emits is labelled EVENT STAGED (by trigger <Model>.<key>, in tx), not hand-staged | PASS |
 | H | Rules register | machine `Ticket.status` is labelled MOVES REFUSED and the transition trigger refuses a raw UPDATE | PASS |
 | H | Rules register | machine `Ticket.status` is labelled GUARDS IN GENERATED VERBS and the generated verb refuses a failing guard | PASS |
 | H | Rules register | machine `Approval.state` (hand_set) is labelled MOVES REFUSED and its verbs refuse a wrong-state move | PASS |
+| H | Schema doctor | `schema doctor .` counts the module's triggers and the hand methods they owe | PASS |
 | H | Schema doctor | `schema doctor .` accepts the freshly generated module with its extension files | PASS |
 | H | Diagnostics | a hook file with an `assert:` rule (no message) beside its `states:` generates, or names the offending rule | PASS |
 | I | Seeds | the seed migration writes every permission the routes require, the declared custom verbs and the system roles' grants | PASS |
@@ -420,8 +462,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 
 ## Failures (0)
 
-## Unsupported (3)
+## Unsupported (2)
 
 - **A / History / row history of an `audited: true` model** — needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither
-- **D / Schema lifecycle hooks / before/after create/update/delete declared as hook `triggers:` produce runtime hooks** — generation fails —   Error: Validation error: Hook 'Ticket' declares trigger 'after_create' with 1 action(s); hook triggers are not generated, so nothing runs them: move the behaviour into the service and declare the events it publishes under `events:` \\| Error: Schema validation failed with 1 error(s); the trigger target is retired (generators/mod.rs:621) and resolver/validator.rs:1916 refuses t…
 - **F / Workflow / schema/workflows/ticket_escalation.workflow.yaml does something at runtime** — declaration-only: it is parsed and validated (resolver/validator.rs:55) and no generated file mentions it; the flow target is retired (generators/mod.rs:621) — the hand-written escalate route is the executable flow (proven in F)
