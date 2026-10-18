@@ -103,6 +103,18 @@ impl Gate {
     pub fn is_write(&self) -> bool {
         !matches!(self, Gate::Read)
     }
+
+    /// The gate's variant name in `backbone_core::permission::Gate`.
+    pub fn variant(&self) -> &'static str {
+        match self {
+            Gate::Read => "Read",
+            Gate::Create => "Create",
+            Gate::Update => "Update",
+            Gate::Delete => "Delete",
+            Gate::Restore => "Restore",
+            Gate::Purge => "Purge",
+        }
+    }
 }
 
 /// How a permission was spelled in the schema, when it is not the canonical `<resource>:<action>`.
@@ -183,6 +195,30 @@ pub struct Required {
     pub permission: String,
     /// Whether a `requires:` renamed it from the default.
     pub renamed: bool,
+}
+
+/// The generic routes of one model declared `public:`: served without a permission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicRoute {
+    /// The model (`Label`).
+    pub model: String,
+    /// The resource half (`label`).
+    pub entity: String,
+    /// The public gates, in the order a report lists them.
+    pub gates: Vec<Gate>,
+    /// Whether the model carries a company or org fence and says so (`public_scoped: true`).
+    pub scoped: bool,
+}
+
+impl PublicRoute {
+    /// The gates as a report writes them: `read`, or `read, create`.
+    pub fn actions(&self) -> String {
+        self.gates
+            .iter()
+            .map(Gate::action)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// A system role the schema declares, with its baseline grants (canonical, inheritance folded in).
@@ -292,6 +328,51 @@ impl<'a> Rbac<'a> {
         }
     }
 
+    /// The generic actions of `model` the schema declares `public:`, valid ones only, in report
+    /// order. `public: true` stands for the reads; an entry that is no generic action is left out
+    /// (see [`Self::problems`]).
+    pub fn public_gates(&self, model: &Model) -> Vec<Gate> {
+        Gate::ALL
+            .into_iter()
+            .filter(|g| model.public.iter().any(|p| p.trim() == g.action()))
+            .collect()
+    }
+
+    /// Whether `model` carries a company or org fence: a column `company_id` (unless `@global`, or
+    /// the module declares `company_fence: none`) or `org_unit_id`. A public route of such a model
+    /// is served only to a caller the tenant scope admits, which is rarely what `public:` means.
+    pub fn is_fenced(&self, model: &Model) -> bool {
+        let company = self.schema.company_fence != Some(crate::ast::CompanyFence::None)
+            && model
+                .fields
+                .iter()
+                .any(|f| f.name == "company_id" && !f.has_attribute("global"));
+        let org = model
+            .fields
+            .iter()
+            .any(|f| f.name == "org_unit_id" && !f.has_attribute("global"));
+        company || org
+    }
+
+    /// The models with public routes, with their gates.
+    pub fn public(&self) -> Vec<PublicRoute> {
+        self.handler_models()
+            .filter_map(|model| {
+                let gates: Vec<Gate> = self
+                    .public_gates(model)
+                    .into_iter()
+                    .filter(|g| !g.is_write() || model.mounts_writes())
+                    .collect();
+                (!gates.is_empty()).then(|| PublicRoute {
+                    model: model.name.clone(),
+                    entity: Self::entity(model),
+                    gates,
+                    scoped: model.public_scoped,
+                })
+            })
+            .collect()
+    }
+
     /// The permission a transition or hand verb of `model` requires.
     pub fn verb_permission(
         &self,
@@ -315,8 +396,13 @@ impl<'a> Rbac<'a> {
         let mut out = Vec::new();
         for model in self.handler_models() {
             let entity = Self::entity(model);
+            let public = self.public_gates(model);
             for gate in Gate::ALL {
                 if gate.is_write() && !model.mounts_writes() {
+                    continue;
+                }
+                // A public gate requires nothing: it is reported by [`Self::public`] instead.
+                if public.contains(&gate) {
                     continue;
                 }
                 let (permission, renamed) = self.gate_permission(model, gate);
@@ -542,6 +628,46 @@ impl<'a> Rbac<'a> {
                 }
             }
         }
+        for model in &self.schema.models {
+            for key in &model.public {
+                if Gate::from_key(key.trim()).is_none() {
+                    out.push(fatal(format!(
+                        "`{}` public: `{key}` is not a generic action (read, create, update, delete, restore, purge)",
+                        model.name
+                    )));
+                }
+            }
+            let gates = self.public_gates(model);
+            for gate in &gates {
+                if model.requires.contains_key(gate.action()) {
+                    out.push(fatal(format!(
+                        "`{}` declares `{}` both `public:` and `requires:`: a public route requires nothing, so drop one",
+                        model.name,
+                        gate.action()
+                    )));
+                }
+                if gate.is_write() && !model.mounts_writes() {
+                    out.push(fatal(format!(
+                        "`{}` is `public: [{}]` but mounts no write routes (read_only), so there is no such route to serve",
+                        model.name,
+                        gate.action()
+                    )));
+                }
+            }
+            if !gates.is_empty() && self.is_fenced(model) && !model.public_scoped {
+                out.push(fatal(format!(
+                    "`{}` is `public:` but carries a company or org fence, so its public routes serve only a caller the tenant scope admits: \
+                     drop `public:`, or say that is meant with `public_scoped: true`",
+                    model.name
+                )));
+            }
+            if model.public_scoped && gates.is_empty() {
+                out.push(fatal(format!(
+                    "`{}` sets `public_scoped: true` without `public:`, which it only qualifies",
+                    model.name
+                )));
+            }
+        }
         let declared = self.declared();
         let implied: BTreeSet<String> = self
             .required()
@@ -598,6 +724,23 @@ impl<'a> Rbac<'a> {
         self.declared()
             .into_iter()
             .filter(|d| !required.contains(d) && !granted.contains(d))
+            .collect()
+    }
+
+    /// Public declarations that are legal but worth a second look: a public route that writes
+    /// lets anyone who can reach the mount change data.
+    pub fn public_warnings(&self) -> Vec<String> {
+        self.public()
+            .into_iter()
+            .filter(|p| p.gates.iter().any(Gate::is_write))
+            .map(|p| {
+                format!(
+                    "`{}` serves {} without a permission (`public:`): anyone who can reach the mount can write; \
+                     public is meant for reference data that is read",
+                    p.model,
+                    p.gates.iter().filter(|g| g.is_write()).map(Gate::action).collect::<Vec<_>>().join(", ")
+                )
+            })
             .collect()
     }
 
@@ -909,6 +1052,133 @@ mod tests {
         let p = Rbac::new(&s).problems();
         assert!(p.iter().any(|p| p.fatal && p.message.contains("ghost")));
         assert!(p.iter().any(|p| p.fatal && p.message.contains("a:b:c")));
+    }
+
+    #[test]
+    fn a_public_gate_requires_nothing_and_is_reported_as_public() {
+        let mut s = schema();
+        s.models[0].public = vec!["read".into()];
+        let r = Rbac::new(&s);
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        let ticket: Vec<_> = r
+            .required()
+            .into_iter()
+            .filter(|x| x.model == "Ticket")
+            .collect();
+        assert!(
+            ticket
+                .iter()
+                .all(|x| x.kind != RouteKind::Generic(Gate::Read)),
+            "a public read requires no permission: {ticket:?}"
+        );
+        assert!(
+            ticket.iter().any(|x| x.permission == "ticket:create"),
+            "the writes still do"
+        );
+        assert!(!r.vocabulary().contains("ticket:read"));
+        let public = r.public();
+        assert_eq!(public.len(), 1);
+        assert_eq!(
+            (public[0].model.as_str(), public[0].actions().as_str()),
+            ("Ticket", "read")
+        );
+        assert!(
+            r.public_warnings().is_empty(),
+            "a public read is not a warning"
+        );
+    }
+
+    #[test]
+    fn a_public_write_is_a_warning_and_a_bad_declaration_is_a_problem() {
+        let mut s = schema();
+        s.models[0].public = vec!["read".into(), "create".into()];
+        let r = Rbac::new(&s);
+        assert!(r.problems().is_empty());
+        assert_eq!(r.public_warnings().len(), 1, "{:?}", r.public_warnings());
+        assert!(r.public_warnings()[0].contains("create"));
+
+        s.models[0].public = vec!["peek".into()];
+        let p = Rbac::new(&s).problems();
+        assert!(
+            p.iter().any(|p| p.fatal && p.message.contains("`peek`")),
+            "{p:?}"
+        );
+
+        s.models[0].public = vec!["read".into()];
+        s.models[0]
+            .requires
+            .insert("read".into(), "ticket:view".into());
+        let p = Rbac::new(&s).problems();
+        assert!(
+            p.iter()
+                .any(|p| p.fatal && p.message.contains("both `public:` and `requires:`")),
+            "{p:?}"
+        );
+
+        s.models[0].requires.clear();
+        s.models[0].read_only = true;
+        s.models[0].public = vec!["read".into(), "delete".into()];
+        let p = Rbac::new(&s).problems();
+        assert!(
+            p.iter()
+                .any(|p| p.fatal && p.message.contains("mounts no write routes")),
+            "{p:?}"
+        );
+
+        let mut s = schema();
+        s.models[0].public_scoped = true;
+        let p = Rbac::new(&s).problems();
+        assert!(
+            p.iter()
+                .any(|p| p.fatal && p.message.contains("without `public:`")),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn public_on_a_fenced_model_fails_unless_it_says_the_scope_is_meant() {
+        use crate::ast::{Field, PrimitiveType, TypeRef};
+        let mut s = schema();
+        s.models[0].fields.push(Field::new(
+            "company_id",
+            TypeRef::Primitive(PrimitiveType::Uuid),
+        ));
+        s.models[0].public = vec!["read".into()];
+        let p = Rbac::new(&s).problems();
+        assert!(
+            p.iter().any(|p| p.fatal
+                && p.message.contains("company or org fence")
+                && p.message.contains("public_scoped: true")),
+            "{p:?}"
+        );
+        s.models[0].public_scoped = true;
+        assert!(Rbac::new(&s).problems().is_empty());
+        assert!(Rbac::new(&s).public()[0].scoped);
+
+        // A column marked @global is not a fence, and neither is a module that declares none.
+        let mut g = schema();
+        let mut f = Field::new("company_id", TypeRef::Primitive(PrimitiveType::Uuid));
+        f.attributes.push(crate::ast::Attribute::new("global"));
+        g.models[0].fields.push(f);
+        g.models[0].public = vec!["read".into()];
+        assert!(Rbac::new(&g).problems().is_empty());
+        let mut n = schema();
+        n.company_fence = Some(crate::ast::CompanyFence::None);
+        n.models[0].fields.push(Field::new(
+            "company_id",
+            TypeRef::Primitive(PrimitiveType::Uuid),
+        ));
+        n.models[0].public = vec!["read".into()];
+        assert!(Rbac::new(&n).problems().is_empty());
+
+        // An org-fenced model is fenced.
+        let mut o = schema();
+        o.models[0].fields.push(Field::new(
+            "org_unit_id",
+            TypeRef::Primitive(PrimitiveType::Uuid),
+        ));
+        o.models[0].public = vec!["read".into()];
+        assert!(Rbac::new(&o).problems().iter().any(|p| p.fatal));
     }
 
     #[test]

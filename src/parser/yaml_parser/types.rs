@@ -20,6 +20,27 @@ pub const AUDIT_METADATA_TYPE_NAME: &str = "Metadata";
 // YAML Schema Structures (Intermediate representation)
 // ============================================================================
 
+/// `public:` on a model: `true` (the reads) or the generic actions to serve without a permission.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum YamlPublic {
+    /// `public: true` (the reads) or `public: false` (nothing).
+    Flag(bool),
+    /// `public: [read]`
+    Actions(Vec<String>),
+}
+
+impl YamlPublic {
+    /// The generic actions it names, as written; `true` names the reads.
+    pub fn actions(&self) -> Vec<String> {
+        match self {
+            Self::Flag(true) => vec!["read".into()],
+            Self::Flag(false) => Vec::new(),
+            Self::Actions(a) => a.clone(),
+        }
+    }
+}
+
 /// Root structure for model YAML files
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YamlModelSchema {
@@ -133,6 +154,14 @@ pub struct YamlModel {
     /// `read`, `create`, `update`, `delete`, `restore` or `purge`.
     #[serde(default)]
     pub requires: IndexMap<String, String>,
+    /// The generic actions served without a permission (reference data): `public: true` for the
+    /// reads, or a list of `read`, `create`, `update`, `delete`, `restore`, `purge`.
+    #[serde(default)]
+    pub public: Option<YamlPublic>,
+    /// Acknowledges that a `public:` model also carries a company or org fence: it is then public
+    /// only to callers the tenant scope admits.
+    #[serde(default)]
+    pub public_scoped: Option<bool>,
     /// Enroll this entity in data-change audit capture (ADR-0025): the
     /// generator emits one migration per audited table attaching the
     /// row-level trigger that calls the composed backbone-auditlog module's

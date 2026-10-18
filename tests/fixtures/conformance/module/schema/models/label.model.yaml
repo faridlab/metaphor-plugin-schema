@@ -1,0 +1,26 @@
+# Label: public reference data. Declared `public: true`, so its read routes need no permission and
+# no login where the host mounts `public_routes()` outside its authentication layer; every write
+# still needs `label:<action>`. It carries no company or org fence: reference data has no tenant column.
+
+models:
+  - name: Label
+    collection: labels
+    description: "Conformance fixture: public reference data"
+    public: true
+
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+
+      code:
+        type: string
+        attributes: ["@required", "@length(min=2, max=24)"]
+
+      name:
+        type: string
+        attributes: ["@required", "@length(max=80)"]
+
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]

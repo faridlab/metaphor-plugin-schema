@@ -328,10 +328,20 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
 fn print_permissions(schema: &crate::ast::ModuleSchema, mode: super::permissions_check::Mode) {
     let rbac = crate::rbac::Rbac::new(schema);
     let by_model = rbac.by_model();
-    if by_model.is_empty() {
+    let public = rbac.public();
+    if by_model.is_empty() && public.is_empty() {
         return;
     }
     println!("{} mode {}", "Permissions:".bold(), mode.label());
+    for p in &public {
+        println!(
+            "  {}  {} ({})  served without a permission or a login where mounted outside the auth layer (`public_routes()`){}",
+            p.model.bold(),
+            "PERMISSION PUBLIC".yellow(),
+            p.actions(),
+            if p.scoped { "; fenced, so only to a caller the tenant scope admits" } else { "" }
+        );
+    }
     for (model, required) in &by_model {
         let entity = required.first().map(|r| r.entity.as_str()).unwrap_or("");
         let generic: Vec<&crate::rbac::Required> = required.iter().filter(|r| matches!(r.kind, crate::rbac::RouteKind::Generic(_))).collect();
@@ -374,6 +384,12 @@ fn permissions_json(schema: &crate::ast::ModuleSchema, mode: super::permissions_
             super::permissions_check::Mode::AuthContext => "auth_context",
         },
         "label": mode.label(),
+        "public": rbac.public().iter().map(|p| serde_json::json!({
+            "model": p.model,
+            "label": format!("PERMISSION PUBLIC ({})", p.actions()),
+            "actions": p.gates.iter().map(|g| g.action()).collect::<Vec<_>>(),
+            "scoped": p.scoped,
+        })).collect::<Vec<_>>(),
         "required": rbac.required().iter().map(|r| serde_json::json!({
             "model": r.model,
             "permission": r.permission,

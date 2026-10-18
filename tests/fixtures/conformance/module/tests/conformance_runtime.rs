@@ -474,9 +474,19 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     let bare = stack(routes());
     // A gate that admits on a narrower rule marks the request.
     let waived = stack(routes().route_layer(from_fn(waive)).route_layer(from_fn(auth_bridge)));
+    // Routes mounted with no authentication layer at all (the tenant router only), as a service that
+    // mounted `public_routes()` outside its auth layer would; and the module's `public_routes()`
+    // alone, mounted the same way.
+    let unauthenticated = |inner: Router| {
+        let tenant_router = TenantRouter::new(HostResolver::new("conf.test"), TenantRegistry::new(Factory { pool: tenant_pool.clone() }, 4));
+        inner.layer(from_fn_with_state(tenant_router, tenant_route))
+    };
+    let open = unauthenticated(routes());
+    let public_only = unauthenticated(module.public_routes());
     let new_app = |router: Router| App { router, refusals: Arc::new(Mutex::new(Vec::new())) };
     let app = new_app(router);
     let (rapp, bare, waived) = (new_app(resolved), new_app(bare), new_app(waived));
+    let (open, public_only) = (new_app(open), new_app(public_only));
 
     let issuer = OrgIssuer::hs256(SECRET).for_audience(TENANT);
     let hour = Duration::from_secs(3600);
@@ -484,7 +494,7 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     let tb = issuer.issue_access("admin-b", org.company_b, &[], Some(org.company_b), hour).unwrap();
     let clerk = issuer.issue_access("clerk-a", org.company_a, &[], Some(org.company_a), hour).unwrap();
 
-    let ctx = Ctx { app, rapp, bare, waived, rec: rec.clone(), org, ta, tb, clerk, owner: owner.clone(), pool: pool.clone(), module: module.clone(), issuer };
+    let ctx = Ctx { app, rapp, bare, waived, open, public_only, rec: rec.clone(), org, ta, tb, clerk, owner: owner.clone(), pool: pool.clone(), module: module.clone(), issuer };
 
     // Each area runs isolated: a panic in one is recorded and the next still runs.
     for (name, fut) in [
@@ -496,6 +506,7 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         ("F", AssertUnwindSafe(area_f(&ctx)).boxed()),
         ("G", AssertUnwindSafe(area_g(&ctx)).boxed()),
         ("I", AssertUnwindSafe(area_i(&ctx)).boxed()),
+        ("I", AssertUnwindSafe(area_i_public(&ctx)).boxed()),
     ] {
         if let Err(panic) = AssertUnwindSafe(fut).catch_unwind().await {
             let msg = panic
@@ -520,6 +531,10 @@ struct Ctx {
     bare: App,
     /// The same routes behind the default stack, with a gate that waives the permission check.
     waived: App,
+    /// Every route of the module mounted with no authentication layer at all.
+    open: App,
+    /// The module's `public_routes()` alone, mounted with no authentication layer.
+    public_only: App,
     rec: Rec,
     org: Org,
     ta: String,
@@ -1765,6 +1780,83 @@ async fn area_i(c: &Ctx) {
     r.check("I", "Seeds", "a tenant-edited role grant survives a re-run: the revoked baseline grant stays revoked (no duplicate row) and the added grant stays", rerun.is_ok() && live == vec!["project:read", "ticket:create"] && revoked_rows == 1, "revoke viewer's ticket:read, add ticket:create, re-run the seed", "live grants [project:read, ticket:create]; one (revoked) ticket:read row", &format!("{live:?}; {revoked_rows} ticket:read row(s); {:?}", rerun.err().map(|e| e.to_string())), "generators/sql.rs (NOT EXISTS over every row, soft-deleted included)");
     let tenant_view = rapp.get("/tickets", &tv).await;
     r.check("I", "Seeds", "and the edit is what the next request sees: the viewer lost the read and gained the create", denied(&tenant_view, "ticket:read"), &tenant_view.request, "403 ticket:read", &tenant_view.got(), "backbone-auth/src/resolver.rs");
+}
+
+// =============================================================================
+// I. Public routes (`public:`)
+// =============================================================================
+
+async fn area_i_public(c: &Ctx) {
+    let r = &c.rec;
+    let (app, open, public) = (&c.app, &c.open, &c.public_only);
+    const P: &str = "backbone-core/src/permission.rs (CrudPermissions::public) and src/http.rs (gate), the generated label_permissions() and public_routes()";
+    let ta = c.ta.as_str();
+    let code = uniq("L");
+    let made = app.post("/labels", ta, json!({ "code": code, "name": "Public label" })).await;
+    let lid = made.id();
+    r.check("I", "Public routes", "setup: an admin creates a label (label:create is still required to write it)", made.status == 201, &made.request, "201", &made.got(), P);
+
+    // The read routes of a `public: true` model answer with no login at all.
+    let list = open.send("GET", "/labels", None, None, &[]).await;
+    r.check("I", "Public routes", "a public read with no authentication answers 200: the list", list.status == 200 && list.ids().contains(&lid), &list.request, "200 listing the label", &list.got(), P);
+    let one = open.send("GET", &format!("/labels/{lid}"), None, None, &[]).await;
+    r.check("I", "Public routes", "a public read with no authentication answers 200: one record", one.status == 200 && one.id() == lid, &one.request, "200 with the record", &one.got(), P);
+    let count = open.send("GET", "/labels/count", None, None, &[]).await;
+    r.check("I", "Public routes", "a public read with no authentication answers 200: count", count.status == 200, &count.request, "200", &count.got(), P);
+
+    // A caller who is logged in but holds nothing reads it too, where an ordinary entity refuses.
+    let clerk_labels = app.get("/labels", &c.clerk).await;
+    let clerk_tickets = app.get("/tickets", &c.clerk).await;
+    r.check("I", "Public routes", "a logged-in caller who holds no permission reads the public model, and is refused a non-public one (ticket:read)", clerk_labels.status == 200 && denied(&clerk_tickets, "ticket:read"), &clerk_labels.request, "200 on /labels, 403 ticket:read on /tickets", &format!("{} / {}", clerk_labels.got(), clerk_tickets.got()), P);
+
+    // The same model's writes are not public.
+    let body = json!({ "code": uniq("W"), "name": "Anon" });
+    for (what, method, path, payload) in [
+        ("create", "POST", "/labels".to_string(), Some(body.clone())),
+        ("patch", "PATCH", format!("/labels/{lid}"), Some(json!({ "name": "x" }))),
+        ("put", "PUT", format!("/labels/{lid}"), Some(body.clone())),
+        ("delete", "DELETE", format!("/labels/{lid}"), None),
+        ("bulk create", "POST", "/labels/bulk".to_string(), Some(json!([body.clone()]))),
+        ("restore", "POST", format!("/labels/{lid}/restore"), None),
+        ("empty trash", "DELETE", "/labels/empty".to_string(), None),
+    ] {
+        let d = open.send(method, &path, None, payload.as_ref().map(|b| b.to_string()), &[]).await;
+        r.check("I", "Public routes", &format!("the same model's {what} is not public: 401 with no authentication"), d.status == 401 && d.has_code("authentication_required"), &d.request, "401 authentication_required", &d.got(), P);
+    }
+    for (what, method, path, payload, perm) in [
+        ("create", "POST", "/labels".to_string(), Some(body.clone()), "label:create"),
+        ("patch", "PATCH", format!("/labels/{lid}"), Some(json!({ "name": "x" })), "label:update"),
+        ("delete", "DELETE", format!("/labels/{lid}"), None, "label:delete"),
+    ] {
+        let d = app.send(method, &path, Some(&c.clerk), payload.as_ref().map(|b| b.to_string()), &[]).await;
+        r.check("I", "Public routes", &format!("the same model's {what} still needs {perm}: 403 for a caller who holds nothing"), denied(&d, perm), &d.request, &format!("403 naming {perm}"), &d.got(), P);
+    }
+    let still = open.send("GET", &format!("/labels/{lid}"), None, None, &[]).await;
+    r.check("I", "Public routes", "a refused anonymous write changed nothing", still.status == 200 && still.data()["name"] == json!("Public label"), &still.request, "the label unchanged", &still.got(), P);
+
+    // A non-public sibling stays closed, in the same mount.
+    for (what, path) in [("project list", "/projects".to_string()), ("ticket list", "/tickets".to_string()), ("approval list", "/approvals".to_string())] {
+        let d = open.send("GET", &path, None, None, &[]).await;
+        r.check("I", "Public routes", &format!("a non-public sibling is 401 beside it in the same mount: {what}"), d.status == 401 && d.has_code("authentication_required"), &d.request, "401 authentication_required", &d.got(), P);
+    }
+
+    // `public_routes()` mounts only the public model's routes.
+    let pl = public.send("GET", "/labels", None, None, &[]).await;
+    let pp = public.send("GET", "/projects", None, None, &[]).await;
+    let pw = public.send("POST", "/labels", None, Some(body.to_string()), &[]).await;
+    r.check("I", "Public routes", "`public_routes()` serves the public model's reads with no login, and mounts no other entity", pl.status == 200 && pp.status == 404, &pl.request, "200 on /labels, 404 on /projects", &format!("{} / {}", pl.got(), pp.got()), "src/generators/module.rs (public_routes)");
+    r.check("I", "Public routes", "`public_routes()` still refuses an anonymous write to the public model: 401", pw.status == 401, &pw.request, "401", &pw.got(), "src/generators/module.rs (public_routes)");
+
+    // The tenant resolution in front of the layer still applies: an unknown tenant is not served.
+    let req = Request::builder().method("GET").uri("/labels").header("host", "nobody.conf.test").body(Body::empty()).unwrap();
+    let res = public.router.clone().oneshot(req).await.unwrap();
+    let status = res.status().as_u16();
+    let res_body_is_empty_of_labels = !String::from_utf8_lossy(&res.into_body().collect().await.map(|b| b.to_bytes()).unwrap_or_default()).contains(&lid);
+    r.check("I", "Public routes", "the tenant fence still applies to a public route: an unknown tenant is refused, not served", status != 200 && res_body_is_empty_of_labels, "GET /labels (host nobody.conf.test)", "not served (the tenant router refuses an unknown tenant)", &status.to_string(), "backbone-tenant (tenant_route)");
+
+    // The vocabulary: a public action is not a permission anything must hold.
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM public.permissions WHERE (metadata->>'deleted_at') IS NULL AND name LIKE 'label:%' ORDER BY name").fetch_all(&c.owner).await.unwrap();
+    r.check("I", "Public routes", "the seed holds the permissions the public model's writes require and none for its public reads", names.contains(&"label:create".to_string()) && !names.contains(&"label:read".to_string()), "SELECT name FROM public.permissions WHERE name LIKE 'label:%'", "label:create present, label:read absent", &format!("{names:?}"), "src/rbac.rs (required, seed)");
 }
 
 // =============================================================================

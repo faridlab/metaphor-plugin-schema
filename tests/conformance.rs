@@ -430,6 +430,23 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         "metaphor-plugin-schema/src/commands/schema/rules.rs (print_permissions)",
     ));
 
+    let public_lines: Vec<&str> = text.lines().filter(|l| l.contains("PERMISSION PUBLIC")).collect();
+    let public_json = permissions.get("public").and_then(Value::as_array).cloned().unwrap_or_default();
+    rows.push(gen_row(
+        "I",
+        "Register",
+        "`schema rules` labels a `public: true` model PERMISSION PUBLIC (read), and no route group of it PERMISSION REQUIRED label:read",
+        public_lines.len() == 1
+            && public_lines[0].contains("Label")
+            && public_lines[0].contains("PERMISSION PUBLIC (read)")
+            && !permission_lines.iter().any(|l| l.contains("label:{read") || l.contains("label:read"))
+            && public_json.iter().any(|p| p["model"] == "Label" && p["label"] == "PERMISSION PUBLIC (read)"),
+        "metaphor-schema schema rules . (text and -f json)",
+        "`Label PERMISSION PUBLIC (read)`; the writes listed as PERMISSION REQUIRED label:{create|update|delete|restore|purge}",
+        &format!("{} PUBLIC line(s): {}; label lines: {}", public_lines.len(), public_lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" | "), permission_lines.iter().filter(|l| l.contains("Label")).map(|l| l.trim()).collect::<Vec<_>>().join(" | ")),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (print_permissions)",
+    ));
+
     let out = run(Command::new(bin).args(["schema", "doctor", "."]).current_dir(module).env("NO_COLOR", "1"), "schema doctor");
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     rows.push(gen_row(
@@ -824,6 +841,98 @@ fn permission_variant_probes(skeleton: &Path, fixture: &Path, rows: &mut Vec<Row
         "give role viewer the grant a:b:c and generate",
         "generation fails naming role viewer and a:b:c",
         &one_line(text.lines().filter(|l| l.contains("role")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rbac.rs (problems)",
+    ));
+
+    // Public declarations: a write is a warning, a fence needs its acknowledgement, a bad action is refused.
+    let label = "schema/models/label.model.yaml";
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(label), |t| t.replace("    public: true
+", "    public: [read, create]\n"))
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Public routes",
+        "a public write is a doctor warning, not a failure",
+        out.status.success() && ok && text.contains("`Label` serves create without a permission (`public:`)"),
+        "declare Label `public: [read, create]` and run doctor",
+        "generation succeeds; doctor exits 0 with a warning naming Label and create",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("Label")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/rbac.rs (public_warnings) and doctor.rs (permission_report)",
+    ));
+    let handler = fs::read_to_string(module.join("src/presentation/http/label_handler.rs")).unwrap_or_default();
+    rows.push(gen_row(
+        "I",
+        "Public routes",
+        "the generated handler declares each public action, and only those",
+        handler.contains(".public(backbone_core::permission::Gate::Read)") && handler.contains(".public(backbone_core::permission::Gate::Create)") && !handler.contains(".public(backbone_core::permission::Gate::Delete)"),
+        "declare Label `public: [read, create]` and generate",
+        "label_permissions() carries .public(Read) and .public(Create), not Delete",
+        &one_line(&handler.lines().filter(|l| l.contains(".public(")).collect::<Vec<_>>().join(" | ")),
+        "metaphor-plugin-schema/src/generators/handler.rs (write_route_config)",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/project.model.yaml"), |t| t.replacen("    collection: projects\n", "    collection: projects\n    public: true\n", 1))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Public routes",
+        "`public:` on a model that carries a company fence fails generation unless it says `public_scoped: true`",
+        !out.status.success() && text.contains("`Project` is `public:` but carries a company or org fence") && text.contains("public_scoped: true"),
+        "declare Project (company_id) `public: true` and generate",
+        "generation fails naming Project and public_scoped: true",
+        &one_line(text.lines().filter(|l| l.contains("public")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rbac.rs (problems) via resolver/validator.rs",
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join("schema/models/project.model.yaml"), |t| t.replacen("    collection: projects\n", "    collection: projects\n    public: true\n    public_scoped: true\n", 1))
+    });
+    let (ok, text) = doctor(&module);
+    rows.push(gen_row(
+        "I",
+        "Public routes",
+        "`public_scoped: true` accepts a public model that carries a fence, and the doctor says it is fenced",
+        out.status.success() && ok && text.contains("Project is public (read)") && text.contains("public_scoped: true"),
+        "declare Project `public: true` with `public_scoped: true`, generate and run doctor",
+        "generation succeeds; doctor notes Project is public and fenced",
+        &format!("generate exit {:?}; doctor ok={ok}; {}", out.status.code(), one_line(&text.lines().filter(|l| l.contains("Project")).collect::<Vec<_>>().join(" | "))),
+        "metaphor-plugin-schema/src/rbac.rs and doctor.rs",
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(label), |t| t.replace("    public: true\n", "    public: [peek]\n"))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Public routes",
+        "`public:` naming something that is no generic action fails generation, naming it",
+        !out.status.success() && text.contains("`Label` public: `peek` is not a generic action"),
+        "declare Label `public: [peek]` and generate",
+        "generation fails naming `peek`",
+        &one_line(text.lines().filter(|l| l.contains("public")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/rbac.rs (problems)",
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(label), |t| t.replace("    public: true\n", "    public: true\n    requires:\n      read: label:browse\n"))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Public routes",
+        "a public action that also carries a `requires:` rename fails generation",
+        !out.status.success() && text.contains("both `public:` and `requires:`"),
+        "declare Label `public: true` with `requires: { read: label:browse }` and generate",
+        "generation fails: the route cannot be public and require a permission",
+        &one_line(text.lines().filter(|l| l.contains("public")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
         "metaphor-plugin-schema/src/rbac.rs (problems)",
     ));
 }

@@ -476,6 +476,39 @@ impl ModuleGenerator {
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
 
+        // The routes of the entities declared `public:`, for a host to mount outside its
+        // authentication layer. Every route of such an entity is built guarded, so a public action
+        // serves an unauthenticated caller and any other refuses it (401), whatever is mounted.
+        let public_models: Vec<_> = {
+            let rbac = crate::rbac::Rbac::new(&schema.schema);
+            let public = rbac.public();
+            schema
+                .schema
+                .models
+                .iter()
+                .filter(|m| handler_emitted(m) && public.iter().any(|p| p.model == m.name))
+                .collect()
+        };
+        if !public_models.is_empty() {
+            writeln!(output, "    /// The routes of the entities the schema declares `public:` ({}), for a host to mount", public_models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", ")).unwrap();
+            writeln!(output, "    /// outside its authentication layer so reference data is served without a login. Only the").unwrap();
+            writeln!(output, "    /// declared public actions answer an unauthenticated caller (the reads, unless `public:` lists more);").unwrap();
+            writeln!(output, "    /// every other route of these entities still refuses it with `401`. The tenant scope is the").unwrap();
+            writeln!(output, "    /// host's to resolve before this router, as for every route.").unwrap();
+            writeln!(output, "    pub fn public_routes(&self) -> Router {{").unwrap();
+            writeln!(output, "        Router::new()").unwrap();
+            for model in &public_models {
+                let snake_name = to_snake_case(&model.name);
+                writeln!(
+                    output,
+                    "            .merge(presentation::http::{snake_name}_handler::create_{snake_name}_routes(self.{snake_name}_service.clone()))"
+                )
+                .unwrap();
+            }
+            writeln!(output, "    }}").unwrap();
+            writeln!(output).unwrap();
+        }
+
         // The generated state-machine verbs of the entities whose machines declare
         // `verbs: generated`; a host mounts them beside the module's guarded routes.
         let verb_models: Vec<_> = schema

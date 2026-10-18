@@ -640,18 +640,16 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         }
         if let Some(module) = module {
             let rbac = crate::rbac::Rbac::new(module);
+            let public = rbac.public_gates(model);
             for gate in crate::rbac::Gate::ALL {
+                // A public gate requires nothing; the rest are renamed only when `requires:` says so.
+                if public.contains(&gate) {
+                    writeln!(output, "        .public(backbone_core::permission::Gate::{})", gate.variant()).unwrap();
+                    continue;
+                }
                 let (permission, renamed) = rbac.gate_permission(model, gate);
                 if renamed {
-                    let variant = match gate {
-                        crate::rbac::Gate::Read => "Read",
-                        crate::rbac::Gate::Create => "Create",
-                        crate::rbac::Gate::Update => "Update",
-                        crate::rbac::Gate::Delete => "Delete",
-                        crate::rbac::Gate::Restore => "Restore",
-                        crate::rbac::Gate::Purge => "Purge",
-                    };
-                    writeln!(output, "        .requiring(backbone_core::permission::Gate::{variant}, {permission:?})").unwrap();
+                    writeln!(output, "        .requiring(backbone_core::permission::Gate::{}, {permission:?})", gate.variant()).unwrap();
                 }
             }
         }
@@ -1940,6 +1938,17 @@ mod tests {
         // The module re-exports it for hand code that mounts the routes itself.
         let module = output.files.get(&PathBuf::from("src/presentation/http/mod.rs")).unwrap();
         assert!(module.contains("user_permissions"), "{module}");
+    }
+
+    #[test]
+    fn a_public_action_is_declared_public_and_the_rest_stay_guarded() {
+        let mut schema = create_test_schema();
+        schema.schema.models[0].public = vec!["read".into()];
+        let output = HandlerGenerator::new().generate(&schema).unwrap();
+        let handler = output.files.get(&PathBuf::from("src/presentation/http/user_handler.rs")).unwrap();
+        assert!(handler.contains(".public(backbone_core::permission::Gate::Read)"), "{handler}");
+        assert!(!handler.contains(".public(backbone_core::permission::Gate::Create)"), "{handler}");
+        assert!(handler.contains("UserResponseDto>::routes_guarded("), "public routes are still built guarded: the permissions say which are public");
     }
 
     // Note: domain event enums (UserEvent, DomainEvent impl, feature gating) are emitted

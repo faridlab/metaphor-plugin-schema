@@ -427,6 +427,18 @@ fn permission_report(schema: &crate::ast::ModuleSchema, root: &Path) -> Vec<Stri
     for p in rbac.problems() {
         failures.push(p.message);
     }
+    for w in rbac.public_warnings() {
+        println!("  {} {w}", "!".yellow().bold());
+    }
+    for p in rbac.public() {
+        println!(
+            "  {} {} is public ({}): served without a permission where its `public_routes()` are mounted outside the auth layer{}",
+            "!".yellow().bold(),
+            p.model,
+            p.actions(),
+            if p.scoped { " (fenced; `public_scoped: true`)" } else { "" }
+        );
+    }
     for r in source.routes.iter().filter(|r| !r.guarded) {
         match &r.acknowledged {
             Some(why) => println!("  {} {}:{} route `{}` is deliberately unguarded: {why}", "!".yellow().bold(), r.file, r.line, r.what),

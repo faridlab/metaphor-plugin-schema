@@ -59,3 +59,4 @@ imports:
   - project.model.yaml
   - ticket.model.yaml
   - approval.model.yaml
+  - label.model.yaml

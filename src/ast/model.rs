@@ -48,6 +48,15 @@ pub struct Model {
     /// `purge`. Values are as written in the schema (either spelling); [`crate::rbac`] reads them.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub requires: std::collections::BTreeMap<String, String>,
+    /// `public:` — the generic actions served without a permission (`read`, `create`, `update`,
+    /// `delete`, `restore`, `purge`), as written; `public: true` reads as `["read"]`. [`crate::rbac`]
+    /// validates them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public: Vec<String>,
+    /// `public_scoped:` — the model carries a company or org fence and is public only to callers
+    /// the tenant scope admits, acknowledged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub public_scoped: bool,
     /// Source location
     #[serde(skip)]
     pub span: Span,

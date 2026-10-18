@@ -3,9 +3,9 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.36.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.37.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 44s
+- Generation: 3s; whole run: 101s
 
 ## Summary
 
@@ -19,8 +19,8 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | F. Extension | 12 | 0 | 1 |
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 23 | 0 | 0 |
-| I. Permissions | 112 | 0 | 0 |
-| **Total** | **358** | **0** | **3** |
+| I. Permissions | 142 | 0 | 0 |
+| **Total** | **388** | **0** | **3** |
 
 ## Matrix
 
@@ -375,9 +375,33 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | I | Seeds | re-running the seed migration changes nothing | PASS |
 | I | Seeds | a tenant-edited role grant survives a re-run: the revoked baseline grant stays revoked (no duplicate row) and the added grant stays | PASS |
 | I | Seeds | and the edit is what the next request sees: the viewer lost the read and gained the create | PASS |
+| I | Public routes | setup: an admin creates a label (label:create is still required to write it) | PASS |
+| I | Public routes | a public read with no authentication answers 200: the list | PASS |
+| I | Public routes | a public read with no authentication answers 200: one record | PASS |
+| I | Public routes | a public read with no authentication answers 200: count | PASS |
+| I | Public routes | a logged-in caller who holds no permission reads the public model, and is refused a non-public one (ticket:read) | PASS |
+| I | Public routes | the same model's create is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's patch is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's put is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's delete is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's bulk create is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's restore is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's empty trash is not public: 401 with no authentication | PASS |
+| I | Public routes | the same model's create still needs label:create: 403 for a caller who holds nothing | PASS |
+| I | Public routes | the same model's patch still needs label:update: 403 for a caller who holds nothing | PASS |
+| I | Public routes | the same model's delete still needs label:delete: 403 for a caller who holds nothing | PASS |
+| I | Public routes | a refused anonymous write changed nothing | PASS |
+| I | Public routes | a non-public sibling is 401 beside it in the same mount: project list | PASS |
+| I | Public routes | a non-public sibling is 401 beside it in the same mount: ticket list | PASS |
+| I | Public routes | a non-public sibling is 401 beside it in the same mount: approval list | PASS |
+| I | Public routes | `public_routes()` serves the public model's reads with no login, and mounts no other entity | PASS |
+| I | Public routes | `public_routes()` still refuses an anonymous write to the public model: 401 | PASS |
+| I | Public routes | the tenant fence still applies to a public route: an unknown tenant is refused, not served | PASS |
+| I | Public routes | the seed holds the permissions the public model's writes require and none for its public reads | PASS |
 | I | Register | `schema rules` lists the permission every generic route, generated verb and declared verb requires | PASS |
 | I | Register | a declared system role's grants are normalised to the canonical spelling (projects.read -> project:read) | PASS |
 | I | Register | `schema rules` labels each route group PERMISSION REQUIRED <permission> and says the mode (no resolver installed: AUTHCONTEXT) | PASS |
+| I | Register | `schema rules` labels a `public: true` model PERMISSION PUBLIC (read), and no route group of it PERMISSION REQUIRED label:read | PASS |
 | I | Schema doctor | doctor says the mode, and warns (without failing) on the dotted spelling a role uses | PASS |
 | I | Schema doctor | an unguarded hand-written route fails `schema doctor`, naming the file, the line and the fix | PASS |
 | I | Schema doctor | a route marked `// unguarded: <why>` is accepted, and the doctor prints the reason | PASS |
@@ -387,6 +411,12 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | I | Declarations | `requires:` naming a permission the vocabulary does not declare fails generation, naming it | PASS |
 | I | Declarations | a declared `requires:` renames the permission the entity's read routes need in the generated handler | PASS |
 | I | Declarations | a system role that lists a malformed permission fails generation, naming the role and the entry | PASS |
+| I | Public routes | a public write is a doctor warning, not a failure | PASS |
+| I | Public routes | the generated handler declares each public action, and only those | PASS |
+| I | Public routes | `public:` on a model that carries a company fence fails generation unless it says `public_scoped: true` | PASS |
+| I | Public routes | `public_scoped: true` accepts a public model that carries a fence, and the doctor says it is fenced | PASS |
+| I | Public routes | `public:` naming something that is no generic action fails generation, naming it | PASS |
+| I | Public routes | a public action that also carries a `requires:` rename fails generation | PASS |
 
 ## Failures (0)
 

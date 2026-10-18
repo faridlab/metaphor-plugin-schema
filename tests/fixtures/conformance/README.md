@@ -63,6 +63,7 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 | `module/schema/models/index.model.yaml` | module schema, `company_fence: strict`, `org_fence: strict`, the extension layout (`generators.extensions: true`), and the `authorization:` block: two custom ticket verbs (`escalate`, `archive_with_reason`) and two system roles, `ADMIN` (`*:*`) and `viewer` (`ticket:read` and the dotted, plural `projects.read`) |
 | `module/schema/models/project.model.yaml` | `Project`, company-fenced (`company_id`): string, `@email`/`@url` attributes on strings, `email?` and `url?` types, decimal, money, int with `@range` and a literal default, int64 with `@min`/`@max`, bool default, date, datetime, json, enum default, `@unique`, `@immutable`, `@private`, `@exclude_from_dto`, `@length(min,max)`, `@pattern`, `@non_negative`, `@positive`, audit metadata and soft delete |
 | `module/schema/models/ticket.model.yaml` | `Ticket`, org-fenced (`org_unit_id`): a foreign key to `Project`, a state field, a `projection` lifecycle field, nullable decimals and text, `@default(uuid)` on a non-id field, a composite `indexes: unique` |
+| `module/schema/models/label.model.yaml` | `Label`, public reference data declared `public: true`: its reads need no permission and no login where the host mounts `public_routes()` outside its auth layer, its writes still need `label:<action>`; it has no company or org column, so it carries no fence |
 | `module/schema/models/approval.model.yaml` | `Approval`, company-fenced, a `hand_set` state bound to a machine |
 | `module/schema/hooks/project.hook.yaml` | a declared uniqueness rule (`count(...) == 0` → coded partial unique index) and a row rule |
 | `module/schema/hooks/ticket.hook.yaml` | the `Ticket.status` machine (a final state, a guarded edge, a `from: "*"` edge, `verbs: generated`) and one rule per register label: GUARD, SHADOW, VERB (`enforced_by`), UNENFORCED; declared `events:`: five staged by the generated write hooks (`on: create`, `transition(resolve)` with an `if:`, `enter(archived)`, `update(title)`, `delete`) and one staged by hand (`TicketEscalated`) |
@@ -95,6 +96,19 @@ and a tenant-edited role grant surviving a re-run. Generator variants prove that
 route, a direct call of the unguarded generic routes, and a permission the vocabulary lacks fail
 `schema doctor`, that the register and the doctor label the mode, and that `requires:` renames a
 permission or is refused when it names an undeclared one.
+
+## Public routes (area I)
+
+`Label` declares `public: true`. The probes mount every route of the module with no authentication layer
+at all (only the tenant router) and the module's `public_routes()` alone, and assert that the public
+reads answer `200` with no login (list, one record, count) and for a logged-in caller who holds nothing,
+that the same model's writes are `401` with no authentication and `403` naming `label:<action>` for a
+caller who holds nothing, that its non-public siblings in the same mount are `401`, that
+`public_routes()` mounts no other entity, that the tenant router in front of it still refuses an unknown
+tenant, and that the seed holds `label:create` and not `label:read`. Variants prove the register label
+(`PERMISSION PUBLIC (read)`), that a public write is a doctor warning, that `public:` on a model with a
+company fence fails generation unless it says `public_scoped: true`, and that a malformed or
+contradictory declaration is refused.
 
 ## What it cannot cover
 
