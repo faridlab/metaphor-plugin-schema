@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-19
+
 ### Added
 
 - The webapp entity schema (`<Entity>.schema.ts`) exports `<entity>IncludableRelations`: the names the
