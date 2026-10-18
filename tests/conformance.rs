@@ -141,6 +141,40 @@ fn patch_manifest(module: &Path, framework: Option<&Path>) {
     fs::write(&manifest, text).unwrap();
 }
 
+/// Compose backbone-auditlog into the module the runtime probes drive, as a service composes it:
+/// the checkout becomes a dev-dependency (its history provider is mounted by the probes) and its
+/// migrations are copied under `tests/auditlog_migrations/`, where the probes apply them before
+/// the module's own (the `@audited` model's trigger calls the capture function they create).
+/// `METAPHOR_AUDITLOG_PATH` names another checkout; the default is `../modules/backbone-auditlog`.
+fn compose_auditlog(module: &Path, crate_dir: &Path) {
+    let checkout = std::env::var_os("METAPHOR_AUDITLOG_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate_dir.join("../modules/backbone-auditlog"));
+    assert!(
+        checkout.join("Cargo.toml").exists(),
+        "the conformance fixture composes backbone-auditlog: no checkout at {} (set METAPHOR_AUDITLOG_PATH)",
+        checkout.display()
+    );
+    let checkout = checkout.canonicalize().unwrap();
+    let manifest = module.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let marker = "[dev-dependencies]\n";
+    assert!(text.contains(marker));
+    fs::write(
+        &manifest,
+        text.replacen(marker, &format!("{marker}backbone-auditlog = {{ path = \"{}\" }}\n", checkout.display()), 1),
+    )
+    .unwrap();
+    let target = module.join("tests/auditlog_migrations");
+    fs::create_dir_all(&target).unwrap();
+    for entry in fs::read_dir(checkout.join("migrations")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.to_string_lossy().ends_with(".up.sql") {
+            fs::copy(&path, target.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+}
+
 /// One probe outcome, as the runtime probes and the generator probes both record it.
 #[derive(Debug, Clone)]
 struct Row {
@@ -1394,6 +1428,7 @@ fn every_backbone_feature_works_at_runtime_through_the_generator() {
 
     let framework = framework_path(&crate_dir);
     patch_manifest(&module, framework.as_deref());
+    compose_auditlog(&module, &crate_dir);
 
     let results = work.path().join("results.json");
     let jobs = std::env::var("CONFORMANCE_JOBS").unwrap_or_else(|_| "2".into());

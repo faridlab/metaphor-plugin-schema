@@ -361,6 +361,32 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         sqlx::raw_sql(stmt).execute(&owner).await.expect("identity tables");
     }
 
+    // The composed backbone-auditlog module's migrations, as a composing service runs them before
+    // its own: the trail table, the capture function the generated audit triggers call, the
+    // append-only trigger and the half-fence (RLS armed, no policy yet).
+    let audit_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/auditlog_migrations");
+    let mut audit_files: Vec<_> = std::fs::read_dir(&audit_dir)
+        .map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.to_string_lossy().ends_with(".up.sql")).collect())
+        .unwrap_or_default();
+    audit_files.sort();
+    let mut audit_errors = Vec::new();
+    for f in &audit_files {
+        let sql = std::fs::read_to_string(f).unwrap();
+        if let Err(e) = sqlx::raw_sql(&sql).execute(&owner).await {
+            audit_errors.push(format!("{}: {e}", f.file_name().unwrap().to_string_lossy()));
+        }
+    }
+    rec.check(
+        "A",
+        "Audit trail",
+        "the composed backbone-auditlog migrations apply before the module's own",
+        !audit_files.is_empty() && audit_errors.is_empty(),
+        &format!("{} files under tests/auditlog_migrations/", audit_files.len()),
+        "all apply",
+        &audit_errors.join("; "),
+        "the conformance driver copies the backbone-auditlog checkout's migrations (tests/conformance.rs compose_auditlog)",
+    );
+
     // The module's migrations, in file order, as the owner.
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
     let mut files: Vec<_> = std::fs::read_dir(&dir)
@@ -400,9 +426,24 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         format!("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA conformance TO {role}"),
         format!("GRANT USAGE ON SCHEMA sapiens TO {role}"),
         format!("GRANT SELECT ON sapiens.organization_users, sapiens.direct_permission_grants, public.roles, public.permissions, public.role_permissions, public.user_roles, public.user_permissions TO {role}"),
+        // The audit trail: the capture trigger inserts as the writing role, and the history reads select.
+        format!("GRANT USAGE ON SCHEMA auditlog TO {role}"),
+        format!("GRANT SELECT, INSERT ON auditlog.audit_trails TO {role}"),
     ] {
         sqlx::query(&stmt).execute(&owner).await.expect("grant");
     }
+    // The composing service's tenancy decorator finishes the half-fence the auditlog module armed
+    // (ENABLE + FORCE RLS, no policy): the org policy every fenced table gets, on the trail's
+    // `org_unit_id`, which the capture function copies from the audited row. A stand-in for the
+    // decorator's output, with the predicate the generator's org fence carries verbatim.
+    sqlx::raw_sql(
+        "CREATE POLICY audit_trails_org_unit_isolation ON auditlog.audit_trails FOR ALL \
+           USING      (org_unit_id = ANY(string_to_array(current_setting('app.scope_unit_ids', true), ',')::uuid[])) \
+           WITH CHECK (org_unit_id = ANY(string_to_array(current_setting('app.scope_unit_ids', true), ',')::uuid[]))",
+    )
+    .execute(&owner)
+    .await
+    .expect("the decorator's policy on the trail");
 
     let org = Org { root: Uuid::new_v4(), company_a: Uuid::new_v4(), branch_a: Uuid::new_v4(), company_b: Uuid::new_v4() };
     sqlx::query(
@@ -484,7 +525,16 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     };
     let open = unauthenticated(routes());
     let public_only = unauthenticated(module.public_routes());
+    // The audit composition: the generic routes with the history provider the composing service
+    // installs as a request extension (backbone-core knows only the trait), and the generated nested
+    // history route of the audited model on its own router (it answers the same path the generic
+    // route does, so a service mounts one of them).
+    let provider = Arc::new(backbone_auditlog::application::service::AuditHistoryProvider::new(pool.clone()))
+        as Arc<dyn backbone_core::http::HistoryProvider>;
+    let audit_router = stack(routes().route_layer(from_fn(auth_bridge)).layer(axum::Extension(provider)));
+    let history_router = stack(backbone_module_skeleton::presentation::http::create_ledger_history_route(pool.clone()).route_layer(from_fn(auth_bridge)));
     let new_app = |router: Router| App { router, refusals: Arc::new(Mutex::new(Vec::new())) };
+    let (audit, history) = (new_app(audit_router), new_app(history_router));
     let app = new_app(router);
     let (rapp, bare, waived) = (new_app(resolved), new_app(bare), new_app(waived));
     let (open, public_only) = (new_app(open), new_app(public_only));
@@ -495,11 +545,12 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
     let tb = issuer.issue_access("admin-b", org.company_b, &[], Some(org.company_b), hour).unwrap();
     let clerk = issuer.issue_access("clerk-a", org.company_a, &[], Some(org.company_a), hour).unwrap();
 
-    let ctx = Ctx { app, rapp, bare, waived, open, public_only, rec: rec.clone(), org, ta, tb, clerk, owner: owner.clone(), pool: pool.clone(), module: module.clone(), issuer };
+    let ctx = Ctx { app, rapp, bare, waived, open, public_only, audit, history, rec: rec.clone(), org, ta, tb, clerk, owner: owner.clone(), pool: pool.clone(), module: module.clone(), issuer };
 
     // Each area runs isolated: a panic in one is recorded and the next still runs.
     for (name, fut) in [
         ("A", AssertUnwindSafe(area_a(&ctx)).boxed()),
+        ("A", AssertUnwindSafe(area_audit(&ctx)).boxed()),
         ("B", AssertUnwindSafe(area_b(&ctx)).boxed()),
         ("C", AssertUnwindSafe(area_c(&ctx)).boxed()),
         ("D", AssertUnwindSafe(area_d(&ctx)).boxed()),
@@ -537,6 +588,10 @@ struct Ctx {
     open: App,
     /// The module's `public_routes()` alone, mounted with no authentication layer.
     public_only: App,
+    /// The generic routes with a history provider installed (the auditlog module's).
+    audit: App,
+    /// The generated nested history route of the audited model.
+    history: App,
     rec: Rec,
     org: Org,
     ta: String,
@@ -840,7 +895,6 @@ async fn area_a(c: &Ctx) {
     r.check("A", "Aggregate", "GET /projects/aggregate?group_by=kind&sum=budget groups and sums", ag.status == 200 && groups.len() == 3 && research.map(|g| g["count"] == json!(2) && num(&g["sum"]["budget"]) == Some(500.0)).unwrap_or(false), &ag.request, "3 groups; research count 2, sum 500", &ag.got(), "backbone-core/src/http.rs (aggregate)");
     let h = app.get(&format!("/projects/{}/history", listed[0]), ta).await;
     r.check("A", "History", "GET /projects/:id/history on a model that is not audited answers 501 (no history provider)", h.status == 501, &h.request, "501", &h.got(), "backbone-core/src/http.rs:276 (history)");
-    c.rec.unsupported("A", "History", "row history of an `audited: true` model", "needs backbone-auditlog composed: the generated capture trigger calls auditlog.capture_data_change (generators/data_change_audit.rs:52) and the route needs an Extension<Arc<dyn HistoryProvider>> (backbone-core/src/http.rs:276); a standalone module has neither");
     let up = app.post("/projects/upsert", ta, c.project_body(c.org.company_a, &uniq("U"), "Upsert")).await;
     r.check("A", "Upsert", "POST /projects/upsert answers 501", up.status == 501, &up.request, "501", &up.got(), "backbone-core/src/service.rs:1169");
 
@@ -859,6 +913,385 @@ async fn area_a(c: &Ctx) {
     r.check("A", "Body errors", "POST with a wrong type answers 422 with the field's path", w.status == 422 && w.violations().iter().any(|v| v["path"] == json!("priority")), &w.request, "422, violation path priority", &w.got(), "backbone-core/src/extractors.rs (json_refusal)");
     let w = app.patch(&format!("/projects/{}", listed[0]), ta, json!({ "priority": "high" })).await;
     r.check("A", "Body errors", "PATCH with a wrong type answers 422 with the field's path", w.status == 422 && w.violations().iter().any(|v| v["path"] == json!("priority")), &w.request, "422, violation path priority", &w.got(), "backbone-core/src/service.rs:1034 merge_patch answers ServiceError::Validation (400, no violations) for a value that does not deserialize");
+}
+
+// =============================================================================
+// Audit trail: `audited: true` (ADR-0025)
+// =============================================================================
+//
+// The module is composed with backbone-auditlog the way a service composes it: the auditlog
+// migrations run first (the trail table and the capture function the generated trigger calls), the
+// tenancy decorator's org policy finishes the trail's half-fence, the history provider is installed
+// as a request extension, and the generated nested history route is mounted on its own router.
+
+/// One trail row of a ledger, as the owner reads it.
+#[derive(Debug)]
+struct TrailRow {
+    action: String,
+    actor: String,
+    correlation_id: Option<String>,
+    changed: Value,
+    org_unit_id: Option<Uuid>,
+}
+
+const LEDGER_TABLE: &str = "conformance.ledgers";
+
+async fn ledger_trail(owner: &PgPool, id: &str) -> Vec<TrailRow> {
+    sqlx::query_as::<_, (String, String, Option<String>, Option<Value>, Option<Uuid>)>(
+        "SELECT action, actor, correlation_id, changed, org_unit_id FROM auditlog.audit_trails \
+          WHERE subject_type = $1 AND subject_id = $2 ORDER BY occurred_at, txid",
+    )
+    .bind(LEDGER_TABLE)
+    .bind(id)
+    .fetch_all(owner)
+    .await
+    .expect("read the trail as the owner")
+    .into_iter()
+    .map(|(action, actor, correlation_id, changed, org_unit_id)| TrailRow {
+        action,
+        actor,
+        correlation_id,
+        changed: changed.unwrap_or(Value::Null),
+        org_unit_id,
+    })
+    .collect()
+}
+
+async fn ledger_trail_count(owner: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM auditlog.audit_trails WHERE subject_type = $1")
+        .bind(LEDGER_TABLE)
+        .fetch_one(owner)
+        .await
+        .expect("count the trail")
+}
+
+async fn db_now(owner: &PgPool) -> chrono::DateTime<chrono::Utc> {
+    sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(owner).await.expect("the database clock")
+}
+
+fn instant(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+async fn area_audit(c: &Ctx) {
+    let (r, ta, tb, clerk) = (&c.rec, c.ta.as_str(), c.tb.as_str(), c.clerk.as_str());
+    let (writes, history) = (&c.audit, &c.history);
+    let unit = c.org.branch_a;
+    let pause = || tokio::time::sleep(Duration::from_millis(60));
+    let write = |method: &'static str, path: String, token: &str, body: Option<Value>, corr: &'static str| {
+        let (app, token) = (writes.clone(), token.to_string());
+        async move { app.send(method, &path, Some(&token), body.map(|b| b.to_string()), &[("x-correlation-id", corr)]).await }
+    };
+    const CAPTURE: &str = "backbone-auditlog capture_data_change (migrations/20260911000300_capture_subject_org_unit.up.sql); backbone-orm/src/audit_context.rs";
+
+    // ── Capture: a create, an update, a soft delete and a purge each leave a trail row ──
+    let t0 = db_now(&c.owner).await;
+    pause().await;
+    let created = write("POST", "/ledgers".into(), ta, Some(json!({ "orgUnitId": unit, "name": "Ledger v1", "balance": 100 })), "audit-create").await;
+    let id = created.id();
+    r.check("A", "Audit trail", "creating an audited row answers 201", created.status == 201 && !id.is_empty(), &created.request, "201", &created.got(), CAPTURE);
+    let rows = ledger_trail(&c.owner, &id).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "the create records an insert row with the full image, the actor and the request's correlation id",
+        rows.len() == 1
+            && rows[0].action == "insert"
+            && rows[0].actor == "admin-a"
+            && rows[0].correlation_id.as_deref() == Some("audit-create")
+            && rows[0].changed["name"] == json!({ "to": "Ledger v1" })
+            && rows[0].changed["org_unit_id"] == json!({ "to": unit.to_string() }),
+        &created.request,
+        "one `insert` row: actor admin-a, correlation audit-create, changed.name {to: Ledger v1}",
+        &format!("{rows:?}"),
+        CAPTURE,
+    );
+    r.check(
+        "A",
+        "Audit trail",
+        "the trail row inherits the audited row's org unit",
+        rows.first().is_some_and(|row| row.org_unit_id == Some(unit)),
+        &created.request,
+        &format!("org_unit_id {unit}"),
+        &format!("{:?}", rows.first().map(|row| row.org_unit_id)),
+        "backbone-auditlog/migrations/20260911000300_capture_subject_org_unit.up.sql",
+    );
+
+    pause().await;
+    let t1 = db_now(&c.owner).await;
+    pause().await;
+    let updated = write("PATCH", format!("/ledgers/{id}"), ta, Some(json!({ "name": "Ledger v2" })), "audit-update").await;
+    let rows = ledger_trail(&c.owner, &id).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "the update records an update row naming only the fields that changed, with its own correlation id",
+        updated.status == 200
+            && rows.len() == 2
+            && rows[1].action == "update"
+            && rows[1].actor == "admin-a"
+            && rows[1].correlation_id.as_deref() == Some("audit-update")
+            && rows[1].changed["name"] == json!({ "from": "Ledger v1", "to": "Ledger v2" })
+            && rows[1].changed.get("balance").is_none(),
+        &updated.request,
+        "two rows; the second is an `update` with changed.name {from: v1, to: v2} and no balance",
+        &format!("{} {rows:?}", updated.status),
+        CAPTURE,
+    );
+    pause().await;
+    let t2 = db_now(&c.owner).await;
+    pause().await;
+
+    // ── Reads: the generic route through the provider, the generated nested route ──
+    let generic = writes.get(&format!("/ledgers/{id}/history"), ta).await;
+    let entries = generic.data()["entries"].as_array().cloned().unwrap_or_default();
+    r.check(
+        "A",
+        "History",
+        "GET /ledgers/:id/history with the auditlog provider lists the trail newest first with actor and correlation",
+        generic.status == 200
+            && generic.data()["audited"] == json!(true)
+            && entries.len() == 2
+            && entries[0]["action"] == json!("update")
+            && entries[0]["actor"] == json!("admin-a")
+            && entries[0]["correlation_id"] == json!("audit-update")
+            && entries[1]["action"] == json!("insert")
+            && entries[1]["correlation_id"] == json!("audit-create"),
+        &generic.request,
+        "200, audited true, [update (audit-update), insert (audit-create)]",
+        &generic.got(),
+        "backbone-core/src/http.rs (history_handler); backbone-auditlog AuditHistoryProvider",
+    );
+    let project = c.project(ta, c.org.company_a, json!({})).await;
+    let not_audited = writes.get(&format!("/projects/{}/history", project.id()), ta).await;
+    r.check(
+        "A",
+        "History",
+        "a table without the capture trigger answers audited false, not an empty timeline",
+        not_audited.status == 200 && not_audited.data()["audited"] == json!(false) && not_audited.data()["entries"].is_null(),
+        &not_audited.request,
+        "200, audited false, entries null",
+        &not_audited.got(),
+        "backbone-auditlog AuditHistoryProvider::is_audited (pg_trigger)",
+    );
+
+    let nested = history.get(&format!("/ledgers/{id}/history"), ta).await;
+    let listed = nested.body["entries"].as_array().cloned().unwrap_or_default();
+    r.check(
+        "A",
+        "History",
+        "the nested history endpoint lists the trail newest first, numbered from the oldest",
+        nested.status == 200
+            && nested.body["total"] == json!(2)
+            && nested.body["subject_type"] == json!(LEDGER_TABLE)
+            && listed.len() == 2
+            && listed[0]["action"] == json!("update")
+            && listed[0]["position"] == json!(2)
+            && listed[1]["action"] == json!("insert")
+            && listed[1]["position"] == json!(1)
+            && listed[0]["actor"] == json!("admin-a"),
+        &nested.request,
+        "200, total 2, [update position 2, insert position 1]",
+        &nested.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (write_history_route)",
+    );
+    let at_t1 = history.get(&format!("/ledgers/{id}/history?as_of={}", instant(t1)), ta).await;
+    r.check(
+        "A",
+        "History",
+        "as_of between the create and the update reconstructs the row's earlier state",
+        at_t1.status == 200 && at_t1.body["image"]["name"] == json!("Ledger v1") && at_t1.body["image"]["balance"] == json!(100),
+        &at_t1.request,
+        "200, image.name Ledger v1",
+        &at_t1.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (as_of walk)",
+    );
+    let at_t2 = history.get(&format!("/ledgers/{id}/history?as_of={}", instant(t2)), ta).await;
+    r.check(
+        "A",
+        "History",
+        "as_of after the update reconstructs the later state",
+        at_t2.status == 200 && at_t2.body["image"]["name"] == json!("Ledger v2"),
+        &at_t2.request,
+        "200, image.name Ledger v2",
+        &at_t2.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (as_of walk)",
+    );
+    let before = history.get(&format!("/ledgers/{id}/history?as_of={}", instant(t0)), ta).await;
+    r.check(
+        "A",
+        "History",
+        "as_of before the first captured event answers 404 history_before_subject",
+        before.status == 404 && before.body["error"] == json!("history_before_subject"),
+        &before.request,
+        "404 history_before_subject",
+        &before.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (as_of walk)",
+    );
+
+    // ── Another company's token cannot read the history ──
+    let foreign = history.get(&format!("/ledgers/{id}/history"), tb).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "another company's token reads nothing from the nested history of a ledger it cannot see",
+        foreign.status == 200 && foreign.body["total"] == json!(0) && foreign.body["entries"] == json!([]) && !foreign.raw.contains("Ledger v"),
+        &foreign.request,
+        "200, total 0, no entries, none of the row's values",
+        &foreign.got(),
+        "the trail's org policy (the tenancy decorator's, audit_trails_org_unit_isolation)",
+    );
+    let foreign_as_of = history.get(&format!("/ledgers/{id}/history?as_of={}", instant(t2)), tb).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "another company's token cannot reconstruct the row either",
+        foreign_as_of.status == 404 && !foreign_as_of.raw.contains("Ledger v"),
+        &foreign_as_of.request,
+        "404 and none of the row's values",
+        &foreign_as_of.got(),
+        "the trail's org policy",
+    );
+    let foreign_generic = writes.get(&format!("/ledgers/{id}/history"), tb).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "another company's token reads nothing through the provider route",
+        foreign_generic.status == 200 && foreign_generic.data()["entries"] == json!([]) && !foreign_generic.raw.contains("Ledger v"),
+        &foreign_generic.request,
+        "200 with no entries and none of the row's values",
+        &foreign_generic.got(),
+        "the trail's org policy; backbone-auditlog AuditHistoryProvider reads on the request connection",
+    );
+    let unprivileged = history.get(&format!("/ledgers/{id}/history"), clerk).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "the nested history route asks for ledger:read",
+        unprivileged.status == 403 && unprivileged.violation("", "permission_required"),
+        &unprivileged.request,
+        "403 permission_required",
+        &unprivileged.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (create_ledger_history_route guard)",
+    );
+
+    // ── A refused write leaves no trail row ──
+    let before_count = ledger_trail_count(&c.owner).await;
+    let over = write("POST", "/ledgers".into(), ta, Some(json!({ "orgUnitId": unit, "name": "Over", "balance": 5000 })), "audit-refused").await;
+    r.check("A", "Audit trail", "a create the write guard refuses answers 422 over_limit", over.status == 422 && over.has_code("over_limit"), &over.request, "422 over_limit", &over.got(), "schema/hooks/ledger.hook.yaml (balance_within_limit)");
+    let over_update = write("PATCH", format!("/ledgers/{id}"), ta, Some(json!({ "balance": 5000 })), "audit-refused").await;
+    r.check("A", "Audit trail", "an update the write guard refuses answers 422 over_limit", over_update.status == 422 && over_update.has_code("over_limit"), &over_update.request, "422 over_limit", &over_update.got(), "schema/hooks/ledger.hook.yaml (balance_within_limit)");
+    let negative = write("PATCH", format!("/ledgers/{id}"), ta, Some(json!({ "balance": -1 })), "audit-refused").await;
+    r.check("A", "Audit trail", "an update the field rule refuses answers 422", negative.status == 422, &negative.request, "422", &negative.got(), "@non_negative");
+    let no_permission = write("PATCH", format!("/ledgers/{id}"), clerk, Some(json!({ "name": "nope" })), "audit-refused").await;
+    r.check("A", "Audit trail", "an update the permission guard refuses answers 403", no_permission.status == 403, &no_permission.request, "403", &no_permission.got(), "backbone-core/src/permission.rs");
+    let fenced = write("PATCH", format!("/ledgers/{id}"), tb, Some(json!({ "name": "nope" })), "audit-refused").await;
+    r.check("A", "Audit trail", "an update from another company is refused by the fence", fenced.status == 404, &fenced.request, "404", &fenced.got(), "the org fence on conformance.ledgers");
+    let after_count = ledger_trail_count(&c.owner).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "none of the refused writes left a trail row",
+        before_count == after_count && ledger_trail(&c.owner, &id).await.len() == 2,
+        "five refused writes",
+        &format!("{before_count} trail rows before and after"),
+        &format!("{before_count} before, {after_count} after"),
+        CAPTURE,
+    );
+    let ghost = Uuid::new_v4();
+    let mut tx = c.owner.begin().await.expect("a transaction");
+    sqlx::query("INSERT INTO conformance.ledgers (id, org_unit_id, name) VALUES ($1, $2, 'rolled back')")
+        .bind(ghost)
+        .bind(unit)
+        .execute(&mut *tx)
+        .await
+        .expect("insert in a transaction");
+    let inside: i64 = sqlx::query_scalar("SELECT count(*) FROM auditlog.audit_trails WHERE subject_id = $1")
+        .bind(ghost.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.expect("roll back");
+    let outside = ledger_trail(&c.owner, &ghost.to_string()).await.len();
+    r.check(
+        "A",
+        "Audit trail",
+        "a write that rolls back takes its trail row with it (same-transaction truth)",
+        inside == 1 && outside == 0,
+        "INSERT then ROLLBACK as the owner",
+        "1 trail row inside the transaction, 0 after the rollback",
+        &format!("{inside} inside, {outside} after"),
+        "backbone-auditlog capture_data_change runs in the writing transaction",
+    );
+    let tamper = sqlx::query("UPDATE auditlog.audit_trails SET actor = 'tamper' WHERE subject_id = $1").bind(&id).execute(&c.owner).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "the trail is append-only, even for the owner",
+        tamper.as_ref().err().is_some_and(|e| e.to_string().contains("append-only")),
+        "UPDATE auditlog.audit_trails as the owner",
+        "refused: append-only",
+        &format!("{tamper:?}"),
+        "backbone-auditlog/migrations/20260911000000_audit_trails_immutable.up.sql",
+    );
+
+    // ── Delete: a soft delete is an update, a purge is a delete with the full image; the trail outlives the row ──
+    let soft = write("DELETE", format!("/ledgers/{id}"), ta, None, "audit-soft-delete").await;
+    pause().await;
+    let purge = write("DELETE", format!("/ledgers/trash/{id}"), ta, None, "audit-purge").await;
+    let rows = ledger_trail(&c.owner, &id).await;
+    r.check(
+        "A",
+        "Audit trail",
+        "a soft delete records an update row and a purge records a delete row with the full image",
+        soft.status == 200
+            && purge.status == 204
+            && rows.len() == 4
+            && rows[2].action == "update"
+            && rows[2].correlation_id.as_deref() == Some("audit-soft-delete")
+            && rows[3].action == "delete"
+            && rows[3].actor == "admin-a"
+            && rows[3].correlation_id.as_deref() == Some("audit-purge")
+            && rows[3].changed["name"] == json!({ "from": "Ledger v2" }),
+        &purge.request,
+        "four rows: insert, update, update (soft delete), delete (purge, changed.name {from: Ledger v2})",
+        &format!("{} {} {rows:?}", soft.status, purge.status),
+        CAPTURE,
+    );
+    let after_delete = history.get(&format!("/ledgers/{id}/history"), ta).await;
+    r.check(
+        "A",
+        "History",
+        "a purged subject still resolves its history, newest entry a delete",
+        after_delete.status == 200 && after_delete.body["total"] == json!(4) && after_delete.body["entries"][0]["action"] == json!("delete"),
+        &after_delete.request,
+        "200, total 4, newest entry `delete`",
+        &after_delete.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (the trail outlives the row)",
+    );
+    pause().await;
+    let gone = history.get(&format!("/ledgers/{id}/history?as_of={}", instant(db_now(&c.owner).await)), ta).await;
+    r.check(
+        "A",
+        "History",
+        "as_of after the purge answers 404 subject_deleted_before_as_of",
+        gone.status == 404 && gone.body["error"] == json!("subject_deleted_before_as_of"),
+        &gone.request,
+        "404 subject_deleted_before_as_of",
+        &gone.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (as_of walk)",
+    );
+    let earlier = history.get(&format!("/ledgers/{id}/history?as_of={}", instant(t1)), ta).await;
+    r.check(
+        "A",
+        "History",
+        "as_of an earlier instant still reconstructs the row after it was purged",
+        earlier.status == 200 && earlier.body["image"]["name"] == json!("Ledger v1"),
+        &earlier.request,
+        "200, image.name Ledger v1",
+        &earlier.got(),
+        "metaphor-plugin-schema/src/generators/handler.rs (as_of walk)",
+    );
 }
 
 // =============================================================================
@@ -1451,6 +1884,7 @@ async fn area_d_events(c: &Ctx) {
     let first = inbox::once(&c.owner, "conformance", "conf-consumer", id).await;
     let replay = inbox::once(&c.owner, "conformance", "conf-consumer", id).await;
     r.check("D", "Relay", "a consumer's inbox::once dedupes a replay of the same event", first.as_ref().is_ok_and(|b| *b) && replay.as_ref().is_ok_and(|b| !*b), "inbox::once twice for one event id", "true then false", &format!("{first:?} {replay:?}"), "backbone-outbox/src/inbox.rs");
+
 }
 
 // =============================================================================

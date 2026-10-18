@@ -65,6 +65,7 @@ The test fails when any probe fails, so it can gate CI once the failures it repo
 | `module/schema/models/ticket.model.yaml` | `Ticket`, org-fenced (`org_unit_id`): a foreign key to `Project`, a state field, a `projection` lifecycle field, nullable decimals and text, `@default(uuid)` on a non-id field, a composite `indexes: unique` |
 | `module/schema/models/label.model.yaml` | `Label`, public reference data declared `public: true`: its reads need no permission and no login where the host mounts `public_routes()` outside its auth layer, its writes still need `label:<action>`; it has no company or org column, so it carries no fence |
 | `module/schema/models/incident.model.yaml` | `Incident`, company-fenced: a `severity` int, a `status` machine, fields (`sla`, `handled_by`) that a trigger fills, carrying the hook triggers |
+| `module/schema/models/ledger.model.yaml`, `module/schema/hooks/ledger.hook.yaml` | `Ledger`, org-fenced and `audited: true`: the generated capture-trigger migration and the nested history route, and one row rule the write guard enforces. The runtime applies the real `backbone-auditlog` migrations first (copied under `tests/auditlog_migrations/` by the driver), installs the decorator's org policy on the trail, and mounts the module's history provider |
 | `module/schema/models/approval.model.yaml` | `Approval`, company-fenced, a `hand_set` state bound to a machine |
 | `module/schema/hooks/project.hook.yaml` | a declared uniqueness rule (`count(...) == 0` → coded partial unique index) and a row rule |
 | `module/schema/hooks/ticket.hook.yaml` | the `Ticket.status` machine (a final state, a guarded edge, a `from: "*"` edge, `verbs: generated`) and one rule per register label: GUARD, SHADOW, VERB (`enforced_by`), UNENFORCED; declared `events:`: five staged by the generated write hooks (`on: create`, `transition(resolve)` with an `if:`, `enter(archived)`, `update(title)`, `delete`) and one staged by hand (`TicketEscalated`) |
@@ -174,12 +175,11 @@ that a scope with no unit or another unit cannot read it.
 
 ## What it cannot cover
 
-- Row history of an `audited: true` model: the capture trigger and the history provider come
-  from backbone-auditlog, which a standalone module does not compose.
-- The ADR-0029 acting-unit decorator: it is installed by a composing service's `tenancy.yaml`
-  (`metaphor schema tenancy`), not declared in a module.
-- Delivery to a real broker or in-process bus: the relay is driven with test sinks (success, a
-  failing publish, an exhausted one); `relay::drain_once`, `reemit` and `inbox::once` are the
+- The ADR-0029 acting-unit decorator itself: it is installed by a composing service's `tenancy.yaml`
+  (`metaphor schema tenancy`), not declared in a module. The audit probes install the org policy it
+  would put on the audit trail as a stand-in, with the predicate the generator's org fence carries.
+- Delivery to a real broker, bus or mail provider: the relay is driven with test sinks (success, a
+  failing publish, an exhausted one) and the notification dispatcher with a recording delivery; `relay::drain_once`, `reemit` and `inbox::once` are the
   framework's own and run against the scratch database.
 - The relay and the scheduler: the probes hand events to `background_tasks().deliver` and call
   `timer_sweep` themselves. The composing service wires the first into its relay and runs the second as the

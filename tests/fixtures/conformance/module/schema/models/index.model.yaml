@@ -62,3 +62,4 @@ imports:
   - approval.model.yaml
   - label.model.yaml
   - incident.model.yaml
+  - ledger.model.yaml

@@ -1,0 +1,12 @@
+# Ledger rules: one row rule, enforced by the generated write guard before the row is written,
+# so a refused write leaves nothing in the table and nothing in the audit trail.
+
+name: Ledger
+model: Ledger
+
+rules:
+  balance_within_limit:
+    when: [create, update]
+    condition: "balance <= 1000"
+    code: over_limit
+    message: "the balance exceeds the limit"

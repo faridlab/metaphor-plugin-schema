@@ -1,0 +1,35 @@
+# Ledger: an org-scoped record enrolled in data-change audit capture (`audited: true`, ADR-0025).
+# The generator emits the capture trigger migration and the nested history route
+# (`create_ledger_history_route`); the audit trail table, the capture function and the history
+# provider belong to the composed backbone-auditlog module.
+
+models:
+  - name: Ledger
+    collection: ledgers
+    description: "Conformance fixture: an org-scoped record whose every write is captured in the audit trail"
+    audited: true
+
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+
+      org_unit_id:
+        type: uuid
+        attributes: ["@exclude_from_foreign_key_check"]
+        description: "The org fence (RLS on app.scope_unit_ids); the capture function copies it onto the trail row"
+
+      name:
+        type: string
+        attributes: ["@required", "@length(max=80)"]
+
+      balance:
+        type: decimal
+        attributes: ["@non_negative", "@default(0)"]
+
+      note:
+        type: string?
+
+      metadata:
+        type: Metadata
+        attributes: ["@audit_metadata"]
