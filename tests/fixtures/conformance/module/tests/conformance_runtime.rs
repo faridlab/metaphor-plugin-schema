@@ -638,6 +638,75 @@ async fn area_a(c: &Ctx) {
     let f = app.get(&q("nonexistent_column=1"), ta).await;
     r.check("A", "List filters", "a filter on an unknown column answers 400, not 500", f.status == 400, &f.request, "400", &f.got(), "backbone-core/src/http.rs (is_bad_query_error)");
 
+    // A list parameter the request got wrong is refused BY NAME: 400, a violation coded
+    // `invalid_query` on the parameter's own path, `params` carrying the parameter and a stable
+    // reason, a sentence that names the parameter, and nothing of the database in it.
+    let named = |r: &Resp, parameter: &str, reason: &str| -> bool {
+        let v = r.violations().into_iter().find(|v| v["path"].as_str() == Some(parameter));
+        r.status == 400
+            && r.violations().len() == 1
+            && v.as_ref().is_some_and(|v| {
+                v["code"] == json!("invalid_query")
+                    && v["params"]["parameter"] == json!(parameter)
+                    && v["params"]["reason"] == json!(reason)
+                    && v["message"].as_str().is_some_and(|m| m.contains(parameter))
+            })
+            && r.body["error"].as_str().is_some_and(|m| m.contains(parameter))
+            && !["SELECT", "sqlx", "pg_", "::", "relation \"", "column \"", "does not exist", "syntax"].iter().any(|n| r.raw.contains(n))
+    };
+    for (feature, probe, uri, parameter, reason) in [
+        ("List filters", "a filter on an unknown column names it", q("nonexistent_column=1"), "nonexistent_column", "unknown_column"),
+        ("List filters", "an operator filter on an unknown column names the whole key", q("full_name[gte]=1"), "full_name[gte]", "unknown_column"),
+        ("List filters", "an unknown operator names the whole key", q("priority[neq]=3"), "priority[neq]", "unknown_operator"),
+        ("List filters", "a key that is not a field name names itself", q("pri-ority=3"), "pri-ority", "invalid_field_name"),
+        ("List filters", "an integer filter given text names the parameter", q("priority=abc"), "priority", "invalid_value"),
+        ("List filters", "a list filter with one bad element names the parameter", q("priority[in]=1,abc"), "priority[in]", "invalid_value"),
+        ("List filters", "an enum filter given a non-member names the parameter", q("kind=bogus"), "kind", "invalid_value"),
+        ("List filters", "a date filter given text names the parameter", q("startsOn[gte]=not-a-date"), "startsOn[gte]", "invalid_value"),
+        ("List filters", "a pattern operator on a number names the parameter", q("priority[contain]=1"), "priority[contain]", "unsupported_operator"),
+        ("List sort", "sort_by naming a missing column names sort_by", q("sort_by=full_name"), "sort_by", "unknown_column"),
+        ("List sort", "sort_by with an unusable name names sort_by", q("sort_by=na-me"), "sort_by", "invalid_field_name"),
+        ("List sort", "orderby naming a missing column names orderby", q("orderby=full_name:desc"), "orderby", "unknown_column"),
+        ("List sort", "sort naming a missing column names sort", q("sort=-full_name"), "sort", "unknown_column"),
+        ("List sort", "the bracket sort names its whole key", q("orderby[full_name]=desc"), "orderby[full_name]", "unknown_column"),
+        ("List sort", "sort_order that is not asc or desc names sort_order", q("sort_by=priority&sort_order=sideways"), "sort_order", "invalid_value"),
+        ("List paging", "a page that is not a number names page", q("page=abc"), "page", "not_a_number"),
+        ("List paging", "a negative limit names limit", q("limit=-1"), "limit", "not_a_number"),
+        ("List paging", "an offset that is not a number names offset", q("offset=abc"), "offset", "not_a_number"),
+        ("List paging", "a page past the offset ceiling names page", q("limit=100&page=1000"), "page", "too_deep"),
+        ("List keyset", "an after cursor nobody issued names after", q("sort=priority&after=garbage"), "after", "invalid_cursor"),
+        ("List keyset", "a before cursor nobody issued names before", q("sort=priority&before=garbage"), "before", "invalid_cursor"),
+        ("List fields", "a fields entry that is not a field name names fields", q("fields=id,na%20me"), "fields", "invalid_field_name"),
+        ("List include", "an include that is not a relation names include", q("include=nothing"), "include", "unknown_relation"),
+        ("List include", "a with that is not a relation names with", q("with=nothing"), "with", "unknown_relation"),
+        ("Trash", "the trash list names a missing sort column", "/projects/trash?sort_by=full_name".to_string(), "sort_by", "unknown_column"),
+        ("Trash", "the trash list names a bad filter value", "/projects/trash?priority=abc".to_string(), "priority", "invalid_value"),
+        ("Trash", "the trash list names a bad page", "/projects/trash?page=abc".to_string(), "page", "not_a_number"),
+        ("Count", "the count names a bad filter value", "/projects/count?priority=abc".to_string(), "priority", "invalid_value"),
+        ("Count", "the count names a missing column", "/projects/count?nonexistent_column=1".to_string(), "nonexistent_column", "unknown_column"),
+        ("Aggregate", "group_by naming a missing column names group_by", "/projects/aggregate?group_by=full_name".to_string(), "group_by", "unknown_column"),
+        ("Aggregate", "sum of a missing column names sum", "/projects/aggregate?sum=full_name".to_string(), "sum", "unknown_column"),
+        ("Aggregate", "avg of a missing column names avg", "/projects/aggregate?avg=full_name".to_string(), "avg", "unknown_column"),
+        ("Aggregate", "sum of a text column names sum", "/projects/aggregate?sum=name".to_string(), "sum", "not_numeric"),
+        ("Aggregate", "an aggregate filter given text names the parameter", "/projects/aggregate?group_by=kind&priority=abc".to_string(), "priority", "invalid_value"),
+    ] {
+        let f = app.get(&uri, ta).await;
+        r.check("A", feature, probe, named(&f, parameter, reason), &f.request, &format!("400, one invalid_query violation on `{parameter}`, reason {reason}"), &f.got(), "backbone-core/src/http.rs (list_failure, query_refusals); backbone-orm/src/filter (QueryParamError)");
+    }
+    let tk = app.get("/tickets?include=nothing", ta).await;
+    r.check("A", "List include", "an include that is not a relation of a tickets list names include", named(&tk, "include", "unknown_relation"), &tk.request, "400, violation on `include`", &tk.got(), "backbone-core/src/http.rs (shaping_refusals)");
+    let one = app.get(&format!("/projects/{}?include=nothing", listed[0]), ta).await;
+    r.check("A", "Get", "an include that is not a relation names include on a single record too", named(&one, "include", "unknown_relation"), &one.request, "400, violation on `include`", &one.got(), "backbone-core/src/http.rs (get_handler)");
+    // The same parameters, well formed, are served.
+    for (probe, uri) in [
+        ("sort_order in either case", q("sort_by=priority&sort_order=DESC")),
+        ("an include of a real relation", "/tickets?include=project".to_string()),
+        ("an empty sort value asks for nothing", q("orderby=")),
+    ] {
+        let ok = app.get(&uri, ta).await;
+        r.check("A", "List filters", &format!("well-formed parameters are still served: {probe}"), ok.status == 200, &ok.request, "200", &ok.got(), "backbone-core/src/http.rs");
+    }
+
     let prios = |r: &Resp| r.items().iter().map(|i| i["priority"].as_i64().unwrap_or(-1)).collect::<Vec<_>>();
     let s = app.get(&q("sort=-priority"), ta).await;
     r.check("A", "List sort", "sort=-priority orders descending", s.status == 200 && prios(&s) == vec![5, 4, 3, 2, 1], &s.request, "[5,4,3,2,1]", &format!("{:?} {}", prios(&s), s.status), "backbone-orm/src/filter/parser.rs (sort)");

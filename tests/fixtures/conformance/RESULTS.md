@@ -3,15 +3,15 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.38.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.39.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 169s
+- Generation: 2s; whole run: 83s
 
 ## Summary
 
 | Area | PASS | FAIL | UNSUPPORTED |
 |---|---|---|---|
-| A. Generic routes | 57 | 0 | 1 |
+| A. Generic routes | 96 | 0 | 1 |
 | B. Validation | 42 | 0 | 0 |
 | C. Custom validation | 15 | 0 | 0 |
 | D. Hooks and events | 75 | 0 | 0 |
@@ -20,7 +20,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 35 | 0 | 0 |
 | I. Permissions | 142 | 0 | 0 |
-| **Total** | **488** | **0** | **1** |
+| **Total** | **527** | **0** | **1** |
 
 ## Matrix
 
@@ -40,6 +40,45 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A | List filters | two filters AND together: priority[ne]=3&billable=true | PASS |
 | A | List filters | OR filter priority=1&priority[or]=5 | PASS |
 | A | List filters | a filter on an unknown column answers 400, not 500 | PASS |
+| A | List filters | a filter on an unknown column names it | PASS |
+| A | List filters | an operator filter on an unknown column names the whole key | PASS |
+| A | List filters | an unknown operator names the whole key | PASS |
+| A | List filters | a key that is not a field name names itself | PASS |
+| A | List filters | an integer filter given text names the parameter | PASS |
+| A | List filters | a list filter with one bad element names the parameter | PASS |
+| A | List filters | an enum filter given a non-member names the parameter | PASS |
+| A | List filters | a date filter given text names the parameter | PASS |
+| A | List filters | a pattern operator on a number names the parameter | PASS |
+| A | List sort | sort_by naming a missing column names sort_by | PASS |
+| A | List sort | sort_by with an unusable name names sort_by | PASS |
+| A | List sort | orderby naming a missing column names orderby | PASS |
+| A | List sort | sort naming a missing column names sort | PASS |
+| A | List sort | the bracket sort names its whole key | PASS |
+| A | List sort | sort_order that is not asc or desc names sort_order | PASS |
+| A | List paging | a page that is not a number names page | PASS |
+| A | List paging | a negative limit names limit | PASS |
+| A | List paging | an offset that is not a number names offset | PASS |
+| A | List paging | a page past the offset ceiling names page | PASS |
+| A | List keyset | an after cursor nobody issued names after | PASS |
+| A | List keyset | a before cursor nobody issued names before | PASS |
+| A | List fields | a fields entry that is not a field name names fields | PASS |
+| A | List include | an include that is not a relation names include | PASS |
+| A | List include | a with that is not a relation names with | PASS |
+| A | Trash | the trash list names a missing sort column | PASS |
+| A | Trash | the trash list names a bad filter value | PASS |
+| A | Trash | the trash list names a bad page | PASS |
+| A | Count | the count names a bad filter value | PASS |
+| A | Count | the count names a missing column | PASS |
+| A | Aggregate | group_by naming a missing column names group_by | PASS |
+| A | Aggregate | sum of a missing column names sum | PASS |
+| A | Aggregate | avg of a missing column names avg | PASS |
+| A | Aggregate | sum of a text column names sum | PASS |
+| A | Aggregate | an aggregate filter given text names the parameter | PASS |
+| A | List include | an include that is not a relation of a tickets list names include | PASS |
+| A | Get | an include that is not a relation names include on a single record too | PASS |
+| A | List filters | well-formed parameters are still served: sort_order in either case | PASS |
+| A | List filters | well-formed parameters are still served: an include of a real relation | PASS |
+| A | List filters | well-formed parameters are still served: an empty sort value asks for nothing | PASS |
 | A | List sort | sort=-priority orders descending | PASS |
 | A | List sort | orderby=priority:desc orders descending | PASS |
 | A | List sort | the typed sort_by/sort_order parameters order the list | PASS |
