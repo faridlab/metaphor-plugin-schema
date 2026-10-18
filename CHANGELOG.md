@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-18
+
 ### Added
 
 - Workflows run on `backbone-core`'s engine when the file says `config.executor: engine` (`hand` is the
