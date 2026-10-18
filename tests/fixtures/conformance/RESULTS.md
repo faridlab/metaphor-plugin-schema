@@ -3,15 +3,15 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.39.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.40.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 95s
+- Generation: 2s; whole run: 97s
 
 ## Summary
 
 | Area | PASS | FAIL | UNSUPPORTED |
 |---|---|---|---|
-| A. Generic routes | 123 | 0 | 0 |
+| A. Generic routes | 134 | 0 | 0 |
 | B. Validation | 42 | 0 | 0 |
 | C. Custom validation | 15 | 0 | 0 |
 | D. Hooks and events | 79 | 0 | 0 |
@@ -20,7 +20,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 35 | 0 | 0 |
 | I. Permissions | 142 | 0 | 0 |
-| **Total** | **558** | **0** | **0** |
+| **Total** | **569** | **0** | **0** |
 
 ## Matrix
 
@@ -89,6 +89,14 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A | List paging | page=0 answers 200 or 400, never 5xx | PASS |
 | A | List keyset | a sorted page hands out meta.next_cursor | PASS |
 | A | List keyset | after=<cursor> continues with the next rows | PASS |
+| A | List order | an unsorted list is ordered by id ascending | PASS |
+| A | List order | offset paging an unsorted list returns every row once, in the order of the whole list | PASS |
+| A | List order | an unsorted page with more rows hands out a cursor, and the keyset walk returns the same rows in the same order | PASS |
+| A | List order | rows that tie on the sort key are ordered by id | PASS |
+| A | List order | offset paging a sort with ties returns every row once | PASS |
+| A | List order | a keyset walk over a sort with ties returns every row once, in order | PASS |
+| A | List order | a filtered list pages in id order with no repeats or gaps | PASS |
+| A | List order | updating every row between page fetches neither repeats nor skips a row | PASS |
 | A | List count modes | estimate=1 counts exactly on a small table | PASS |
 | A | List fields | fields=code,name keeps only id, code, name | PASS |
 | A | List include | include=project hydrates the referenced project | PASS |
@@ -105,6 +113,9 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A | Trash | GET /projects/:id/deleted reads the trashed record | PASS |
 | A | Restore | POST /projects/:id/restore brings it back | PASS |
 | A | Restore | POST /projects/restore/all restores the whole trash | PASS |
+| A | Trash order | an unsorted trash list is ordered by id ascending | PASS |
+| A | Trash order | offset paging the trash returns every row once, in order | PASS |
+| A | Trash order | a sorted trash list with ties pages by offset to the same rows in the same order, each kind in one run with ids ascending | PASS |
 | A | Empty trash | DELETE /projects/empty purges the trash | PASS |
 | A | Permanent delete | DELETE /projects/trash/:id removes it for good (204) | PASS |
 | A | Bulk | POST /projects/bulk creates every item (201) | PASS |

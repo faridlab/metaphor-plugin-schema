@@ -643,6 +643,47 @@ fn num(v: &Value) -> Option<f64> {
 // A. Generic routes
 // =============================================================================
 
+/// Walk a list by offset, `limit` rows a page, and return the ids in the order they arrived.
+/// `base` is a URI that already carries a query string.
+async fn page_walk(app: &App, token: &str, base: &str, limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for page in 1..=30 {
+        let got = app.get(&format!("{base}&limit={limit}&page={page}"), token).await.ids();
+        let n = got.len();
+        out.extend(got);
+        if n < limit {
+            break;
+        }
+    }
+    out
+}
+
+/// Walk a list by keyset, following `meta.next_cursor` until a page hands out none.
+async fn cursor_walk(app: &App, token: &str, base: &str, limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut after: Option<String> = None;
+    for _ in 0..30 {
+        let uri = match &after {
+            Some(c) => format!("{base}&limit={limit}&after={c}"),
+            None => format!("{base}&limit={limit}"),
+        };
+        let page = app.get(&uri, token).await;
+        out.extend(page.ids());
+        match page.body["meta"]["next_cursor"].as_str() {
+            Some(c) => after = Some(c.to_string()),
+            None => break,
+        }
+    }
+    out
+}
+
+fn has_no_repeats(ids: &[String]) -> bool {
+    let mut sorted = ids.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    sorted.len() == ids.len()
+}
+
 async fn area_a(c: &Ctx) {
     let (r, app, ta) = (&c.rec, &c.app, c.ta.as_str());
     const CRUD: &str = "backbone-core/src/http.rs (BackboneCrudHandler)";
@@ -788,6 +829,52 @@ async fn area_a(c: &Ctx) {
         let k2 = app.get(&q(&format!("sort=priority&limit=2&after={cur}")), ta).await;
         r.check("A", "List keyset", "after=<cursor> continues with the next rows", k2.status == 200 && prios(&k2) == vec![3, 4], &k2.request, "priorities [3,4]", &format!("{:?}; {}", prios(&k2), k2.got()), "backbone-orm/src/repository.rs (keyset)");
     }
+
+    // A list always has a total order: the sorts, then the primary key. Without one Postgres
+    // answers in physical order, which an update changes, so offset paging could repeat a row
+    // on one page and skip another.
+    {
+        const ORD: &str = "backbone-orm/src/repository.rs (total_order)";
+        let ascending = |ids: &[String]| ids.windows(2).all(|w| w[0] < w[1]);
+        let base_uri = format!("/projects?code[startwith]={tag}");
+        let whole = app.get(&q("limit=100"), ta).await.ids();
+        r.check("A", "List order", "an unsorted list is ordered by id ascending", whole.len() == 5 && ascending(&whole), &q("limit=100"), "5 ids, ascending", &format!("{whole:?}"), ORD);
+        let paged = page_walk(app, ta, &base_uri, 2).await;
+        r.check("A", "List order", "offset paging an unsorted list returns every row once, in the order of the whole list", paged == whole, &q("limit=2&page=1..3"), "the pages concatenate to the whole list", &format!("{paged:?}"), ORD);
+        let walked = cursor_walk(app, ta, &base_uri, 2).await;
+        r.check("A", "List order", "an unsorted page with more rows hands out a cursor, and the keyset walk returns the same rows in the same order", walked == whole, &q("limit=2&after=<cursor>"), "the walk equals the whole list", &format!("{walked:?}"), ORD);
+
+        // `kind` ties: internal x2, research x2, client x1.
+        let tied = app.get(&q("sort=kind&limit=100"), ta).await;
+        let tied_ids = tied.ids();
+        // The sort follows the enum's declared order, so the check does not assume an alphabetical
+        // one: each kind forms one run, and the ids within a run ascend.
+        let kinds: Vec<String> = tied.items().iter().map(|i| i["kind"].as_str().unwrap_or("").to_string()).collect();
+        let runs = kinds.windows(2).filter(|w| w[0] != w[1]).count() + 1;
+        let distinct = { let mut k = kinds.clone(); k.sort(); k.dedup(); k.len() };
+        let tie_order_ok = runs == distinct
+            && tied.items().windows(2).all(|w| w[0]["kind"] != w[1]["kind"] || w[0]["id"].as_str() < w[1]["id"].as_str());
+        r.check("A", "List order", "rows that tie on the sort key are ordered by id", tied.status == 200 && tied_ids.len() == 5 && tie_order_ok, &q("sort=kind&limit=100"), "one run per kind, id ascending within a run", &tied.got(), ORD);
+        let paged = page_walk(app, ta, &format!("{base_uri}&sort=kind"), 2).await;
+        r.check("A", "List order", "offset paging a sort with ties returns every row once", paged == tied_ids, &q("sort=kind&limit=2&page=1..3"), "the pages concatenate to the whole sorted list", &format!("{paged:?}"), ORD);
+        let walked = cursor_walk(app, ta, &format!("{base_uri}&sort=kind"), 2).await;
+        r.check("A", "List order", "a keyset walk over a sort with ties returns every row once, in order", walked == tied_ids, &q("sort=kind&limit=2&after=<cursor>"), "the walk equals the sorted list", &format!("{walked:?}"), ORD);
+
+        let filtered_whole = app.get(&q("priority[gte]=2&limit=100"), ta).await.ids();
+        let filtered = page_walk(app, ta, &format!("{base_uri}&priority[gte]=2"), 3).await;
+        r.check("A", "List order", "a filtered list pages in id order with no repeats or gaps", filtered_whole.len() == 4 && ascending(&filtered_whole) && filtered == filtered_whole, &q("priority[gte]=2&limit=3&page=1..2"), "4 rows, ascending, the pages concatenate to the whole", &format!("{filtered:?}"), ORD);
+
+        // An update between two page fetches moves the row's physical position; the order does not.
+        let first = app.get(&q("limit=2&page=1"), ta).await.ids();
+        for pid in &listed {
+            app.patch(&format!("/projects/{pid}"), ta, json!({ "summary": "touched between pages" })).await;
+        }
+        let second = app.get(&q("limit=2&page=2"), ta).await.ids();
+        let third = app.get(&q("limit=2&page=3"), ta).await.ids();
+        let joined: Vec<String> = first.into_iter().chain(second).chain(third).collect();
+        r.check("A", "List order", "updating every row between page fetches neither repeats nor skips a row", joined == whole, &q("limit=2&page=1..3 with a PATCH of every row between"), "the pages still concatenate to the list as it was", &format!("{joined:?}"), ORD);
+    }
+
     let e = app.get(&q("estimate=1"), ta).await;
     r.check("A", "List count modes", "estimate=1 counts exactly on a small table", e.status == 200 && e.body["meta"]["total"] == json!(5), &e.request, "meta.total 5", &e.got(), "backbone-orm/src/repository.rs (estimate)");
 
@@ -852,6 +939,39 @@ async fn area_a(c: &Ctx) {
     let ra = app.post("/projects/restore/all", ta, json!({})).await;
     let back = app.get(&format!("/projects/{x}"), ta).await.status == 200 && app.get(&format!("/projects/{y}"), ta).await.status == 200;
     r.check("A", "Restore", "POST /projects/restore/all restores the whole trash", ra.status == 200 && back, &ra.request, "200, both back", &ra.got(), CRUD);
+
+    // The trash list has the same total order, with and without a sort.
+    {
+        const ORD: &str = "backbone-orm/src/repository.rs (total_order)";
+        let ttag = uniq("T");
+        let mut trashed = Vec::new();
+        for (i, kind) in ["internal", "research", "internal", "research", "internal", "research"].iter().enumerate() {
+            let p = c.project(ta, c.org.company_a, json!({ "code": format!("{ttag}{i}"), "name": format!("{ttag} gone {i}"), "kind": kind })).await;
+            trashed.push(p.id());
+        }
+        for pid in &trashed {
+            app.delete(&format!("/projects/{pid}"), ta).await;
+        }
+        let base = format!("/projects/trash?code[startwith]={ttag}");
+        let whole = app.get(&format!("{base}&limit=100"), ta).await.ids();
+        r.check("A", "Trash order", "an unsorted trash list is ordered by id ascending", whole.len() == 6 && whole.windows(2).all(|w| w[0] < w[1]), &format!("{base}&limit=100"), "6 ids, ascending", &format!("{whole:?}"), ORD);
+        let paged = page_walk(app, ta, &base, 4).await;
+        r.check("A", "Trash order", "offset paging the trash returns every row once, in order", paged == whole, &format!("{base}&limit=4&page=1..2"), "the pages concatenate to the whole trash", &format!("{paged:?}"), ORD);
+        let sorted_base = format!("{base}&sort=kind");
+        let sorted_whole = app.get(&format!("{sorted_base}&limit=100"), ta).await.ids();
+        let sorted_paged = page_walk(app, ta, &sorted_base, 4).await;
+        let sorted_items = app.get(&format!("{sorted_base}&limit=100"), ta).await;
+        let sorted_kinds: Vec<String> = sorted_items.items().iter().map(|i| i["kind"].as_str().unwrap_or("").to_string()).collect();
+        let kinds_in_runs = {
+            let runs = sorted_kinds.windows(2).filter(|w| w[0] != w[1]).count() + 1;
+            let mut distinct = sorted_kinds.clone();
+            distinct.sort();
+            distinct.dedup();
+            runs == distinct.len()
+                && sorted_items.items().windows(2).all(|w| w[0]["kind"] != w[1]["kind"] || w[0]["id"].as_str() < w[1]["id"].as_str())
+        };
+        r.check("A", "Trash order", "a sorted trash list with ties pages by offset to the same rows in the same order, each kind in one run with ids ascending", sorted_whole.len() == 6 && sorted_paged == sorted_whole && kinds_in_runs, &format!("{sorted_base}&limit=4&page=1..2"), "the pages concatenate to the whole sorted trash, one run per kind, ids ascending within a run", &format!("{sorted_paged:?}"), ORD);
+    }
 
     app.delete(&format!("/projects/{x}"), ta).await;
     let et = app.delete("/projects/empty", ta).await;
