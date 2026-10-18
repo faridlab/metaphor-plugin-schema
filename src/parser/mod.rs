@@ -375,10 +375,29 @@ pub fn parse_yaml_workflow(source: &str) -> Result<WorkflowFile, ParseError> {
         message: e.to_string(),
     })?;
 
-    // Convert YAML schema to WorkflowFile
+    // Convert YAML schema to WorkflowFile, keeping what the typed tree cannot hold.
+    let mut workflow = yaml_schema.into_workflow();
+    if let Ok(raw) = serde_yaml::from_str::<serde_yaml::Value>(source) {
+        workflow.executor = raw
+            .get("config")
+            .and_then(|c| c.get("executor"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        workflow.implemented_by = raw.get("implemented_by").and_then(|v| v.as_str()).map(str::to_string);
+        workflow.functions = match raw.get("functions") {
+            Some(serde_yaml::Value::Sequence(items)) => {
+                items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+            }
+            Some(serde_yaml::Value::Mapping(map)) => {
+                map.keys().filter_map(|k| k.as_str().map(str::to_string)).collect()
+            }
+            _ => Vec::new(),
+        };
+        workflow.source = Some(raw);
+    }
     Ok(WorkflowFile {
         path: None,
-        workflows: vec![yaml_schema.into_workflow()],
+        workflows: vec![workflow],
     })
 }
 

@@ -2696,6 +2696,21 @@ impl SqlGenerator {
             output.add_file(PathBuf::from(format!("migrations/{}_seed_{}_permissions_{}.down.sql", ts, module_name, digest)), down);
         }
 
+        // 9. The workflow engine's tables, only for a module with a workflow that runs on it. A
+        // new migration with a name of its own: the pipeline stamps it after the latest one on disk.
+        if super::workflows::mod_file(&schema.schema).is_some() {
+            let workflow_schema = super::workflows::workflow_schema(&schema.schema);
+            let ts = Self::timestamp_for(counter + 3);
+            output.add_file(
+                PathBuf::from(format!("migrations/{}_create_workflow_tables.up.sql", ts)),
+                super::workflows::migration_up(&workflow_schema),
+            );
+            output.add_file(
+                PathBuf::from(format!("migrations/{}_create_workflow_tables.down.sql", ts)),
+                super::workflows::migration_down(&workflow_schema),
+            );
+        }
+
         Ok(())
     }
 

@@ -36,6 +36,7 @@ pub mod sql;
 pub mod state_machine;
 pub mod value_object;
 pub mod versioning;
+pub mod workflows;
 
 // Framework compliance generators
 pub mod app_state;
@@ -56,6 +57,7 @@ pub use graphql::GraphqlGenerator;
 pub use grpc::GrpcGenerator;
 pub use handler::HandlerGenerator;
 pub use module::ModuleGenerator;
+pub use workflows::WorkflowsGenerator;
 pub use openapi::OpenApiGenerator;
 // TODO: pub use permission::PermissionGenerator;
 pub use dto::DtoGenerator;
@@ -617,10 +619,12 @@ pub fn generate_all_with_options(
                     GenerationTarget::UseCase
                     | GenerationTarget::Validator
                     | GenerationTarget::Specification => GeneratedOutput::new(),
-                    // Retired: no write path ran a hook's trigger registry or a workflow's
-                    // executor. A hook's behaviour lives in hand services and lifecycle hooks,
-                    // and a workflow YAML documents the hand service that runs the saga.
-                    GenerationTarget::Trigger | GenerationTarget::Flow => GeneratedOutput::new(),
+                    // Retired: no write path ran a hook's trigger registry. A hook's
+                    // triggers run through the generated write hooks (the `Service` target).
+                    GenerationTarget::Trigger => GeneratedOutput::new(),
+                    // A workflow with `config.executor: engine` is generated; one without
+                    // documents the hand service that runs it, and emits nothing.
+                    GenerationTarget::Flow => WorkflowsGenerator::new().generate(s)?,
                     GenerationTarget::Cqrs => CqrsGenerator::new().generate(s)?,
                     GenerationTarget::Computed => ComputedGenerator::new().generate(s)?,
                     GenerationTarget::Projection => ProjectionGenerator::new().generate(s)?,

@@ -21,6 +21,7 @@ pub mod reader;
 pub mod rewrite;
 pub mod trigger_compile;
 pub mod triggers;
+pub mod workflows;
 pub mod writers;
 
 use serde::{Deserialize, Serialize};
@@ -476,7 +477,7 @@ pub struct Readiness {
 /// Whether every `<file>::<fn>` of a claim names something that exists under `root`: a function the
 /// file defines, or, for a migration (`.sql`), the index, constraint, trigger or function it defines.
 /// One function, or several separated by commas when the rule holds on several paths.
-fn claim_holds(root: &std::path::Path, claim: &str) -> bool {
+pub(crate) fn claim_holds(root: &std::path::Path, claim: &str) -> bool {
     claim.split(',').map(str::trim).all(|one| {
         one.rsplit_once("::").is_some_and(|(file, func)| {
             let Ok(text) = std::fs::read_to_string(root.join(file)) else { return false };

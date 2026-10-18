@@ -75,8 +75,20 @@ const CONTEXTS: &[&str] = &["this", "old", "actor", "now"];
 
 /// Parse `source` in the rule grammar.
 pub fn parse(source: &str) -> Result<Expression, String> {
+    parse_with(source, false)
+}
+
+/// Parse `source` in the workflow dialect: the rule grammar plus what workflow files write over a
+/// JSON context. `a ?? b` is `coalesce(a, b)`, `x[0]` indexes (a method call named `[]`), `24h` and
+/// `30d` are durations (the `24.hours` form), and `IN` reads as `in`. The workflow compiler
+/// (`rules::workflows`) resolves names and functions; this only reads the text.
+pub fn parse_dynamic(source: &str) -> Result<Expression, String> {
+    parse_with(source, true)
+}
+
+fn parse_with(source: &str, dynamic: bool) -> Result<Expression, String> {
     let tokens = lex(source)?;
-    let mut p = Parser { tokens, pos: 0 };
+    let mut p = Parser { tokens, pos: 0, dynamic };
     let expr = p.expr()?;
     match p.peek() {
         None => Ok(expr),
@@ -243,8 +255,8 @@ impl Tok {
 }
 
 const SYMBOLS: &[&str] = &[
-    "||", "&&", "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "/", "%", "!", "(", ")", "[", "]", ",", ".", "?",
-    ":",
+    "||", "&&", "==", "!=", "<=", ">=", "??", "<", ">", "+", "-", "*", "/", "%", "!", "(", ")", "[", "]", ",", ".",
+    "?", ":",
 ];
 
 fn lex(source: &str) -> Result<Vec<Tok>, String> {
@@ -352,6 +364,8 @@ fn lex(source: &str) -> Result<Vec<Tok>, String> {
 struct Parser {
     tokens: Vec<Tok>,
     pos: usize,
+    /// The workflow dialect (see [`parse_dynamic`]).
+    dynamic: bool,
 }
 
 impl Parser {
@@ -399,7 +413,13 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Result<Expression, String> {
-        let condition = self.or()?;
+        let mut condition = self.or()?;
+        if self.dynamic {
+            while self.eat("??") {
+                let right = self.or()?;
+                condition = Expression::FunctionCall { name: "coalesce".to_string(), args: vec![condition, right] };
+            }
+        }
         if self.eat("?") {
             let then_expr = self.expr()?;
             self.expect(":")?;
@@ -455,7 +475,7 @@ impl Parser {
             let right = self.add()?;
             return Ok(bin(left, op, right));
         }
-        if self.eat_word("in") {
+        if self.eat_word("in") || (self.dynamic && self.eat_word("IN")) {
             let right = self.add()?;
             return Ok(bin(left, BinaryOp::In, right));
         }
@@ -493,7 +513,16 @@ impl Parser {
 
     fn postfix(&mut self) -> Result<Expression, String> {
         let mut expr = self.primary()?;
-        while self.eat(".") {
+        loop {
+            if self.dynamic && self.eat("[") {
+                let index = self.expr()?;
+                self.expect("]")?;
+                expr = Expression::MethodCall { object: Box::new(expr), method: "[]".to_string(), args: vec![index] };
+                continue;
+            }
+            if !self.eat(".") {
+                break;
+            }
             let member = match self.next() {
                 Some(Tok::Name(n)) => n,
                 Some(t) => return Err(format!("expected a name after `.`, found `{}`", t.text())),
@@ -525,7 +554,30 @@ impl Parser {
 
     fn primary(&mut self) -> Result<Expression, String> {
         match self.next() {
-            Some(Tok::Int(n)) => Ok(Expression::Literal(Literal::Int(n))),
+            Some(Tok::Int(n)) => {
+                // `24h`, `30d`: a duration written with a one-letter unit.
+                if self.dynamic {
+                    let unit = match self.peek() {
+                        Some(Tok::Name(w)) => match w.as_str() {
+                            "s" => Some("seconds"),
+                            "m" => Some("minutes"),
+                            "h" => Some("hours"),
+                            "d" => Some("days"),
+                            "w" => Some("weeks"),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(unit) = unit {
+                        self.pos += 1;
+                        return Ok(Expression::MemberAccess {
+                            object: Box::new(Expression::Literal(Literal::Int(n))),
+                            member: unit.to_string(),
+                        });
+                    }
+                }
+                Ok(Expression::Literal(Literal::Int(n)))
+            }
             Some(Tok::Float(n)) => Ok(Expression::Literal(Literal::Float(n))),
             Some(Tok::Str(s)) => Ok(Expression::Literal(Literal::String(s))),
             Some(Tok::Context(c)) => Ok(Expression::Context(c)),
@@ -604,6 +656,40 @@ mod tests {
         assert_eq!(string_of(r"phone matches '^\+?[1-9]\d{1,14}$'"), r"^\+?[1-9]\d{1,14}$");
         assert_eq!(string_of(r"a == 'it\'s'"), "it's");
         assert_eq!(string_of(r"a == 'back\\slash'"), r"back\slash");
+    }
+
+    #[test]
+    fn the_workflow_dialect_reads_coalesce_index_durations_and_uppercase_in() {
+        for src in [
+            "context.first_name ?? ''",
+            "result ?? context.mime_type ?? 'application/octet-stream'",
+            "result[0].id",
+            "now() + 24h",
+            "now + 30d",
+            "x IN ['low', 'medium']",
+            "context.a.b == 1 && !context.c",
+        ] {
+            assert!(parse_dynamic(src).is_ok(), "{src}: {:?}", parse_dynamic(src));
+            // The rule grammar still refuses what only a workflow says.
+            if ["??", "[0]", "24h", "30d", " IN "].iter().any(|t| src.contains(t)) {
+                assert!(parse(src).is_err(), "{src} parsed in the rule grammar");
+            }
+        }
+        let chain = format!("{:?}", parse_dynamic("a ?? b ?? c").unwrap());
+        let nested = format!(
+            "{:?}",
+            Expression::FunctionCall {
+                name: "coalesce".into(),
+                args: vec![
+                    Expression::FunctionCall {
+                        name: "coalesce".into(),
+                        args: vec![Expression::field("a"), Expression::field("b")]
+                    },
+                    Expression::field("c")
+                ]
+            }
+        );
+        assert_eq!(chain, nested, "`??` chains to the left");
     }
 
     #[test]

@@ -34,12 +34,52 @@ pub struct Workflow {
     pub on_failure: Vec<WorkflowHandler>,
     /// Compensation steps (rollback on failure)
     pub compensation: Vec<CompensationStep>,
+    /// `config.executor`, as written: `engine` runs the workflow, `hand` (the default) says a
+    /// hand-written service does. Anything else is refused by validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<String>,
+    /// `implemented_by: "<file>::<fn>"`: the hand-written function that carries a documented
+    /// saga out; `schema doctor` checks it exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implemented_by: Option<String>,
+    /// Names listed under `functions:`: the calls an expression of the workflow may make, each
+    /// implemented by hand on the workflow's generated `Actions` trait.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub functions: Vec<String>,
+    /// The file as read, key order kept. The engine compiler reads this rather than the typed
+    /// tree above, which keeps parameters in unordered maps and drops the keys it has no field for
+    /// (`config.retry`, a step's `timeout`, `filter`, `order`).
+    #[serde(skip)]
+    pub source: Option<serde_yaml::Value>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
 }
 
+/// Where a workflow runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Executor {
+    /// A hand-written service runs it; the file documents it.
+    Hand,
+    /// The generated definition and the framework's engine run it.
+    Engine,
+}
+
 impl Workflow {
+    /// Where this workflow runs; `None` when `config.executor` names neither `engine` nor `hand`.
+    pub fn executor_kind(&self) -> Option<Executor> {
+        match self.executor.as_deref() {
+            None | Some("hand") => Some(Executor::Hand),
+            Some("engine") => Some(Executor::Engine),
+            Some(_) => None,
+        }
+    }
+
+    /// Whether the generated engine runs this workflow.
+    pub fn runs_on_engine(&self) -> bool {
+        self.executor_kind() == Some(Executor::Engine)
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),

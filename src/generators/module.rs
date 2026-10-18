@@ -275,6 +275,13 @@ impl ModuleGenerator {
             .unwrap();
         }
 
+        // The engine of the module's `executor: engine` workflows, handed to the composing service.
+        let workflows = super::workflows::mod_file(&schema.schema).is_some();
+        if workflows {
+            writeln!(output, "    /// The engine of the module's workflows; see [`Self::background_tasks`].").unwrap();
+            writeln!(output, "    pub(crate) workflow_tasks: backbone_core::workflow::BackgroundTasks,").unwrap();
+        }
+
         // Custom struct fields (e.g. a hand-authored service like an FxService).
         // Lives inside a CUSTOM marker so it survives regeneration — pair it with
         // the builder-body and struct-literal CUSTOM blocks (construction + init),
@@ -335,6 +342,17 @@ impl ModuleGenerator {
         writeln!(output, "        {}ModuleBuilder::new()", pascal_name).unwrap();
         writeln!(output, "    }}").unwrap();
         writeln!(output).unwrap();
+        if workflows {
+            writeln!(output, "    /// The background tasks of the module's workflows with `config.executor: engine`: the engine,").unwrap();
+            writeln!(output, "    /// whose [`deliver`](backbone_core::workflow::BackgroundTasks::deliver) is the outbox relay's sink for").unwrap();
+            writeln!(output, "    /// the events it subscribes to, and whose [`timer_sweep`](backbone_core::workflow::BackgroundTasks::timer_sweep)").unwrap();
+            writeln!(output, "    /// is the job `workflow_timer_sweep`, every minute. The composing service registers both; the module").unwrap();
+            writeln!(output, "    /// only hands them over.").unwrap();
+            writeln!(output, "    pub fn background_tasks(&self) -> &backbone_core::workflow::BackgroundTasks {{").unwrap();
+            writeln!(output, "        &self.workflow_tasks").unwrap();
+            writeln!(output, "    }}").unwrap();
+            writeln!(output).unwrap();
+        }
 
         // Routes: the UNGUARDED full-CRUD mount is `all_crud_routes`; `routes()` is kept as a
         // #[deprecated] alias so a naive `.routes()` call can't silently expose unvalidated writes
@@ -646,6 +664,20 @@ impl ModuleGenerator {
             writeln!(output).unwrap();
         }
 
+        if workflows {
+            writeln!(output, "        // The engine of the module's workflows, writing through the services above.").unwrap();
+            writeln!(output, "        let workflow_tasks = crate::application::workflows::build_background_tasks(").unwrap();
+            writeln!(output, "            db_pool.clone(),").unwrap();
+            writeln!(output, "            crate::application::workflows::WorkflowServices {{").unwrap();
+            for e in super::workflows::entities(&schema.schema) {
+                let sn = to_snake_case(&e);
+                writeln!(output, "                {sn}: {sn}_service.clone(),").unwrap();
+            }
+            writeln!(output, "            }},").unwrap();
+            writeln!(output, "        );").unwrap();
+            writeln!(output).unwrap();
+        }
+
         // Placeholder for custom let statements (e.g., additional services)
         writeln!(output, "        // <<< CUSTOM").unwrap();
         writeln!(output, "        // END CUSTOM").unwrap();
@@ -670,6 +702,9 @@ impl ModuleGenerator {
                 to_snake_case(&model.name)
             )
             .unwrap();
+        }
+        if workflows {
+            writeln!(output, "            workflow_tasks,").unwrap();
         }
         if lib_ext {
             writeln!(output, "            ext,").unwrap();
@@ -1261,6 +1296,11 @@ impl ModuleGenerator {
         if has_triggers {
             writeln!(output, "pub mod triggers;").unwrap();
         }
+        // The workflows that run on the engine, when the module has any.
+        let has_workflows = super::workflows::mod_file(&schema.schema).is_some();
+        if has_workflows {
+            writeln!(output, "pub mod workflows;").unwrap();
+        }
 
         // NOTE: `pub mod middleware;` is intentionally NOT declared here. No generator
         // emits `application/middleware.rs`, so declaring it produced E0583. When an
@@ -1272,6 +1312,9 @@ impl ModuleGenerator {
         writeln!(output, "pub use service::*;").unwrap();
         if has_triggers {
             writeln!(output, "pub use triggers::*;").unwrap();
+        }
+        if has_workflows {
+            writeln!(output, "pub use workflows::{{build_background_tasks, WorkflowServices, WORKFLOW_SCHEMA}};").unwrap();
         }
         writeln!(output, "// <<< CUSTOM").unwrap();
         writeln!(output, "// END CUSTOM").unwrap();

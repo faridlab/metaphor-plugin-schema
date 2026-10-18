@@ -55,6 +55,9 @@ impl<'a> SchemaValidator<'a> {
         // Hook triggers the generator cannot honour (a module on `legacy_triggers` has none reported)
         errors.extend(trigger_problems(self.schema).into_iter().map(ResolveError::validation));
 
+        // Workflows the engine runs: every name, expression and hand surface must hold
+        errors.extend(workflow_problems(self.schema).into_iter().map(ResolveError::validation));
+
         // Validate workflows (business processes)
         for workflow in &self.schema.workflows {
             errors.extend(self.validate_workflow(workflow));
@@ -1031,11 +1034,67 @@ pub fn declaration_only_warnings(schema: &ModuleSchema) -> Vec<String> {
             events.join(", ")
         ));
     }
-    for workflow in &schema.workflows {
+    for workflow in schema.workflows.iter().filter(|w| !w.runs_on_engine() && w.implemented_by.is_none()) {
         out.push(format!(
-            "workflow '{}' (schema/workflows) is declaration-only: it is parsed and validated, and no generated code runs it; write the flow as a service method or a custom route",
+            "workflow '{}' (schema/workflows) is declaration-only: it is parsed and validated, and no generated code runs it; set `config.executor: engine` to have the engine run it, or name the hand function that does with `implemented_by`",
             workflow.name
         ));
+    }
+    out
+}
+
+/// What is wrong with the workflows a module declares: an `executor` that is neither `engine` nor
+/// `hand`, an `implemented_by` that is not `<file>::<fn>` (or sits on a workflow the engine runs),
+/// and, for a workflow on the engine, everything its compiler refuses (an expression outside the
+/// set, a wait that is not an equality key, an unknown step, entity, verb or event, a bespoke verb
+/// in a module without the extension layout, which has nowhere to put it). Each is an error: a
+/// workflow that cannot run must not read as one that does.
+pub fn workflow_problems(schema: &ModuleSchema) -> Vec<String> {
+    let mut out = Vec::new();
+    let extensions = schema.generators_config.as_ref().and_then(|c| c.extensions) == Some(true);
+    let mut seen: HashSet<String> = HashSet::new();
+    for w in &schema.workflows {
+        if !seen.insert(crate::utils::to_snake_case(&w.name)) {
+            out.push(format!("workflow '{}' is declared twice", w.name));
+        }
+        if w.executor_kind().is_none() {
+            out.push(format!(
+                "workflow '{}': `config.executor: {}` is neither `engine` nor `hand`",
+                w.name,
+                w.executor.as_deref().unwrap_or_default()
+            ));
+            continue;
+        }
+        if let Some(by) = &w.implemented_by {
+            match by.split_once("::") {
+                Some((file, function)) if !file.trim().is_empty() && !function.trim().is_empty() => {}
+                _ => out.push(format!("workflow '{}': `implemented_by: \"{by}\"` is not `<file>::<function>`", w.name)),
+            }
+            if w.runs_on_engine() {
+                out.push(format!(
+                    "workflow '{}': `implemented_by` names the hand function that runs a documented workflow, and `executor: engine` runs it generated: say one",
+                    w.name
+                ));
+            }
+        }
+        if w.runs_on_engine() {
+            let compiled = crate::rules::workflows::compile(schema, w);
+            if compiled.problems.is_empty() && compiled.required_methods() > 0 && !extensions {
+                out.push(format!(
+                    "workflow '{}' needs {} hand method(s) ({}) and the module does not use the extension layout (`generators: extensions: true`), which is where they are written",
+                    w.name,
+                    compiled.required_methods(),
+                    compiled
+                        .hand
+                        .iter()
+                        .map(|h| h.verb.clone())
+                        .chain(compiled.functions.iter().cloned())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            out.extend(compiled.problems);
+        }
     }
     out
 }
@@ -1931,11 +1990,16 @@ mod route_name_collision_tests {
 /// documents a saga a hand service runs, so it is read, never started. A module that
 /// still sets `generators: workflows: true` is told the flag does nothing.
 pub fn workflow_warnings(schema: &ModuleSchema) -> Vec<String> {
+    // A workflow on the engine runs; one naming `implemented_by` documents the function that does.
     let mut out: Vec<String> = schema
         .workflows
         .iter()
+        .filter(|w| !w.runs_on_engine() && w.implemented_by.is_none())
         .map(|w| format!("Workflow '{}' is documentation: no executor is generated, so the service that runs it is hand-written", w.name))
         .collect();
+    for w in crate::rules::workflows::engine_workflows(schema) {
+        out.extend(crate::rules::workflows::compile(schema, w).warnings);
+    }
     if schema.generators_config.as_ref().and_then(|c| c.workflows).is_some() {
         out.push("`generators: workflows:` generates nothing: workflow executors are retired, remove the flag".into());
     }
