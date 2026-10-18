@@ -745,7 +745,7 @@ fn resolve_when(
             .iter()
             .filter(|m| m.bound_model.as_deref() == Some(model.name.as_str()))
     };
-    let at = format!("{} of {}", t.key, model.name);
+    let at = format!("`{}` of {}", t.key, model.name);
     if let Some(list) = &t.state_list {
         let state = match list {
             StateList::Enter(s) | StateList::Exit(s) => s,
@@ -767,7 +767,7 @@ fn resolve_when(
     }
     if t.schedule.is_some() {
         if t.schedule.as_deref().is_some_and(|s| s.trim().is_empty()) {
-            problems.push(format!("trigger `{at}` has an empty `schedule:`"));
+            problems.push(format!("trigger {at} has an empty `schedule:`"));
         }
         for (key, value) in [("posture", &t.posture), ("commit_policy", &t.commit_policy)] {
             let Some(v) = value else { continue };
@@ -777,7 +777,7 @@ fn resolve_when(
                 serde_yaml::from_str::<crate::ast::CommitPolicy>(v).is_ok()
             };
             if !known {
-                problems.push(format!("trigger `{at}` has `{key}: {v}`, which is not a {key} of a scheduled job (ADR-0020)"));
+                problems.push(format!("trigger {at} has `{key}: {v}`, which is not a {key} of a scheduled job (ADR-0020)"));
             }
         }
         return (Some(TriggerWhen::Scheduled), problems);
@@ -807,12 +807,12 @@ fn resolve_when(
             return (Some(when), problems);
         }
         problems.push(format!(
-            "trigger `{at}` has `timing: {timing}`, which is not before_ or after_ create, update or delete"
+            "trigger {at} has `timing: {timing}`, which is not before_ or after_ create, update or delete"
         ));
         return (None, problems);
     } else {
         problems.push(format!(
-            "trigger `{at}` is a label that names no event: key it `before_`/`after_` create, update or delete, `after_update_<field>`, `after_<verb>`, \
+            "trigger {at} is a label that names no event: key it `before_`/`after_` create, update or delete, `after_update_<field>`, `after_<verb>`, \
              or give it `timing:` or `schedule:`"
         ));
         return (None, problems);
@@ -845,7 +845,7 @@ fn resolve_when(
                 }
                 None => {
                     problems.push(format!(
-                        "trigger `{at}` is keyed on a field change, but {} has no field that `{rest}` spells (the key is `{prefix}<field>[_<value>]`)",
+                        "trigger {at} is keyed on a field change, but {} has no field that `{rest}` spells (the key is `{prefix}<field>[_<value>]`)",
                         model.name
                     ));
                     (None, problems)
@@ -869,7 +869,7 @@ fn resolve_when(
         return (Some(TriggerWhen::HandFired), problems);
     }
     problems.push(format!(
-        "trigger `{at}` is keyed `{named}`: only `after_<word>` can name a hand verb; `before_` takes create, update, delete or update_<field>"
+        "trigger {at} is keyed `{named}`: only `after_<word>` can name a hand verb; `before_` takes create, update, delete or update_<field>"
     ));
     (None, problems)
 }

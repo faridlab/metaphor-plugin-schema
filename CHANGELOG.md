@@ -7,6 +7,58 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- Hook `triggers:` and a state's `on_enter` / `on_exit` lists are generated and run in the write's
+  transaction through the model's write hooks (ADR-0034). A key is read against the model: `before_` or
+  `after_` with `create`, `update`, `delete`; `after_update_<field>[_<value>]` and
+  `before_update_<field>` (the field changed, to that value when one is named); `after_<verb>` of a state
+  machine; a free key with `timing:`; `entity:` to bind an entry to another model of the file; `if:` or
+  `condition:` to guard it. What compiles runs: `emit: Event(a: expr)` builds and stages the declared
+  event, `log(name, { k: expr })` writes a line carrying the correlation id, `set:` and `increment:`
+  fill the row before the write, `send_email` and `notify` stage a `NotificationRequested`, and
+  `if: cond { action }` guards one. Everything else, and an action whose arguments the rule language
+  cannot say (`$context`, a relation, a function), becomes a required method of the generated
+  `<Model>Triggers` trait (`src/application/triggers/<model>_triggers.rs`, no default bodies), implemented
+  as `<Model>TriggersImpl` in `<model>_triggers.ext.rs`. A trigger keyed on a hand verb gets
+  `fire_<key>(ctx, &row)` on the write hooks; a `schedule:` entry becomes a scheduled job with
+  `<MODEL>_SCHEDULED` and `run_<model>_scheduled`, and takes the optional `posture:`, `commit_policy:`
+  and `pickup_lock:` of ADR-0020. Requires backbone-core with the trigger support of `write_hooks`.
+- `public:` on a model declares generic actions served without a permission (`public: true` for the
+  reads, or a list), and `public_scoped: true` for a fenced model. The handler marks the gates public
+  (`.public(Gate::Read)`) and the module gets `public_routes()` for a host to mount outside its
+  authentication layer. Generation fails on a `public:` that is no generic action, beside a `requires:` of
+  the same action, a write action on a read-only model, or a company- or org-fenced model without
+  `public_scoped: true`; `schema doctor` warns on a public write.
+- `schema rules` labels triggers `TRIGGER RUNS (<when>, in tx)`, `TRIGGER HAND (<method>)` and
+  `TRIGGER SCHEDULED (<schedule>)`, a public group `PERMISSION PUBLIC (read)`, and an event a trigger
+  emits `EVENT STAGED (by trigger <Model>.<key>, in tx)` (all in `-f json`, under `triggers`,
+  `permissions.public` and `events`). `schema doctor` counts the triggers and the hand methods they owe,
+  fails on a missing extension file or method, warns on a mail, HTTP or socket client called inside the
+  transaction, on an `on_enter` of an initial state, on a verb trigger of a machine with `verbs: hand`,
+  and on a hand-fired entry. `schema validate` says what became a hand method or was left out of a log.
+
+### Changed
+
+- A module that does not set `generators: legacy_triggers: true` no longer fails validation on any
+  trigger: its triggers are generated, and it fails on what cannot be honoured (a key naming no field, verb
+  or state, an entry's own `if:` that cannot compile, an `emit:` of an event no file declares, a `set:` that
+  cannot compile, hand methods in a module without the extension layout). A module on `legacy_triggers`
+  generates exactly what it did.
+- Trigger entries that schedule add jobs to the module's scheduled-job list, so one without a `posture:`
+  raises the ADR-0020 warning.
+- **Breaking:** `<Model>WriteHooks` of a model with triggers carries its hand half:
+  `<Model>WriteHooks::new(Arc<dyn <Model>Triggers>)` replaces the unit struct, and the generated
+  `build_<entity>_service` makes `<Model>TriggersImpl::default()`. Hand code that built such a hooks value as
+  a unit struct must build it through the service builder or pass an implementation. A model with only
+  declared events keeps the unit struct.
+- **Breaking:** a public action requires no permission, so it is no longer in the permission vocabulary,
+  the seed migration or the web client's `permissions.ts` (a model that declares no `public:` is
+  unchanged).
+- A module that owns `src/application/mod.rs` or `src/application/service/mod.rs` must declare the new
+  `triggers` module and the write hooks it now needs; the generator says
+  `not written: nothing in the module tree declares it` for each file it could not place.
+
 ## [0.37.0] - 2026-10-18
 
 ### Added
