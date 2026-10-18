@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-18
+
 ### Added
 
 - Hook `triggers:` and a state's `on_enter` / `on_exit` lists are generated and run in the write's
