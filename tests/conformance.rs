@@ -556,6 +556,29 @@ fn edit(path: &Path, f: impl Fn(String) -> String) {
     fs::write(path, f(text)).unwrap();
 }
 
+/// `text` without the method `name` of an impl block: from its `async fn` to the brace that closes it.
+fn without_method(text: &str, name: &str) -> String {
+    let start = text.find(&format!("async fn {name}(")).unwrap_or_else(|| panic!("no method {name} in the extension"));
+    let start = text[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let open = start + text[start..].find('{').expect("a method body");
+    let mut depth = 0usize;
+    let mut end = open;
+    for (i, c) in text[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = open + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    format!("{}{}", &text[..start], text[end..].trim_start_matches('\n'))
+}
+
 fn grep_tree(dir: &Path, needle: &str) -> Vec<String> {
     let mut hits = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
@@ -1066,11 +1089,10 @@ fn permission_variant_probes(skeleton: &Path, fixture: &Path, rows: &mut Vec<Row
 /// and the build refusing an implementation that lacks a required method.
 fn trigger_variant_probes(skeleton: &Path, fixture: &Path, framework: Option<&Path>, rows: &mut Vec<Row>) {
     const EXT: &str = "src/application/triggers/incident_triggers.ext.rs";
-    let sweep = "    async fn scheduled__sweep_stale(&self, _ctx: &WriteCtx) -> ServiceResult<()> {\n        SWEEPS.fetch_add(1, Ordering::SeqCst);\n        Ok(())\n    }\n";
 
     // The doctor says what hand code owes the generated trait, without a build.
     let dir = tempfile::tempdir().unwrap();
-    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(EXT), |t| t.replace(sweep, "")));
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(EXT), |t| without_method(&t, "scheduled__sweep_stale")));
     let (ok, text) = doctor(&module);
     rows.push(gen_row(
         "D",
@@ -1117,8 +1139,7 @@ fn trigger_variant_probes(skeleton: &Path, fixture: &Path, framework: Option<&Pa
 
     // The compiler enforces that the declaration and the code agree: a missing method is a named build error.
     let dir = tempfile::tempdir().unwrap();
-    let page = "    async fn after_page__page_on_call(&self, ctx: &WriteCtx, e: &Incident) -> ServiceResult<()> {\n        ctx.stage(stage_row(ctx, \"OnCallPaged\", e, serde_json::json!({ \"title\": e.title }))).await\n    }\n\n";
-    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(EXT), |t| t.replace(page, "")));
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |m| edit(&m.join(EXT), |t| without_method(&t, "after_page__page_on_call")));
     patch_manifest(&module, framework);
     let jobs = std::env::var("CONFORMANCE_JOBS").unwrap_or_else(|_| "2".into());
     let mut cargo = Command::new(env!("CARGO"));
