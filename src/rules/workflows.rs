@@ -1774,6 +1774,23 @@ mod tests {
         assert_eq!(c.spec["steps"][2]["on_failure"]["next"], "close");
     }
 
+    /// The example the schema format reference gives compiles against a module that has its `User`.
+    #[test]
+    fn the_example_of_the_schema_format_reference_compiles() {
+        let doc = include_str!("../../docs/schema-format.md");
+        let start = doc.find("A workflow that runs on the engine:").expect("the example is in the reference");
+        let fence = doc[start..].find("```yaml\n").expect("a yaml fence") + start + "```yaml\n".len();
+        let end = doc[fence..].find("```").expect("the fence closes") + fence;
+        let mut s = schema_with(&doc[fence..end]);
+        s.models.push(model("User", &["email", "status"]));
+        let c = compile(&s, &s.workflows[0]);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.hand.iter().map(|h| h.verb.as_str()).collect::<Vec<_>>(), vec!["generate_token"]);
+        assert_eq!(c.functions, vec!["get_user_email".to_string()]);
+        assert!(c.arms.contains(&Arm::Query { step: "find_user".into(), entity: "User".into(), many: false }));
+        assert_eq!(c.spec["steps"][3]["key"][0]["event_field"], "user_id");
+    }
+
     #[test]
     fn a_step_timeout_bounds_its_hand_call_and_a_waits_timeout_stays_part_of_the_wait() {
         let c = compiled(&BASE.replace("params: { severity: high }", "params: { severity: high }\n    timeout: 30s"));

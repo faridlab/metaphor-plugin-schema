@@ -7,6 +7,59 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- Workflows run on `backbone-core`'s engine when the file says `config.executor: engine` (`hand` is the
+  default and keeps today's behaviour, ADR-0035). The generator reads the file as written, checks every step,
+  `next`, entity, state-machine verb, event, wait and expression, and generates
+  `src/application/workflows/<name>_workflow.rs` (the compiled spec as data, the trait `<Name>Actions` with
+  one **required** method per bespoke verb and per function listed under `functions:` and no default body,
+  and `<Name>Workflow`, the definition with typed dispatch: an entity action through the entity's generated
+  service, a `transition` through the generated machine's checks, a bespoke verb to the trait),
+  `src/application/workflows/mod.rs` (the services the dispatch writes through, `build_background_tasks`,
+  `migrate_outbox`), a new migration `<ts>_create_workflow_tables` (the instance and step tables, fenced by
+  company; stamped after the module's latest migration) and, on the module, `background_tasks()`. The
+  implementation is `<Name>ActionsImpl` in `<name>_workflow.ext.rs`, built with `Default`; a workflow whose
+  steps all have an engine meaning gets an empty one. Requires a backbone-core with `workflow`.
+- Expressions of an engine workflow are a closed set, compiled when the module is generated: paths into
+  `context`, `event`, `result`, `error`, `config` and `steps.<name>.completed`, literals and durations, the
+  comparison, logic and arithmetic operators, `??`, `?:`, `in`, `.length`, `.contains()`, `.includes()`,
+  `.starts_with()`, `.ends_with()`, indexing, `now()`, `new_uuid()`, `coalesce()` and `len()`. A call of any
+  other function fails generation unless the file lists it under `functions:`. A bare name reads the context
+  key of that name when the workflow writes it. `rules::expr::parse_dynamic` is the rule language's parser in
+  this dialect (`??`, `x[0]`, `24h`, `IN`).
+- A wait's `condition:` must be equalities `event.<field> == <context expression>` joined by `&&`; the
+  generator reads them into the key an instance is resumed by, and refuses any other shape.
+- `implemented_by: "<file>::<fn>"` on a workflow names the hand function that runs a saga the engine does
+  not; `schema doctor` fails when it does not exist.
+- `schema rules` labels a workflow `WORKFLOW RUNS (on <Event>, persisted | one transaction, executor=engine)`,
+  `WORKFLOW DOCUMENTS (<file>::<fn>)` or `WORKFLOW DOCUMENTED`, with a `WORKFLOW HAND (<method>)` line per
+  required method (all in `-f json`, under `workflows`). `schema doctor` counts the workflows, fails on a
+  missing extension file or method and on an `implemented_by` naming a function that does not exist, warns on
+  a client called inside a step, and prints the query for a stuck instance and the dead-event count.
+- The conformance module runs two engine workflows (a replayed start, a wait that resumes on the real staged
+  event and expires through the sweep, atomic steps, retries and compensation through the services, a cut run
+  that resumes, instances fenced by company) and its variants prove the refusals, the doctor's findings and
+  that an absent `executor` generates nothing.
+
+### Changed
+
+- The `flow` (`workflow`) target is no longer retired: it generates for a workflow with `executor: engine` and
+  emits nothing otherwise. The documentation-only warning of `schema validate` and `schema doctor` says what
+  would run the workflow (`executor: engine`, or `implemented_by`) and is no longer given for a workflow that
+  names its hand function.
+- `Workflow` (the AST) keeps `executor`, `implemented_by`, `functions` and the file as read; the typed tree
+  still drops what it has no field for, the engine compiler reads the file instead.
+
+### Breaking changes
+
+None for a module that sets no `config.executor`: the generated tree of accounting, buying and selling (the
+modules with a saga) is identical file for file to 0.38.0's. A file that sets `config.executor` to anything
+but `engine` or `hand`, that sets `implemented_by` beside `engine`, or that sets `engine` in a module whose
+`generators:` exclude the workflow target (sapiens lists `workflow` under `disabled:`) now fails validation.
+A module that opts in and owns its `lib.rs` or `application/mod.rs` declares `pub mod workflows;` and builds
+the engine itself; one without the extension layout cannot carry the hand methods an engine workflow needs.
+
 ## [0.38.0] - 2026-10-18
 
 ### Added

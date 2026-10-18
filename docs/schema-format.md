@@ -294,8 +294,10 @@ generators:
 
 CQRS (`cqrs: true`) and the composition layers (`layers: true`) are off by
 default too, through their own flags. Retired targets generate nothing even when
-named: `trigger`, `workflow`, `specification`, `validator` and `usecase`, and the
-`workflows:` flag. `schema validate` warns about each.
+named: `trigger`, `specification`, `validator` and `usecase`, and the `workflows:` flag.
+`schema validate` warns about each. The `workflow` target generates only for a workflow that says
+`config.executor: engine` (see [Workflow YAML Format](#workflow-yaml-format)); a module that lists it under
+`disabled:` beside such a workflow fails validation.
 
 **Cross-target side effects:**
 
@@ -876,40 +878,134 @@ Validation:
 
 ## Workflow YAML Format
 
-The `*.workflow.yaml` files document multi-step business processes following the Saga pattern.
-Nothing is generated from them: a hand-written service runs the saga, and the file names it in
-its header comment so a reader finds the code.
+A `*.workflow.yaml` file describes a business process: an event starts it, steps write through entities,
+waits pause it for an event or a timer, and compensation undoes what completed. What happens to the file
+depends on `config.executor`:
+
+| `config.executor` | What it means | What is generated |
+|---|---|---|
+| absent or `hand` | a hand-written service runs it; the file documents it | nothing. `schema validate` says it is documentation only |
+| absent or `hand`, with `implemented_by: "<file>::<fn>"` | a saga a hand service already carries out; the key names the function | nothing; `schema doctor` fails when the function does not exist |
+| `engine` | `backbone-core`'s workflow engine runs it ([ADR-0035](../../docs/handbook/adr/0035-workflow-engine.md)) | `src/application/workflows/<name>_workflow.rs`, the module's `workflows/mod.rs`, a migration for the engine's tables, and `background_tasks()` on the module |
+
+A workflow that runs on the engine:
 
 ```yaml
-workflows:
-  OrderProcessing:
-    description: "End-to-end order fulfillment"
-    steps:
-      - name: validate_order
-        action: validate
-        entity: Order
-        on_failure: abort
+name: PasswordReset
+version: 1
 
-      - name: reserve_inventory
-        action: reserve
-        entity: Inventory
-        compensation: release_inventory
+trigger:
+  event: PasswordResetRequestedEvent        # an outbox event of this type starts an instance
+  extract:                                  # context keys filled from the event
+    email: "event.email"
 
-      - name: charge_payment
-        action: charge
-        entity: Payment
-        compensation: refund_payment
+config:
+  executor: engine
+  timeout: 1h                               # the instance's deadline; passing it while waiting ends it `expired`
+  persistence: true                         # false: the whole flow in one transaction, no waits
+  retry: { max_attempts: 3, backoff: exponential }
 
-      - name: ship_order
-        action: ship
-        entity: Order
-        compensation: cancel_shipment
+functions:                                  # calls an expression may make, implemented by hand
+  - get_user_email
 
-    on_complete:
-      - send_confirmation_email
-    on_failure:
-      - notify_support
+context:
+  user: null
+
+steps:
+  - name: find_user
+    type: action
+    action: query                           # an entity action goes through the entity's generated service
+    entity: User
+    params: { email: "{{ context.email }}" }
+    on_success: { set: { user: "{{ result }}" }, next: check_active }
+    on_failure: { next: unknown_email }     # a business failure (not found, refused) is routed, not retried
+
+  - name: check_active
+    type: condition
+    conditions:
+      - if: "context.user != null && context.user.status == 'active'"
+        next: generate_token
+      - else:
+        next: unknown_email
+
+  - name: generate_token
+    type: action
+    action: generate_token                  # not an engine or entity action: a required method of <Name>Actions
+    params:
+      user_id: "{{ context.user.id }}"
+      send_to: "{{ get_user_email(context.user.id) }}"   # a function listed under `functions:`
+    on_success: { next: await_change }
+
+  - name: await_change
+    type: wait
+    wait_for:
+      event: PasswordResetCompletedEvent
+      condition: "event.user_id == context.user.id"   # equalities on the event, joined by `&&`: the wait's key
+      timeout: 1h
+    on_event:   { next: done }
+    on_timeout: { next: expired }
+
+  - { name: done,          type: terminal, status: completed }
+  - { name: unknown_email, type: terminal, status: completed }
+  - { name: expired,       type: terminal, status: expired }
+
+compensation:                               # runs, last first, when the instance fails
+  - name: log_failure
+    condition: "steps.generate_token.completed == true"
+    action: audit_log
+    params: { action: password_reset_failed }
 ```
+
+**Step types the engine runs:** `action`, `transition`, `condition`, `wait`, `terminal`. The five the AST also
+knows (`parallel`, `loop`, `subprocess`, `human_task`, `transaction_group`), a trigger by `endpoint` or
+`schedule`, and workflow-level `on_success` / `on_failure` are generation errors under `engine`; so is any key
+the engine does not read.
+
+**Actions.** Engine actions need no code: `audit_log` (a log line and the step-log row), `emit_event` (stages a
+declared event; `params: { event: <Name>, data: {..} }`), `send_email`, `notify`, `send_notification` and
+`send_sms` (stage a `NotificationRequested`). Entity actions go through the entity's generated service, so its
+guard, hooks, triggers and declared events apply: `create` (the parameters are the create DTO's fields, as the
+HTTP API names them), `update` and `delete` (named by `id:`), `find_by_id`, `query` (the first row matching the
+parameters as equality filters) and `fetch` (with `id:`, or with `filter:`, `order:` and `limit:` for all rows).
+A `transition` names the record with `id:` and a verb of the entity's machine; it makes the generated route's
+checks and is allowed only for a machine with `verbs: generated`. Anything else is a **bespoke verb**: one
+required method of the generated `<Name>Actions` trait, `async fn <verb>(&self, ctx: &WriteCtx, params:
+&Value, wf: &Value) -> ServiceResult<Value>`, implemented as `<Name>ActionsImpl` in
+`<name>_workflow.ext.rs`. The module needs the extension layout (`generators: extensions: true`).
+
+**Expressions** (conditions, `set:` values, `{{ }}` templates) are a closed set, compiled when the module is
+generated: paths into `context`, `event` (the latest event), `result` (the step's own result, in `set:`),
+`error` (the failure that was routed) and `steps.<name>.completed`; literals and durations (`15m`, `24h`,
+`30d`); `== != < <= > >=`, `&& || !`, `+ - * / %`, `??`, `a ? b : c`, `x in [..]`; `.length`, `.contains()`,
+`.includes()`, `.starts_with()`, `.ends_with()`, `x[0]`; `now()`, `new_uuid()`, `coalesce()`, `len()`. A bare
+name reads the context key of that name when the workflow writes it (under `context:`, `trigger.extract` or any
+`set:`). A call of any other function is an error unless it is listed under `functions:`, which adds a
+required method `fn_<name>(&self, ctx, args)` to the trait.
+
+**Waits** resume on the event whose payload fields equal the context values the condition names
+(`event.<field> == <context expression>`, several joined by `&&`); any other condition is an error. A wait with
+only a `timeout` is a timer. A wait names `on_event` and, with a timeout, `on_timeout`.
+
+**Failure.** A step that is refused for a reason the caller can fix (not found, validation, a violation) takes
+`on_failure.next` (and `on_failure.set`), or fails the instance. Any other failure retries (`on_failure.retry`
+and `backoff`, else `config.retry`, else three attempts with exponential backoff), then takes
+`on_failure.on_exhausted` or `.next`, else fails the instance, which compensates. `on_failure.next` can name a
+step that logs and ends. A terminal's `status` is `completed`, `failed`, `expired` or `cancelled`;
+`compensate: true` on a failed terminal runs compensation; `emit:` stages an event; `result:` is stored as
+`context.result`.
+
+**Checks at generation.** Every `next` names a step; every entity is a model of the module; every transition is
+a verb of that entity's generated machine; every event a step emits is declared under `events:` (a trigger or
+awaited event may belong to another module and only warns); an `update` or `delete` names its record. A
+workflow that cannot run fails validation naming its step. Wiring: the composing service forwards the events
+of `background_tasks().subscribed_events()` to `background_tasks().deliver` (the relay's sink), runs
+`background_tasks().timer_sweep` as the job `workflow_timer_sweep` every minute, and runs the generated
+`migrate_outbox` at startup. A module that owns its `lib.rs` or `application/mod.rs` declares
+`pub mod workflows;` and builds the engine itself with `build_background_tasks`.
+
+`schema rules` labels each workflow `WORKFLOW RUNS (on <Event>, persisted | one transaction,
+executor=engine)`, `WORKFLOW DOCUMENTS (<file>::<fn>)` or `WORKFLOW DOCUMENTED`, and lists the hand methods an
+engine workflow requires; `schema doctor` fails on a missing extension file or method.
 
 ---
 
