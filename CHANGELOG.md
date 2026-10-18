@@ -7,6 +7,36 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- The nested history route of an `audited: true` model (`create_<model>_history_route`, ADR-0025) read the
+  trail on a connection it opened itself and bound the org scope there with `bind_org_scope_on`, which
+  binds transaction-locally: on a connection in no transaction the binding was gone before the query, so a
+  trail fenced by org unit (the composition ADR-0029 describes) answered an empty history, and an `as_of`
+  answered `history_before_subject`, for every caller. The route now reads through
+  `fetch_all_rows_scoped`, on the request's own connection, as the auditlog module's history provider does,
+  and a failed read answers `history_pool_unavailable` (503) or `history_read` (500) without the database's
+  sentence. The route is generated code: a module regenerated with this release is fixed, one generated
+  before it is not. Found by the audited-history conformance probes below.
+
+### Changed
+
+- The conformance fixture composes `backbone-auditlog` (`METAPHOR_AUDITLOG_PATH`, default
+  `../modules/backbone-auditlog`): its migrations run before the module's, the tenancy decorator's org
+  policy is installed on the trail as a stand-in, its history provider is mounted, and a new `Ledger` model
+  (`audited: true`, org-fenced, one write-guard rule) is driven over HTTP. The one `UNSUPPORTED` row of the
+  matrix is now proven: a create, update, soft delete and purge each record a trail row with the actor, the
+  correlation id and the row's org unit; both history surfaces list them newest first; `as_of`
+  reconstruction answers the earlier and later state, `history_before_subject` and
+  `subject_deleted_before_as_of`; another company's token reads nothing; and a write refused by the guard, a
+  field rule, the permission guard or the fence, or rolled back, leaves no trail row.
+- The conformance run proves that every kind of bad list parameter is refused naming it (filter columns,
+  operators, values, sorts, paging, cursors, `fields`, `include`, aggregates, the trash and the count), and
+  that the `NotificationRequested` rows a trigger stages reach a registered delivery once each, are deduped
+  on replay, die after the retry limit on `Retry` and at once on `Reject` (needs a backbone-core with
+  `notification` and `QueryParamError`).
+
+
 ## [0.39.0] - 2026-10-18
 
 ### Added
