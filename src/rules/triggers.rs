@@ -19,6 +19,8 @@
 //!   after_login:                         # after_<word> naming no transition: hand-fired
 //!   sweep_stale:                         # a free name with `schedule:`
 //!     schedule: "every 5.minutes"
+//!     posture: pull                      # optional, as `scheduled_jobs:` (ADR-0020)
+//!     pickup_lock: true
 //! states:
 //!   values:
 //!     running:
@@ -155,6 +157,10 @@ pub struct DeclaredTrigger {
     pub condition: Option<String>,
     /// `schedule:`, as written.
     pub schedule: Option<String>,
+    /// `posture:`, `commit_policy:` and `pickup_lock:` of a scheduled entry (ADR-0020), as written.
+    pub posture: Option<String>,
+    pub commit_policy: Option<String>,
+    pub pickup_lock: bool,
     pub description: Option<String>,
     /// The action strings, as written.
     pub actions: Vec<String>,
@@ -213,6 +219,9 @@ pub fn read_triggers(
                 timing: text(body, "timing"),
                 condition: text(body, "if").or_else(|| text(body, "condition")),
                 schedule: text(body, "schedule"),
+                posture: text(body, "posture"),
+                commit_policy: text(body, "commit_policy"),
+                pickup_lock: matches!(get(body, "pickup_lock"), Some(Value::Bool(true))),
                 description: text(body, "description"),
                 actions: actions_of(get(body, "actions")),
                 state_list: None,
@@ -265,6 +274,9 @@ pub fn read_triggers(
                     timing: None,
                     condition: None,
                     schedule: None,
+                    posture: None,
+                    commit_policy: None,
+                    pickup_lock: false,
                     description: None,
                     actions,
                     state_list: Some(make(state.clone())),
@@ -756,6 +768,17 @@ fn resolve_when(
     if t.schedule.is_some() {
         if t.schedule.as_deref().is_some_and(|s| s.trim().is_empty()) {
             problems.push(format!("trigger `{at}` has an empty `schedule:`"));
+        }
+        for (key, value) in [("posture", &t.posture), ("commit_policy", &t.commit_policy)] {
+            let Some(v) = value else { continue };
+            let known = if key == "posture" {
+                serde_yaml::from_str::<crate::ast::JobPosture>(v).is_ok()
+            } else {
+                serde_yaml::from_str::<crate::ast::CommitPolicy>(v).is_ok()
+            };
+            if !known {
+                problems.push(format!("trigger `{at}` has `{key}: {v}`, which is not a {key} of a scheduled job (ADR-0020)"));
+            }
         }
         return (Some(TriggerWhen::Scheduled), problems);
     }

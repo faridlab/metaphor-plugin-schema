@@ -513,6 +513,7 @@ pub fn model_write_hooks(
         writeln!(out).unwrap();
     }
     if !trig.before.is_empty() {
+        writeln!(out, "    #[allow(unused_variables, unused_assignments)]").unwrap();
         writeln!(
             out,
             "    async fn before(&self, write: &WriteCtx, change: &mut Change<'_, {name}>) -> ServiceResult<()> {{"
@@ -548,6 +549,9 @@ pub fn model_write_hooks(
         writeln!(out, "        .await").unwrap();
         writeln!(out, "    }}").unwrap();
         writeln!(out).unwrap();
+    }
+    if has_triggers {
+        writeln!(out, "    #[allow(unused_variables, unused_assignments)]").unwrap();
     }
     writeln!(
         out,

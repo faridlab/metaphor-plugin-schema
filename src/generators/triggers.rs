@@ -178,11 +178,14 @@ pub fn trait_file(schema: &ModuleSchema, model: &Model) -> Option<String> {
         writeln!(out, "//! Every action of {name}'s triggers compiles, so nothing is left for hand code: `{name}TriggersImpl` is empty.").unwrap();
     } else {
         writeln!(out, "//!").unwrap();
-        writeln!(out, "//! Implement it in `{snake}_triggers.ext.rs`, beside this file; the module declares it when it exists:").unwrap();
+        writeln!(out, "//! Implement it in `{snake}_triggers.ext.rs`, beside this file; the module declares it when it exists. The").unwrap();
+        writeln!(out, "//! generated service builder makes it with `Default`; state it needs from the module (another service) is bound").unwrap();
+        writeln!(out, "//! in the module's build step (`lib.ext.rs`):").unwrap();
         writeln!(out, "//!").unwrap();
         writeln!(out, "//! ```ignore").unwrap();
         writeln!(out, "//! use super::*;").unwrap();
         writeln!(out, "//!").unwrap();
+        writeln!(out, "//! #[derive(Default)]").unwrap();
         writeln!(out, "//! pub struct {name}TriggersImpl;").unwrap();
         writeln!(out, "//!").unwrap();
         writeln!(out, "//! #[async_trait]").unwrap();
@@ -210,6 +213,8 @@ pub fn trait_file(schema: &ModuleSchema, model: &Model) -> Option<String> {
     writeln!(out, "use crate::domain::entity::{name};").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "/// The actions of {name}'s triggers that only Rust can perform, one required method each.").unwrap();
+    // Method names are `<key>__<action>`: the double underscore keeps the trigger and the action readable.
+    writeln!(out, "#[allow(non_snake_case)]").unwrap();
     writeln!(out, "#[async_trait]").unwrap();
     writeln!(out, "pub trait {name}Triggers: Send + Sync {{").unwrap();
     for (i, m) in methods.iter().enumerate() {
@@ -236,6 +241,7 @@ pub fn trait_file(schema: &ModuleSchema, model: &Model) -> Option<String> {
     if methods.is_empty() {
         writeln!(out).unwrap();
         writeln!(out, "/// The triggers of {name} need no hand code.").unwrap();
+        writeln!(out, "#[derive(Default)]").unwrap();
         writeln!(out, "pub struct {name}TriggersImpl;").unwrap();
         writeln!(out).unwrap();
         writeln!(out, "#[async_trait]").unwrap();
@@ -273,7 +279,7 @@ pub fn trait_file(schema: &ModuleSchema, model: &Model) -> Option<String> {
         writeln!(out, "pub async fn run_{snake}_scheduled(hand: &dyn {name}Triggers, name: &str) -> ServiceResult<bool> {{").unwrap();
         writeln!(
             out,
-            "    let ctx = WriteCtx::current({:?});",
+            "    let ctx = WriteCtx::current(Some({:?}));",
             super::declared_events::outbox_schema_of(model)
         )
         .unwrap();
@@ -548,12 +554,8 @@ fn trigger_block(
     let when = t.when.clone().expect("a resolved trigger");
     let label = format!("{model}.{}", t.key);
     let call = HandCall { when: when.clone() };
-    let mut out = String::new();
-    writeln!(out, "// `{}`: {} ({})", t.key, when.text(), t.source).unwrap();
-    if refresh {
-        writeln!(out, "{{").unwrap();
-        writeln!(out, "    {REFRESH_ROW}").unwrap();
-    }
+    let mut inner = String::new();
+    writeln!(inner, "// `{}`: {} ({})", t.key, when.text(), t.source).unwrap();
     let mut guard = if in_change {
         fires(&when)
     } else {
@@ -566,14 +568,25 @@ fn trigger_block(
             format!("{guard} && r::holds(&{cond})")
         };
     }
-    writeln!(out, "if {guard} {{").unwrap();
+    writeln!(inner, "if {guard} {{").unwrap();
     for step in &c.steps {
-        writeln!(out, "{}", indent(&step_code(step, &label, &call, model), 4)).unwrap();
+        writeln!(
+            inner,
+            "{}",
+            indent(&step_code(step, &label, &call, model), 4)
+        )
+        .unwrap();
     }
+    writeln!(inner, "}}").unwrap();
+    if !refresh {
+        return inner;
+    }
+    // A block of its own, so the row each trigger reads is read afresh after the ones before it.
+    let mut out = String::new();
+    writeln!(out, "{{").unwrap();
+    writeln!(out, "    {REFRESH_ROW}").unwrap();
+    writeln!(out, "{}", indent(inner.trim_end(), 4)).unwrap();
     writeln!(out, "}}").unwrap();
-    if refresh {
-        writeln!(out, "}}").unwrap();
-    }
     out
 }
 
@@ -612,7 +625,7 @@ pub fn hook_code(schema: &ModuleSchema, model: &Model) -> HookCode {
             Some(Phase::After) => writeln!(
                 after,
                 "{}",
-                indent(&trigger_block(t, c, name, true, false), 8)
+                indent(&trigger_block(t, c, name, true, false), 12)
             )
             .unwrap(),
             None if when == TriggerWhen::HandFired => {
@@ -621,6 +634,11 @@ pub fn hook_code(schema: &ModuleSchema, model: &Model) -> HookCode {
                 writeln!(fires_code).unwrap();
                 writeln!(fires_code, "    /// Run `{}` ({}): called by the hand verb that is its moment, inside the verb's transaction,", t.key, t.source).unwrap();
                 writeln!(fires_code, "    /// with the row as it now stands.").unwrap();
+                writeln!(
+                    fires_code,
+                    "    #[allow(unused_variables, unused_assignments)]"
+                )
+                .unwrap();
                 writeln!(fires_code, "    pub async fn {f}(&self, write: &WriteCtx, subject: &{name}) -> ServiceResult<()> {{").unwrap();
                 writeln!(fires_code, "        use backbone_core::row_rule as r;").unwrap();
                 writeln!(
@@ -725,10 +743,16 @@ pub fn scheduled_jobs(schema: &mut ModuleSchema) {
                     "application::triggers::{snake}_triggers::run_{snake}_scheduled({:?})",
                     crate::rules::trigger_compile::ident(&t.key)
                 ),
-                posture: None,
+                posture: t
+                    .posture
+                    .as_deref()
+                    .and_then(|p| serde_yaml::from_str(p).ok()),
                 triggers: Vec::new(),
-                commit_policy: None,
-                pickup_lock: false,
+                commit_policy: t
+                    .commit_policy
+                    .as_deref()
+                    .and_then(|p| serde_yaml::from_str(p).ok()),
+                pickup_lock: t.pickup_lock,
             })
         })
         .collect();
@@ -808,6 +832,10 @@ mod tests {
         assert!(
             !file.contains("-> ServiceResult<()> {\n"),
             "no method has a default body"
+        );
+        assert!(
+            file.contains("#[allow(non_snake_case)]\n#[async_trait]\npub trait TicketTriggers"),
+            "the `<key>__<action>` names must not warn"
         );
     }
 
