@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-18
+
 ### Added
 
 - Declared events can be staged by the generated code. An `events:` entry (in a hook file, the
