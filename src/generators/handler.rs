@@ -957,12 +957,16 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
         let model_snake = to_snake_case(&model.name);
         let model_plural = pluralize(&model_snake);
         // A model with secrets answers every arm as JSON through `without_secrets`, since its
-        // response DTO still carries them; the arms must agree on one body type.
+        // response DTO still carries them; the arms must agree on one body type. A model with a
+        // permission-gated field needs the caller's grants for the redaction, so its arms answer
+        // through `without_secrets_for` with the `auth` the check above already required.
         let has_secrets = model
             .fields
             .iter()
             .any(|f| f.has_attribute("sensitive") || f.has_attribute("hashed"));
-        let body_type = if has_secrets { "serde_json::Value".to_string() } else { format!("{}ResponseDto", model.name) };
+        let has_gated = model.fields.iter().any(|f| f.requires.is_some());
+        let body_type =
+            if has_secrets || has_gated { "serde_json::Value".to_string() } else { format!("{}ResponseDto", model.name) };
 
         writeln!(
             output,
@@ -1201,7 +1205,14 @@ pub fn create_{snake}_history_route(pool: sqlx::PgPool) -> axum::Router {{
                 model.name
             )
             .unwrap();
-            if has_secrets {
+            if has_gated {
+                writeln!(
+                    output,
+                    "            (StatusCode::OK, Json(ApiResponse::ok(backbone_core::http::without_secrets_for::<{}, _>(&auth, response))))",
+                    model.name
+                )
+                .unwrap();
+            } else if has_secrets {
                 writeln!(
                     output,
                     "            (StatusCode::OK, Json(ApiResponse::ok(backbone_core::http::without_secrets::<{}, _>(response))))",
@@ -1529,6 +1540,25 @@ mod tests {
         let plain = Model { name: "Ticket".into(), fields: vec![state()], ..Default::default() };
         let out = render(&plain);
         assert!(!out.contains("without_secrets") && out.contains("ApiResponse::<TicketResponseDto>::not_found"), "unchanged output without secrets");
+    }
+
+    /// A model with a permission-gated field answers its transitions through the caller-aware
+    /// seam, so the redaction follows the grants the check already read.
+    #[test]
+    fn a_transition_of_a_model_with_a_gated_field_answers_through_the_caller_aware_seam() {
+        use crate::ast::hook::{StateMachine, Transition};
+        let sm = StateMachine {
+            field: "status".to_string(),
+            transitions: vec![Transition { name: "revoke".into(), from: vec!["active".into()], to: "revoked".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut gated = Field { name: "status".into(), type_ref: TypeRef::Custom("DealStatus".into()), ..Default::default() };
+        gated.requires = Some("deal:read_bid".into());
+        let model = Model { name: "Deal".into(), fields: vec![gated], ..Default::default() };
+        let mut out = String::new();
+        HandlerGenerator::new().write_transition_handlers(&mut out, &model, "DealState", &sm, None).unwrap();
+        assert!(out.contains("backbone_core::http::without_secrets_for::<Deal, _>(&auth, response)"), "{out}");
+        assert!(out.contains("ApiResponse::<serde_json::Value>::not_found"), "every arm answers the same type");
     }
 
     /// A refused transition answers with the framework's error envelope: a violation on the

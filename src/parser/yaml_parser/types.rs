@@ -226,6 +226,10 @@ pub enum YamlField {
         /// Lifecycle declaration (ADR-0016) — string or full map form
         #[serde(default)]
         lifecycle: Option<YamlLifecycle>,
+        /// The permission a caller must hold to see and set this field (`<resource>:<action>`),
+        /// as `requires:` on the field. `None` = no gate.
+        #[serde(default)]
+        requires: Option<String>,
     },
 }
 

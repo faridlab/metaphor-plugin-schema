@@ -108,6 +108,20 @@ impl EntitySchemaGenerator {
         model.write_protected_fields().into_iter().map(str::to_string).collect()
     }
 
+    /// The permission-gated fields of `entity` (`requires:` on the field), as
+    /// `(response key, permission)` — the same pairs the Rust entity's `field_permissions()`
+    /// carries, from the same canonicalisation. A caller without the permission reads `null` and
+    /// may not set the field, so a screen hides or disables both.
+    fn field_permissions(&self, entity: &EntityDefinition) -> Vec<(String, String)> {
+        let Some(schema) = self.module_schema() else { return Vec::new() };
+        crate::rbac::Rbac::new(schema)
+            .field_permissions()
+            .into_iter()
+            .filter(|g| g.model == entity.name)
+            .map(|g| (g.key, g.permission))
+            .collect()
+    }
+
     /// The write guard's field checks for `entity`, by field.
     fn guard_checks(&self, entity: &EntityDefinition) -> std::collections::HashMap<String, Vec<crate::rules::fields::BrowserCheck>> {
         let module = self.module_schema();
@@ -224,6 +238,22 @@ impl EntitySchemaGenerator {
             let list = moved.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
             lifecycle.push_str(&format!(
                 "\n/**\n * The fields a state machine moves. Only its verbs change them: the service refuses a\n * generic write that does, so no generic edit offers them.\n */\nexport const {camel}StateFields = [{list}] as const;\n"
+            ));
+        }
+
+        // The permission-gated fields: the same pairs the Rust entity's `field_permissions()`
+        // carries. A caller whose grants lack the permission reads `null` for the field and may
+        // not set it, so a screen hides the column and disables the input without asking.
+        let gated = self.field_permissions(entity);
+        if !gated.is_empty() {
+            let camel = to_camel_case(&entity.name);
+            let pairs = gated
+                .iter()
+                .map(|(key, permission)| format!("  {key}: \"{permission}\""))
+                .collect::<Vec<_>>()
+                .join(",\n");
+            lifecycle.push_str(&format!(
+                "\n/**\n * The fields a permission gates (the schema's `requires:` on the field): the response key, and\n * the permission a caller must hold to read a value and to set it. Anyone else reads `null` (the key\n * stays) and a write naming the field is refused, so gate the column and the input on the\n * permission — `/auth/me` returns the caller's.\n */\nexport const {camel}FieldPermissions = {{\n{pairs}\n}} as const;\n"
             ));
         }
 
@@ -1573,6 +1603,74 @@ mod tests {
             export("Widget").unwrap()
         );
         assert!(!entity_file.contains("\"owner\"") && !entity_file.contains("\"company\""));
+    }
+
+    /// The webapp's `<entity>FieldPermissions` and the Rust entity's `field_permissions()` carry
+    /// the same pairs, from the same schema declaration: a screen gates the column and the input
+    /// on the permission the server checks.
+    #[test]
+    fn the_webapp_lists_the_fields_a_permission_gates_as_the_rust_entity_does() {
+        use crate::generators::Generator as _;
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models");
+        fs::create_dir_all(&models).unwrap();
+        let file = models.join("widget.model.yaml");
+        fs::write(
+            &file,
+            r#"schema: work
+models:
+  - name: Widget
+    collection: widgets
+    fields:
+      id:
+        type: uuid
+        attributes: ["@id", "@default(uuid)"]
+      name:
+        type: string
+      base_cost:
+        type: decimal?
+        requires: "widget:read_cost"
+"#,
+        )
+        .unwrap();
+        let config = Config::new("test_module")
+            .with_output_dir(dir.path())
+            .with_schema_dir(Some(dir.path().to_path_buf()))
+            .with_dry_run(true);
+        let parsed = crate::webgen::parser::ModelParser::parse_file(&file).unwrap();
+        let generator = EntitySchemaGenerator::new(config, TypeMapper::new());
+        let widget = parsed.models.iter().find(|m| m.name == "Widget").unwrap();
+        let content = generator.generate_schema_content(widget, &parsed.enums, None);
+        assert!(
+            content.contains("export const widgetFieldPermissions = {\n  baseCost: \"widget:read_cost\"\n} as const;"),
+            "{content}"
+        );
+
+        // The Rust entity's `field_permissions()` carries the same pairs, from the same source.
+        let module = generator.module_schema().unwrap().clone();
+        let rust = crate::generators::rust::RustGenerator::new()
+            .generate(&crate::resolver::ResolvedSchema { schema: module })
+            .unwrap();
+        let entity_file = rust
+            .files
+            .get(&std::path::PathBuf::from("src/domain/entity/widget.rs"))
+            .expect("widget.rs");
+        assert!(
+            entity_file.contains("fn field_permissions() -> &'static [(&'static str, &'static str)] {\n        &[(\"baseCost\", \"widget:read_cost\")]"),
+            "{entity_file}"
+        );
+
+        // An entity with no gated field exports nothing, and overrides nothing.
+        let plain = EntityDefinition {
+            name: "Gadget".to_string(),
+            collection: "gadgets".to_string(),
+            fields: vec![described("name", None)],
+            relations: vec![],
+            indexes: vec![],
+            soft_delete: false,
+        };
+        let plain_content = generator.generate_schema_content(&plain, &[], None);
+        assert!(!plain_content.contains("FieldPermissions"), "{plain_content}");
     }
 
     #[test]

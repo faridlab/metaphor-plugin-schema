@@ -86,6 +86,7 @@ fn test_entity_template_emits_no_serial_name_annotations() {
                     span: Default::default(),
                 }],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
             Field {
@@ -93,6 +94,7 @@ fn test_entity_template_emits_no_serial_name_annotations() {
                 type_ref: TypeRef::Primitive(PrimitiveType::String),
                 attributes: vec![],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
             Field {
@@ -100,6 +102,7 @@ fn test_entity_template_emits_no_serial_name_annotations() {
                 type_ref: TypeRef::Primitive(PrimitiveType::String),
                 attributes: vec![],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
             Field {
@@ -107,6 +110,7 @@ fn test_entity_template_emits_no_serial_name_annotations() {
                 type_ref: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::String))),
                 attributes: vec![],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
         ],
@@ -163,6 +167,7 @@ fn test_entity_template_no_annotation_for_matching_names() {
                     span: Default::default(),
                 }],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
             Field {
@@ -170,6 +175,7 @@ fn test_entity_template_no_annotation_for_matching_names() {
                 type_ref: TypeRef::Primitive(PrimitiveType::String),
                 attributes: vec![],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
             Field {
@@ -177,6 +183,7 @@ fn test_entity_template_no_annotation_for_matching_names() {
                 type_ref: TypeRef::Primitive(PrimitiveType::String),
                 attributes: vec![],
                 lifecycle: None,
+                requires: None,
                 span: Default::default(),
             },
         ],

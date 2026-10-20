@@ -503,6 +503,18 @@ fn print_permissions(schema: &crate::ast::ModuleSchema, mode: super::permissions
             println!("  {}  {} {}  {kind}: {}", model.bold(), "PERMISSION REQUIRED".green(), r.permission, r.what);
         }
     }
+    // The fields a permission gates: redacted to null, refused as a column, refused as a write,
+    // for a caller who does not hold it.
+    for gate in rbac.field_permissions() {
+        println!(
+            "  {}  {} {}  field {} (`{}`): redacted to null, no filter/sort/search/aggregate, no write, without it",
+            gate.model.bold(),
+            "FIELD REQUIRES".green(),
+            gate.permission,
+            gate.key,
+            gate.field
+        );
+    }
     let roles = rbac.system_roles();
     if !roles.is_empty() {
         println!("  system roles seeded: {}", roles.iter().map(|r| format!("{} ({} grant(s))", r.name, r.permissions.len())).collect::<Vec<_>>().join(", "));
@@ -533,6 +545,13 @@ fn permissions_json(schema: &crate::ast::ModuleSchema, mode: super::permissions_
                 crate::rbac::RouteKind::Transition => "transition".to_string(),
                 crate::rbac::RouteKind::HandVerb => "hand_verb".to_string(),
             },
+        })).collect::<Vec<_>>(),
+        "field_permissions": rbac.field_permissions().iter().map(|g| serde_json::json!({
+            "model": g.model,
+            "field": g.field,
+            "key": g.key,
+            "permission": g.permission,
+            "label": format!("FIELD REQUIRES {}", g.permission),
         })).collect::<Vec<_>>(),
         "vocabulary": rbac.vocabulary().into_iter().collect::<Vec<_>>(),
         "system_roles": rbac.system_roles().iter().map(|r| serde_json::json!({

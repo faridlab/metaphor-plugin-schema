@@ -1818,6 +1818,31 @@ impl RustGenerator {
             writeln!(output, "    }}").unwrap();
         }
 
+        // field_permissions() — only override when a field declares `requires:`: the response key
+        // (camelCase) with the permission a caller must hold to see and set it, canonicalised the
+        // way the register and the seed read it. The serialization seam redacts the value to null
+        // for a caller without the permission, on this entity's rows and on the rows an
+        // `?include=` of this table expands.
+        let gated: Vec<(String, String)> = crate::rbac::Rbac::new(module)
+            .field_permissions()
+            .into_iter()
+            .filter(|g| g.model == model.name)
+            .map(|g| (g.key, g.permission))
+            .collect();
+        if !gated.is_empty() {
+            let joined: Vec<String> = gated
+                .iter()
+                .map(|(key, permission)| format!("(\"{key}\", \"{permission}\")"))
+                .collect();
+            writeln!(
+                output,
+                "    fn field_permissions() -> &'static [(&'static str, &'static str)] {{"
+            )
+            .unwrap();
+            writeln!(output, "        &[{}]", joined.join(", ")).unwrap();
+            writeln!(output, "    }}").unwrap();
+        }
+
         // relations() — only override when the model has includable to-one relations.
         if !relations.is_empty() {
             let joined: Vec<String> = relations

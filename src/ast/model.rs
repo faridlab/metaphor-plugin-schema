@@ -247,6 +247,13 @@ pub struct Field {
     /// structural validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<Lifecycle>,
+    /// `requires:` — the permission a caller must hold to see and set this field, as written in
+    /// the schema ([`crate::rbac`] canonicalises and validates it). `None` = no gate. The value
+    /// is redacted to `null` for a caller without the permission, on this entity's own rows and
+    /// on the rows an `?include=` expands; a list request may not filter, sort, search or
+    /// aggregate over it, and a write that sets it is refused, both naming the permission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
@@ -345,6 +352,7 @@ impl Field {
             type_ref,
             attributes: Vec::new(),
             lifecycle: None,
+            requires: None,
             span: Span::default(),
         }
     }

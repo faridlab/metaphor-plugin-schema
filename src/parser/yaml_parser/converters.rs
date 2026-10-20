@@ -500,6 +500,7 @@ impl YamlField {
                 attributes,
                 description,
                 lifecycle,
+                requires,
             } => {
                 let (type_ref, mut attrs) = parse_type_string(&field_type);
                 // Parse additional attributes
@@ -515,6 +516,7 @@ impl YamlField {
                 }
                 let mut field = Field::new(name, type_ref);
                 field.attributes = attrs;
+                field.requires = requires;
                 // ADR-0016: carry the lifecycle declaration; an unknown shape
                 // name is a named error, not a silent default.
                 if let Some(decl) = lifecycle {

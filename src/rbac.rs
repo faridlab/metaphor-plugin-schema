@@ -229,6 +229,21 @@ pub struct SystemRole {
     pub permissions: Vec<String>,
 }
 
+/// One field a permission gates (a field's `requires:`): the field is redacted to `null` for a
+/// caller who does not hold the permission, may not be a column of their list requests, and may
+/// not be set by their writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldPermission {
+    /// The model (`Employee`).
+    pub model: String,
+    /// The field as the schema names it (`base_salary`).
+    pub field: String,
+    /// The field's response key (`baseSalary`), as the generated entity emits the gate.
+    pub key: String,
+    /// The canonical permission (`employee:read_confidential`).
+    pub permission: String,
+}
+
 /// A permission the seed writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedPermission {
@@ -370,6 +385,34 @@ impl<'a> Rbac<'a> {
                     scoped: model.public_scoped,
                 })
             })
+            .collect()
+    }
+
+    /// The permission a transition or hand verb of `model` requires.
+    /// Every field a `requires:` gates, canonical. A field whose `requires:` does not parse as a
+    /// permission is left out ([`Self::problems`] names it).
+    pub fn field_permissions(&self) -> Vec<FieldPermission> {
+        self.schema
+            .models
+            .iter()
+            .filter_map(|model| {
+                let gated: Vec<FieldPermission> = model
+                    .fields
+                    .iter()
+                    .filter_map(|f| {
+                        let raw = f.requires.as_deref()?;
+                        let permission = self.canonical(raw).map(|c| c.permission)?;
+                        Some(FieldPermission {
+                            model: model.name.clone(),
+                            field: f.name.clone(),
+                            key: crate::webgen::parser::to_camel_case(&f.name),
+                            permission,
+                        })
+                    })
+                    .collect();
+                (!gated.is_empty()).then_some(gated)
+            })
+            .flatten()
             .collect()
     }
 
@@ -569,6 +612,18 @@ impl<'a> Rbac<'a> {
                     }
                 }
             }
+            for field in &model.fields {
+                let Some(raw) = &field.requires else { continue };
+                if let Some(c) = self.canonical(raw) {
+                    if c.spelling != Spelling::Canonical {
+                        out.push((
+                            format!("`{}`.{} requires", model.name, field.name),
+                            raw.clone(),
+                            c.permission,
+                        ));
+                    }
+                }
+            }
         }
         for machine in &self.schema.rule_register.machines {
             for t in &machine.transitions {
@@ -708,14 +763,49 @@ impl<'a> Rbac<'a> {
                 }
             }
         }
+        // A field's `requires:` names the permission that unlocks seeing and setting it. It must
+        // be a permission the vocabulary holds (declared, or implied by a route), and a field
+        // that is also a secret is a schema bug: a secret is never served, so no permission
+        // could widen it.
+        for model in &self.schema.models {
+            for field in &model.fields {
+                let Some(raw) = &field.requires else { continue };
+                if field.has_attribute("sensitive") || field.has_attribute("hashed") {
+                    out.push(fatal(format!(
+                        "`{}`.{} is both a secret (`@sensitive`/`@hashed`) and `requires: {raw}`: a secret is served to no caller, so no permission can widen it — drop one",
+                        model.name, field.name
+                    )));
+                    continue;
+                }
+                match self.canonical(raw) {
+                    None => out.push(fatal(format!(
+                        "`{}`.{} requires `{raw}`, which is no permission (write `<resource>:<action>`)",
+                        model.name, field.name
+                    ))),
+                    Some(c) if !declared.contains(&c.permission) && !implied.contains(&c.permission) => {
+                        out.push(fatal(format!(
+                            "`{}`.{} requires `{}`, which the authorization permissions do not declare",
+                            model.name, field.name, c.permission
+                        )))
+                    }
+                    _ => {}
+                }
+            }
+        }
         out
     }
 
-    /// Declared names no generic route, transition or system role uses: a hand verb must guard with
-    /// them, or they are dead vocabulary. `schema doctor` drops the ones hand code names.
+    /// Declared names no generic route, transition, gated field or system role uses: a hand verb
+    /// must guard with them, or they are dead vocabulary. `schema doctor` drops the ones hand
+    /// code names.
     pub fn unused_declared(&self) -> Vec<String> {
         let required: BTreeSet<String> =
             self.required().into_iter().map(|r| r.permission).collect();
+        let gated: BTreeSet<String> = self
+            .field_permissions()
+            .into_iter()
+            .map(|g| g.permission)
+            .collect();
         let granted: BTreeSet<String> = self
             .system_roles()
             .into_iter()
@@ -723,7 +813,7 @@ impl<'a> Rbac<'a> {
             .collect();
         self.declared()
             .into_iter()
-            .filter(|d| !required.contains(d) && !granted.contains(d))
+            .filter(|d| !required.contains(d) && !gated.contains(d) && !granted.contains(d))
             .collect()
     }
 
@@ -1185,5 +1275,68 @@ mod tests {
     fn the_digest_is_stable() {
         assert_eq!(digest("x"), digest("x"));
         assert_ne!(digest("x"), digest("y"));
+    }
+
+    fn gated_field(name: &str, requires: &str, secret: bool) -> crate::ast::Field {
+        use crate::ast::{Field, PrimitiveType, TypeRef};
+        let mut f = Field::new(name, TypeRef::Primitive(PrimitiveType::Decimal));
+        if secret {
+            f.attributes.push(crate::ast::Attribute::new("sensitive"));
+        }
+        f.requires = Some(requires.into());
+        f
+    }
+
+    #[test]
+    fn a_fields_requires_is_canonicalised_and_counts_as_a_use_of_the_vocabulary() {
+        let mut s = schema();
+        let mut auth = AuthorizationConfig::default();
+        auth.permissions
+            .insert("ticket".into(), vec!["read_cost".into()]);
+        s.authorization = Some(auth);
+        s.models[0]
+            .fields
+            .push(gated_field("base_salary", "tickets.read_cost", false));
+        let r = Rbac::new(&s);
+        assert_eq!(
+            r.field_permissions(),
+            vec![FieldPermission {
+                model: "Ticket".into(),
+                field: "base_salary".into(),
+                key: "baseSalary".into(),
+                permission: "ticket:read_cost".into(),
+            }],
+            "the dotted spelling is canonicalised and the key is the response key"
+        );
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        assert!(
+            r.unused_declared().is_empty(),
+            "a permission a field requires is used vocabulary: {:?}",
+            r.unused_declared()
+        );
+    }
+
+    #[test]
+    fn a_fields_requires_must_name_a_declared_permission_and_may_not_gate_a_secret() {
+        let mut s = schema();
+        s.models[0]
+            .fields
+            .push(gated_field("base_salary", "ticket:read_cost", false));
+        s.models[0]
+            .fields
+            .push(gated_field("token_hash", "ticket:read_token", true));
+        let problems = Rbac::new(&s).problems();
+        assert!(
+            problems.iter().any(|p| p.message.contains(
+                "`Ticket`.base_salary requires `ticket:read_cost`, which the authorization permissions do not declare"
+            )),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("`Ticket`.token_hash is both a secret")),
+            "{problems:?}"
+        );
     }
 }

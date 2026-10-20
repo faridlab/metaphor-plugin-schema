@@ -228,6 +228,7 @@ mod tests {
                 attributes: vec!["@foreign_key(sapiens.User.id)".to_string()],
                 description: None,
                 lifecycle: None,
+                requires: None,
             },
         );
         // A phantom on a shared type — the case that would otherwise slip through.
@@ -238,6 +239,7 @@ mod tests {
                 attributes: vec!["@foreign_key(ghost.Reviewer.id)".to_string()],
                 description: None,
                 lifecycle: None,
+                requires: None,
             },
         );
         let mut schema = ModuleSchema::new("selling");

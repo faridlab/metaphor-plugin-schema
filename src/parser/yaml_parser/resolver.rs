@@ -37,6 +37,7 @@ pub fn resolve_shared_types(
                         ],
                         description: Some("Audit metadata (created_at, updated_at, deleted_at, created_by, updated_by, deleted_by)".to_string()),
                         lifecycle: None,
+                    requires: None,
                     },
                 );
                 resolved.insert(name.clone(), metadata_field);

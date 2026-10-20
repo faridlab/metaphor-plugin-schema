@@ -337,6 +337,7 @@ models:
             attributes: vec!["@default(now)".to_string()],
             description: None,
             lifecycle: None,
+        requires: None,
         },
     );
     metadata_fields.insert(
@@ -392,6 +393,7 @@ fn test_yaml_field_get_type_name() {
         attributes: vec![],
         description: None,
         lifecycle: None,
+    requires: None,
     };
     assert_eq!(field.get_type_name(), Some("Address".to_string()));
 }

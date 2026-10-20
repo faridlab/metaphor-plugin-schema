@@ -7,6 +7,22 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- **`requires:` on a field** (field-level permissions, ADR-0033 second amendment): a field may name the
+  permission a caller must hold to see and set it (`base_salary: { type: decimal?, requires:
+  "employee:read_confidential" }`), the same spelling `requires:` already uses on models and transitions.
+  One spelling; there is no per-model block form. The generator emits the gate as the entity's
+  `EntityRepoMeta::field_permissions()` (camelCase response key, canonical permission) from the same
+  source as everything else, and the webapp entity schema exports the same pairs as
+  `<Entity>FieldPermissions` (`export const employeeFieldPermissions = { baseSalary:
+  "employee:read_confidential" } as const;`) so a screen hides the column and disables the input on the
+  permission. `schema rules` labels each gated field `FIELD REQUIRES <permission>` (text and `-f json`).
+  `schema doctor` fails on a field whose `requires:` names a permission the vocabulary does not declare,
+  and on a field that is both `@sensitive`/`@hashed` and gated (a secret is served to no caller, so no
+  permission could widen it); a permission a field requires counts as used vocabulary, and the permission
+  seed writes it like any other.
+
 ## [0.41.0] - 2026-10-19
 
 ### Added
