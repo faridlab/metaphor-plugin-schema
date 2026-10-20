@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-21
+
 ### Added
 
 - **Schema-declared search fields**: a model may declare the whole `?search=` field list with
