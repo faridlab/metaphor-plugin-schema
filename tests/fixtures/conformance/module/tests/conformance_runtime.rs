@@ -241,7 +241,8 @@ impl TenantRuntimeFactory for Factory {
 }
 
 /// The default stack's `AuthContext`: what a host with no grant resolver installed produces from its
-/// own authentication (`admin-*` holds `*:*`, `reader-*` holds `ticket:read`, anyone else nothing).
+/// own authentication (`admin-*` holds `*:*`, `reader-*` holds `ticket:read`, `bidder-*` reads and
+/// holds `project:read_bid`, `editor-*` reads and writes projects without it, anyone else nothing).
 /// Every probe outside area I runs behind it, so the generic-route probes run fail-closed: a caller
 /// holding no permission is refused.
 async fn auth_bridge(mut req: Request, next: Next) -> Response {
@@ -250,6 +251,19 @@ async fn auth_bridge(mut req: Request, next: Next) -> Response {
             vec!["*:*".to_string()]
         } else if org.user_id.starts_with("reader") {
             vec!["ticket:read".to_string()]
+        } else if org.user_id.starts_with("bidder") {
+            vec![
+                "ticket:read".to_string(),
+                "project:read".to_string(),
+                "project:read_bid".to_string(),
+            ]
+        } else if org.user_id.starts_with("editor") {
+            vec![
+                "ticket:read".to_string(),
+                "project:read".to_string(),
+                "project:create".to_string(),
+                "project:update".to_string(),
+            ]
         } else {
             Vec::new()
         };
@@ -559,6 +573,7 @@ async fn run(admin_dsn: &str, db: &str, role: &str, password: &str, rec: Rec) {
         ("F", AssertUnwindSafe(area_f_workflows(&ctx)).boxed()),
         ("G", AssertUnwindSafe(area_g(&ctx)).boxed()),
         ("I", AssertUnwindSafe(area_i(&ctx)).boxed()),
+        ("I", AssertUnwindSafe(area_i_fields(&ctx)).boxed()),
         ("I", AssertUnwindSafe(area_i_public(&ctx)).boxed()),
     ] {
         if let Err(panic) = AssertUnwindSafe(fut).catch_unwind().await {
@@ -2685,7 +2700,7 @@ async fn area_i(c: &Ctx) {
     let names: Vec<String> = sqlx::query_scalar("SELECT name FROM public.permissions WHERE (metadata->>'deleted_at') IS NULL ORDER BY name").fetch_all(&c.owner).await.unwrap();
     let want = [
         "ticket:read", "ticket:create", "ticket:update", "ticket:delete", "ticket:restore", "ticket:purge",
-        "project:read", "approval:read", "ticket:start", "ticket:resolve", "approval:submit", "ticket:escalate", "ticket:archive_with_reason", "*:*",
+        "project:read", "approval:read", "ticket:start", "ticket:resolve", "approval:submit", "ticket:escalate", "ticket:archive_with_reason", "project:read_bid", "*:*",
     ];
     let missing: Vec<&str> = want.iter().copied().filter(|w| !names.iter().any(|n| n == w)).collect();
     r.check("I", "Seeds", "the seed migration writes every permission the routes require, the declared custom verbs and the system roles' grants", missing.is_empty(), "SELECT name FROM public.permissions", "ticket:{read,create,update,delete,restore,purge}, project:read, approval:read, the verbs, ticket:escalate, *:*", &format!("missing {missing:?} of {} rows", names.len()), "generators/sql.rs (the seed migration), rbac.rs (seed)");
@@ -2904,6 +2919,192 @@ async fn area_i(c: &Ctx) {
     r.check("I", "Seeds", "a tenant-edited role grant survives a re-run: the revoked baseline grant stays revoked (no duplicate row) and the added grant stays", rerun.is_ok() && live == vec!["project:read", "ticket:create"] && revoked_rows == 1, "revoke viewer's ticket:read, add ticket:create, re-run the seed", "live grants [project:read, ticket:create]; one (revoked) ticket:read row", &format!("{live:?}; {revoked_rows} ticket:read row(s); {:?}", rerun.err().map(|e| e.to_string())), "generators/sql.rs (NOT EXISTS over every row, soft-deleted included)");
     let tenant_view = rapp.get("/tickets", &tv).await;
     r.check("I", "Seeds", "and the edit is what the next request sees: the viewer lost the read and gained the create", denied(&tenant_view, "ticket:read"), &tenant_view.request, "403 ticket:read", &tenant_view.got(), "backbone-auth/src/resolver.rs");
+}
+
+// =============================================================================
+// I. Field permissions (`requires:` on a field)
+// =============================================================================
+
+
+/// A decimal the module serializes, as its string form spells it (Decimal serializes as a
+/// string; a probe that only wants "the value is there" reads either spelling).
+fn dec(v: &serde_json::Value) -> Option<String> {
+    v.as_str()
+        .map(str::to_string)
+        .or_else(|| v.as_f64().map(|f| f.to_string()))
+}
+
+/// The gate on Project.bid_value (`requires: "project:read_bid"`): redaction to null for a
+/// non-holder on every read surface, refusal of the column in a list-shaped request, refusal of
+/// a write that sets it, and grants as the only difference between the two callers.
+async fn area_i_fields(c: &Ctx) {
+    let (r, app, rapp) = (&c.rec, &c.app, &c.rapp);
+    const P: &str = "backbone-core/src/http.rs (redact_gated, named_gated_at, gated_write_refusals, related_row), backbone-orm/src/generic_repository.rs (field_permissions) and its registry, the generated field_permissions() of Project";
+    let ta = c.ta.as_str();
+    let hour = Duration::from_secs(3600);
+
+    // Setup: the admin (holding *:*) creates a project carrying a bid, and a ticket pointing at it.
+    let made = c.project(ta, c.org.company_a, json!({ "bidValue": 125000.5 })).await;
+    let pid = made.id();
+    r.check("I", "Field permissions", "setup: a caller holding everything creates a project with a bid and the create answers it", made.status == 201 && dec(&made.data()["bidValue"]).as_deref() == Some("125000.5"), &made.request, "201, bidValue 125000.5", &made.got(), P);
+    let tid = c.ticket(ta, c.org.company_a, &pid, json!({})).await.id();
+
+    // The people: bidder holds project:read_bid; editor reads and writes projects without it.
+    let bidder = c.issuer.issue_access("bidder-a", c.org.company_a, &[], Some(c.org.company_a), hour).unwrap();
+    let editor = c.issuer.issue_access("editor-a", c.org.company_a, &[], Some(c.org.company_a), hour).unwrap();
+
+    // ---- reads: the value, or null with the key still there -----------------------------
+    let holder = app.get(&format!("/projects/{pid}"), &bidder).await;
+    r.check("I", "Field permissions", "a holder of the field's permission reads the value on the record", holder.status == 200 && dec(&holder.data()["bidValue"]).as_deref() == Some("125000.5"), &holder.request, "200, bidValue 125000.5", &holder.got(), P);
+    let denied_read = app.get(&format!("/projects/{pid}"), &editor).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a non-holder reads null, and the key stays (a redaction is indistinguishable from a stored null)",
+        denied_read.status == 200 && denied_read.data().get("bidValue") == Some(&json!(null)) && denied_read.data()["name"].is_string(),
+        &denied_read.request,
+        "200, bidValue null (key present), the other fields whole",
+        &denied_read.got(),
+        P,
+    );
+    let god = app.get(&format!("/projects/{pid}"), ta).await;
+    r.check("I", "Field permissions", "*:* reads the value (an admin is unaffected)", god.status == 200 && dec(&god.data()["bidValue"]).as_deref() == Some("125000.5"), &god.request, "200, bidValue 125000.5", &god.got(), P);
+
+    // The list serves the same two answers.
+    let listed = app.get("/projects?fields=id,code,bidValue", &bidder).await;
+    let listed_denied = app.get("/projects?fields=id,code,bidValue", &editor).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a list answers the holder the value and the non-holder null, row for row",
+        listed.status == 200
+            && listed_denied.status == 200
+            && listed.items().iter().any(|row| dec(&row["bidValue"]).as_deref() == Some("125000.5"))
+            && listed_denied.items().iter().all(|row| row.get("bidValue") == Some(&json!(null))),
+        &listed.request,
+        "both 200; the holder sees 125000.5, the non-holder null on every row",
+        &format!("{} / {}", listed.got(), listed_denied.got()),
+        P,
+    );
+
+    // ---- the include expansion: the gap the gate closes ---------------------------------
+    let include_held = app.get(&format!("/tickets/{tid}?include=project"), &bidder).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a holder reads the gated field of the row an ?include= expands",
+        include_held.status == 200 && dec(&include_held.data()["project"]["bidValue"]).as_deref() == Some("125000.5"),
+        &include_held.request,
+        "200, project.bidValue 125000.5",
+        &include_held.got(),
+        "backbone-core/src/http.rs (related_row consults field_permission_registry by table)",
+    );
+    let include_denied = app.get(&format!("/tickets/{tid}?include=project"), &editor).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a non-holder reads null from the expanded row, and the relation's ungated label field still resolves",
+        include_denied.status == 200
+            && include_denied.data()["project"].get("bidValue") == Some(&json!(null))
+            && include_denied.data()["project"]["name"].is_string(),
+        &include_denied.request,
+        "200, project.bidValue null (key present), project.name resolved",
+        &include_denied.got(),
+        "backbone-core/src/http.rs (related_row), the webapp's label column reads `name`",
+    );
+
+    // ---- list-shaped questions: a holder may ask, a non-holder may not -------------------
+    let agg_held = app.get("/projects/aggregate?group_by=kind&sum=bid_value", &bidder).await;
+    r.check("I", "Field permissions", "a holder may aggregate over the gated field", agg_held.status == 200, &agg_held.request, "200", &agg_held.got(), P);
+    let agg_denied = app.get("/projects/aggregate?group_by=kind&sum=bid_value", &editor).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a non-holder's aggregate over the gated field is refused 400 invalid_query, reason field_permission, naming the parameter",
+        agg_denied.status == 400
+            && agg_denied.violation("sum", "invalid_query")
+            && agg_denied.violations().iter().any(|v| v["params"]["reason"] == json!("field_permission") && v["params"]["permission"] == json!("project:read_bid")),
+        &agg_denied.request,
+        "400, invalid_query on `sum`, params.reason field_permission, params.permission project:read_bid",
+        &agg_denied.got(),
+        "backbone-core/src/http.rs (named_gated_at)",
+    );
+    for (what, path) in [
+        ("a filter", format!("/projects?bid_value=125000.5")),
+        ("a sort", format!("/projects?sort_by=bidValue")),
+        ("a search column", format!("/projects?searchFields=bid_value&search=x")),
+        ("a count's filter", format!("/projects/count?bid_value=125000.5")),
+    ] {
+        let denied_at = app.get(&path, &editor).await;
+        let allowed = app.get(&path, &bidder).await;
+        let names_field_permission = |resp: &Resp| {
+            resp.status == 400 && resp.violations().iter().any(|v| v["params"]["reason"] == json!("field_permission"))
+        };
+        r.check(
+            "I",
+            "Field permissions",
+            &format!("{what} naming the gated field: refused for a non-holder (400 field_permission), not for a holder"),
+            names_field_permission(&denied_at) && !names_field_permission(&allowed),
+            &denied_at.request,
+            "400 field_permission for the non-holder; no field_permission refusal for the holder",
+            &format!("{} / {}", denied_at.got(), allowed.got()),
+            P,
+        );
+    }
+
+    // ---- writes: setting the field is a holder's act ------------------------------------
+    let patch_denied = app.patch(&format!("/projects/{pid}"), &editor, json!({ "bidValue": 9999.0 })).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a non-holder's write that sets the gated field is refused 422 naming the permission, though the route's own permission was held",
+        patch_denied.status == 422
+            && patch_denied.violations().iter().any(|v| v["code"] == json!("field_permission_required") && v["params"]["permission"] == json!("project:read_bid")),
+        &patch_denied.request,
+        "422, code field_permission_required, params.permission project:read_bid",
+        &patch_denied.got(),
+        "backbone-core/src/http.rs (gated_write_refusals)",
+    );
+    let create_denied = app.post("/projects", &editor, json!({ "companyId": c.org.company_a, "code": uniq("BD"), "name": "No bid for me", "bidValue": 1.0 })).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "a create naming the gated field is refused the same way (the caller held project:create)",
+        create_denied.status == 422 && create_denied.violations().iter().any(|v| v["code"] == json!("field_permission_required")),
+        &create_denied.request,
+        "422 field_permission_required",
+        &create_denied.got(),
+        "backbone-core/src/http.rs (gated_write_refusals at the handler seam)",
+    );
+    let snake_denied = app.patch(&format!("/projects/{pid}"), &editor, json!({ "bid_value": 9999.0 })).await;
+    r.check("I", "Field permissions", "the refusal reads the snake_case spelling of the key too", snake_denied.status == 422 && snake_denied.violations().iter().any(|v| v["code"] == json!("field_permission_required")), &snake_denied.request, "422", &snake_denied.got(), P);
+    let set_held = app.patch(&format!("/projects/{pid}"), ta, json!({ "bidValue": 130000.0 })).await;
+    r.check("I", "Field permissions", "a holder's write sets the field and the response answers the new value", set_held.status == 200 && dec(&set_held.data()["bidValue"]).as_deref() == Some("130000"), &set_held.request, "200, bidValue 130000", &set_held.got(), P);
+    let editor_other = app.patch(&format!("/projects/{pid}"), &editor, json!({ "summary": "no bid named" })).await;
+    r.check("I", "Field permissions", "a non-holder's write that does not name the field goes through", editor_other.status == 200 && editor_other.data().get("bidValue") == Some(&json!(null)), &editor_other.request, "200, and the response still redacts the field for this caller", &editor_other.got(), P);
+
+    // ---- grants are data: the resolver's caller turns the field on -----------------------
+    let user = Uuid::new_v4();
+    let token = c.issuer.issue_access(&user.to_string(), c.org.company_a, &[], Some(c.org.company_a), hour).unwrap();
+    let before = rapp.get(&format!("/projects/{pid}"), &token).await;
+    direct_grant(&c.owner, user, "project:read").await;
+    let read_only = rapp.get(&format!("/projects/{pid}"), &token).await;
+    direct_grant(&c.owner, user, "project:read_bid").await;
+    let after = rapp.get(&format!("/projects/{pid}"), &token).await;
+    r.check(
+        "I",
+        "Field permissions",
+        "with a resolver the gate follows the grants: refused with nothing, null with the read, the value once project:read_bid is granted",
+        denied(&before, "project:read")
+            && read_only.status == 200
+            && read_only.data().get("bidValue") == Some(&json!(null))
+            && after.status == 200
+            && dec(&after.data()["bidValue"]).as_deref() == Some("130000"),
+        &before.request,
+        "403 project:read; 200 with bidValue null; 200 with the value once the grant exists",
+        &format!("{} / {}", read_only.got(), after.got()),
+        "backbone-auth (the resolver fills AuthContext), backbone-core/src/http.rs (redact_gated reads it)",
+    );
 }
 
 // =============================================================================

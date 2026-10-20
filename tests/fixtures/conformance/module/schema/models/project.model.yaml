@@ -49,6 +49,11 @@ models:
         type: decimal
         attributes: ["@non_negative", "@default(0)"]
 
+      bid_value:
+        type: decimal?
+        requires: "project:read_bid"
+        description: "Permission-gated: null for a caller without project:read_bid, however they ask"
+
       fee:
         type: money?
         attributes: ["@positive"]

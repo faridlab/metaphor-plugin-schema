@@ -528,6 +528,26 @@ fn register_probes(module: &Path, rows: &mut Vec<Row>, runtime: &[Row]) {
         "metaphor-plugin-schema/src/commands/schema/rules.rs (print_permissions)",
     ));
 
+    // A field's `requires:` is labelled per field, and the runtime agrees on every surface.
+    let field_lines: Vec<&str> = text.lines().filter(|l| l.contains("FIELD REQUIRES")).collect();
+    let field_json = permissions.get("field_permissions").and_then(Value::as_array).cloned().unwrap_or_default();
+    rows.push(gen_row(
+        "I",
+        "Register",
+        "`schema rules` labels each gated field FIELD REQUIRES <permission> with its field, and the runtime redacts it",
+        field_lines.len() == 1
+            && field_lines[0].contains("Project")
+            && field_lines[0].contains("FIELD REQUIRES project:read_bid")
+            && field_lines[0].contains("bidValue")
+            && field_json.iter().any(|g| g["model"] == "Project" && g["field"] == "bid_value" && g["key"] == "bidValue" && g["permission"] == "project:read_bid")
+            && passed_probe("a non-holder reads null, and the key stays")
+            && passed_probe("a non-holder's aggregate over the gated field is refused"),
+        "metaphor-schema schema rules . (text and -f json); the runtime probes",
+        "`Project FIELD REQUIRES project:read_bid  field bidValue`; the redaction and refusal probes pass",
+        &format!("{} FIELD REQUIRES line(s): {}; json {:?}", field_lines.len(), field_lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" | "), field_json),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (print_permissions), src/rbac.rs (field_permissions)",
+    ));
+
     // Workflows: the register labels what runs, what documents a function and what only documents.
     let workflows = register.get("workflows").and_then(Value::as_array).cloned().unwrap_or_default();
     let workflow = |name: &str| workflows.iter().find(|w| w.get("name").and_then(Value::as_str) == Some(name)).cloned().unwrap_or(Value::Null);

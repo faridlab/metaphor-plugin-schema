@@ -29,6 +29,7 @@ authorization:
   permissions:
     tickets: [escalate, archive_with_reason]
     incidents: [page]
+    projects: [read_bid]
   roles:
     ADMIN:
       description: "Holds every permission"

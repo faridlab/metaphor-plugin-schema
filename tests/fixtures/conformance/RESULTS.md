@@ -3,9 +3,9 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.40.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.41.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 97s
+- Generation: 2s; whole run: 74s
 
 ## Summary
 
@@ -19,8 +19,8 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | F. Extension | 66 | 0 | 0 |
 | G. Scoping | 36 | 0 | 0 |
 | H. Debuggability | 35 | 0 | 0 |
-| I. Permissions | 142 | 0 | 0 |
-| **Total** | **569** | **0** | **0** |
+| I. Permissions | 162 | 0 | 0 |
+| **Total** | **589** | **0** | **0** |
 
 ## Matrix
 
@@ -553,6 +553,25 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | I | Seeds | re-running the seed migration changes nothing | PASS |
 | I | Seeds | a tenant-edited role grant survives a re-run: the revoked baseline grant stays revoked (no duplicate row) and the added grant stays | PASS |
 | I | Seeds | and the edit is what the next request sees: the viewer lost the read and gained the create | PASS |
+| I | Field permissions | setup: a caller holding everything creates a project with a bid and the create answers it | PASS |
+| I | Field permissions | a holder of the field's permission reads the value on the record | PASS |
+| I | Field permissions | a non-holder reads null, and the key stays (a redaction is indistinguishable from a stored null) | PASS |
+| I | Field permissions | *:* reads the value (an admin is unaffected) | PASS |
+| I | Field permissions | a list answers the holder the value and the non-holder null, row for row | PASS |
+| I | Field permissions | a holder reads the gated field of the row an ?include= expands | PASS |
+| I | Field permissions | a non-holder reads null from the expanded row, and the relation's ungated label field still resolves | PASS |
+| I | Field permissions | a holder may aggregate over the gated field | PASS |
+| I | Field permissions | a non-holder's aggregate over the gated field is refused 400 invalid_query, reason field_permission, naming the parameter | PASS |
+| I | Field permissions | a filter naming the gated field: refused for a non-holder (400 field_permission), not for a holder | PASS |
+| I | Field permissions | a sort naming the gated field: refused for a non-holder (400 field_permission), not for a holder | PASS |
+| I | Field permissions | a search column naming the gated field: refused for a non-holder (400 field_permission), not for a holder | PASS |
+| I | Field permissions | a count's filter naming the gated field: refused for a non-holder (400 field_permission), not for a holder | PASS |
+| I | Field permissions | a non-holder's write that sets the gated field is refused 422 naming the permission, though the route's own permission was held | PASS |
+| I | Field permissions | a create naming the gated field is refused the same way (the caller held project:create) | PASS |
+| I | Field permissions | the refusal reads the snake_case spelling of the key too | PASS |
+| I | Field permissions | a holder's write sets the field and the response answers the new value | PASS |
+| I | Field permissions | a non-holder's write that does not name the field goes through | PASS |
+| I | Field permissions | with a resolver the gate follows the grants: refused with nothing, null with the read, the value once project:read_bid is granted | PASS |
 | I | Public routes | setup: an admin creates a label (label:create is still required to write it) | PASS |
 | I | Public routes | a public read with no authentication answers 200: the list | PASS |
 | I | Public routes | a public read with no authentication answers 200: one record | PASS |
@@ -580,6 +599,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | I | Register | a declared system role's grants are normalised to the canonical spelling (projects.read -> project:read) | PASS |
 | I | Register | `schema rules` labels each route group PERMISSION REQUIRED <permission> and says the mode (no resolver installed: AUTHCONTEXT) | PASS |
 | I | Register | `schema rules` labels a `public: true` model PERMISSION PUBLIC (read), and no route group of it PERMISSION REQUIRED label:read | PASS |
+| I | Register | `schema rules` labels each gated field FIELD REQUIRES <permission> with its field, and the runtime redacts it | PASS |
 | I | Schema doctor | doctor says the mode, and warns (without failing) on the dotted spelling a role uses | PASS |
 | I | Schema doctor | an unguarded hand-written route fails `schema doctor`, naming the file, the line and the fix | PASS |
 | I | Schema doctor | a route marked `// unguarded: <why>` is accepted, and the doctor prints the reason | PASS |
