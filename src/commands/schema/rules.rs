@@ -128,6 +128,11 @@ pub(super) fn execute_rules(
                     })
                 }).collect::<Vec<_>>(),
                 "permissions": permissions_json(&module_schema, mode),
+                "search": search_declarations(&module_schema).iter().map(|(m, fields, _)| serde_json::json!({
+                    "model": m.name,
+                    "fields": fields,
+                    "label": format!("SEARCH {}", fields.join(", ")),
+                })).collect::<Vec<_>>(),
                 "warnings": register.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
                 "proposals": proposals(register),
             });
@@ -448,6 +453,22 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
             }
         }
     }
+    // The models that declare their search set — a `search:` list or `@searchable` fields. The
+    // derived default every other model keeps is structural, so it is not printed.
+    let search = search_declarations(schema);
+    if !search.is_empty() {
+        println!("{}", "Search:".bold());
+        for (model, fields, how) in search {
+            let how = if how == "list" { "declared" } else { "declared (@searchable)" };
+            println!(
+                "  {}  {} {}  {}",
+                model.name.bold(),
+                "SEARCH".green(),
+                fields.join(", "),
+                how
+            );
+        }
+    }
     print_permissions(schema, mode);
     if !register.warnings.is_empty() {
         println!("{} ({})", "Warnings:".yellow().bold(), register.warnings.len());
@@ -455,6 +476,26 @@ fn print_pretty(schema: &crate::ast::ModuleSchema, register: &RuleRegister, sugg
             println!("  {w}");
         }
     }
+}
+
+/// The models that declare the fields a `?search=` substring query may match — a `search:`
+/// list (`how = "list"`) or `@searchable` fields (`how = "attributes"`) — with the resolved
+/// set from the same single source the emitted `search_fields()` reads. A permission-gated
+/// field never appears here: validation refuses declaring one, and the derived set drops it.
+fn search_declarations(schema: &crate::ast::ModuleSchema) -> Vec<(&crate::ast::Model, Vec<&str>, &'static str)> {
+    schema
+        .models
+        .iter()
+        .filter_map(|m| {
+            if !m.search.is_empty() {
+                Some((m, m.search_fields(), "list"))
+            } else if m.fields.iter().any(|f| f.has_attribute("searchable")) {
+                Some((m, m.search_fields(), "attributes"))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// The permissions every mounted route requires, and the mode they are checked in.

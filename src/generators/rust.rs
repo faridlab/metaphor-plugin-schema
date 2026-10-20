@@ -1557,7 +1557,9 @@ impl RustGenerator {
     /// `run_filtered_query` can emit the right PostgreSQL type casts
     /// (filters arrive as text; `date = $1` without a cast dies on
     /// "operator does not exist: date = text").
-    /// `search_fields()` — text fields eligible for full-text `search=` queries.
+    /// `search_fields()` — the fields eligible for full-text `search=` queries: the model's
+    /// declared `search:` list when present, else derived (required text fields plus every
+    /// `@searchable` field; never a secret or a permission-gated field).
     fn generate_entity_repo_meta_impl(
         &self,
         model: &Model,
@@ -1633,22 +1635,12 @@ impl RustGenerator {
             })
             .collect();
 
-        // Collect search fields: text-like primitives, never a secret — `?search=` is a
-        // substring match, so a searchable digest is recovered one character at a time.
-        let search_fields: Vec<&str> = model
-            .fields
-            .iter()
-            .filter(|f| {
-                matches!(
-                    f.type_ref,
-                    TypeRef::Primitive(PrimitiveType::String)
-                        | TypeRef::Primitive(PrimitiveType::Email)
-                        | TypeRef::Primitive(PrimitiveType::Slug)
-                ) && !f.has_attribute("sensitive")
-                    && !f.has_attribute("hashed")
-            })
-            .map(|f| f.name.as_str())
-            .collect();
+        // Collect search fields from the model's single source ([`crate::ast::Model::search_fields`]):
+        // the declared `search:` list when present, else derived — required text fields plus every
+        // `@searchable` field — never a secret and never a permission-gated field, because
+        // `?search=` is a substring match served to any caller holding the route's read (a gated
+        // field in the list would let a non-holder probe the value one character at a time).
+        let search_fields: Vec<&str> = model.search_fields();
 
         // Field-level security, emitted as RESPONSE keys (camelCase) to match the
         // serialized response the handler prunes — see backbone-core's `secure`.
@@ -3229,6 +3221,103 @@ mod tests {
         assert!(!session.contains("fn private_fields()"), "a secret is not a private field");
         let search = session.split("fn search_fields()").nth(1).and_then(|r| r.split('}').next()).unwrap_or_default();
         assert!(search.contains("user_id") && !search.contains("token_hash"), "a secret is not searchable: {search}");
+    }
+
+    /// The employee shape: required `employee_number` + `first_name`, optional `last_name` +
+    /// `email` (the widening a module used to need a user-owned entity file for), and a gated
+    /// `mobile_phone` that must stay out of the search set while `field_permissions()` carries it.
+    fn employee_model(search: Option<Vec<String>>, searchable_on: &[&str]) -> Model {
+        let mut model = Model::new("Employee");
+        let mut field = |name: &str, optional: bool| {
+            let t = TypeRef::Primitive(PrimitiveType::String);
+            Field {
+                name: name.to_string(),
+                type_ref: if optional { TypeRef::Optional(Box::new(t)) } else { t },
+                ..Default::default()
+            }
+        };
+        let mut gated = field("mobile_phone", true);
+        gated.requires = Some("employee:read_confidential".to_string());
+        model.fields = vec![
+            Field {
+                name: "id".to_string(),
+                type_ref: TypeRef::Primitive(PrimitiveType::Uuid),
+                attributes: vec![Attribute::new("id")],
+                ..Default::default()
+            },
+            field("employee_number", false),
+            field("first_name", false),
+            field("last_name", true),
+            field("email", true),
+            gated,
+        ];
+        for name in searchable_on {
+            model
+                .find_field_mut(name)
+                .expect("a real field")
+                .attributes
+                .push(Attribute::new("searchable"));
+        }
+        if let Some(list) = search {
+            model.search = list;
+        }
+        model
+    }
+
+    fn entity_file(model: Model) -> String {
+        let mut schema = ModuleSchema::new("test");
+        schema.models = vec![model];
+        let output = RustGenerator::new().generate(&ResolvedSchema { schema }).unwrap();
+        output
+            .files
+            .get(&PathBuf::from("src/domain/entity/employee.rs"))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn search_list_of(file: &str) -> String {
+        file.split("fn search_fields()")
+            .nth(1)
+            .and_then(|r| r.split('{').nth(1))
+            .and_then(|r| r.split('}').next())
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn a_declared_search_list_is_emitted_in_its_order_beside_the_field_gate() {
+        let file = entity_file(employee_model(
+            Some(vec![
+                "employee_number".into(),
+                "first_name".into(),
+                "last_name".into(),
+                "email".into(),
+            ]),
+            &[],
+        ));
+        let search = search_list_of(&file);
+        assert_eq!(search.trim(), "&[\"employee_number\", \"first_name\", \"last_name\", \"email\"]", "{search}");
+        assert!(
+            file.contains("fn field_permissions() -> &'static [(&'static str, &'static str)] {\n        &[(\"mobilePhone\", \"employee:read_confidential\")]"),
+            "the gated field is emitted as the entity's field gate: {file}"
+        );
+        assert!(!search.contains("mobile_phone"), "a gated field never lands in search_fields: {search}");
+    }
+
+    #[test]
+    fn searchable_attributes_widen_the_derived_set_to_optional_text() {
+        let file = entity_file(employee_model(None, &["last_name", "email"]));
+        let search = search_list_of(&file);
+        assert_eq!(search.trim(), "&[\"employee_number\", \"first_name\", \"last_name\", \"email\"]", "{search}");
+        assert!(!search.contains("mobile_phone"), "a gated field stays out of the derived set: {search}");
+    }
+
+    #[test]
+    fn without_a_declaration_the_derived_set_is_unchanged() {
+        let file = entity_file(employee_model(None, &[]));
+        let search = search_list_of(&file);
+        assert_eq!(search.trim(), "&[\"employee_number\", \"first_name\"]", "{search}");
     }
 
     fn persistent_entity_impl(file: &str, model: &str) -> String {
