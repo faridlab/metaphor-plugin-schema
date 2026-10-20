@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-20
+
 ### Added
 
 - **`requires:` on a field** (field-level permissions, ADR-0033 second amendment): a field may name the
