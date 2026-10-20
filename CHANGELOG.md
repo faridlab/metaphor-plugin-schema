@@ -7,6 +7,31 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- **Schema-declared search fields**: a model may declare the whole `?search=` field list with
+  `search: [employee_number, first_name, last_name, email]`, and a field may join the default set
+  with `@searchable` — the way an *optional* text field becomes searchable, since the derived
+  default (required `string`/`email`/`slug` fields only) never matched optional types. The list
+  replaces the derived set, in the written order; both spellings feed one single source
+  (`Model::search_fields()`) that emits the entity's `EntityRepoMeta::search_fields()`, so a module
+  whose entity file was user-owned only to widen search can return the file to generated and gain
+  `field_permissions()` with it. The webapp needs nothing: it sends free-text `?search=` and the
+  service applies its own field list. Validation refuses a declared name that is no field, no text
+  kind, a secret (`@sensitive`/`@hashed`) or listed twice. `schema rules` labels a declared set
+  `SEARCH <fields> declared` (text and `-f json`); no doctor check is added, because once the set is
+  declared it cannot drift from the code that emits it.
+
+### Security
+
+- **A permission-gated field never lands in the search set**: a field carrying `requires:` is
+  excluded from the derived `search_fields()` at emission, and declaring one — `@searchable` beside
+  `requires:`, or a `search:` list naming the field — is a validation error. `?search=` is a
+  substring match served to any caller holding the route's read, so a searchable gated field would
+  let a non-holder probe the value one character at a time through plain `?search=`: the exact leak
+  class the field gate closes. A grants-aware search path does not exist, so the combination is
+  refused rather than narrowed; when one appears, the refusal is the place to relax.
+
 ## [0.42.0] - 2026-10-20
 
 ### Added
