@@ -1212,6 +1212,110 @@ fn permission_variant_probes(skeleton: &Path, fixture: &Path, rows: &mut Vec<Row
     ));
 }
 
+/// The schema-declared search set: a `@searchable` optional field is searched, the register
+/// labels the declared set, and a declaration that would leak a gated field is refused.
+fn search_declaration_probes(skeleton: &Path, fixture: &Path, rows: &mut Vec<Row>) {
+    const PROJECT: &str = "schema/models/project.model.yaml";
+    const DECLARED_ANCHOR: &str = "    description: \"Conformance fixture: a company-scoped master record\"\n";
+
+    // The register labels the declared set, and the emitted entity carries it: the derived
+    // default (code, name) widened by the fixture's `@searchable` summary.
+    let dir = tempfile::tempdir().unwrap();
+    let (module, out) = prepare(skeleton, fixture, dir.path(), |_| {});
+    let pretty = run(
+        Command::new(env!("CARGO_BIN_EXE_metaphor-schema")).args(["schema", "rules", "."]).current_dir(&module).env("NO_COLOR", "1"),
+        "schema rules",
+    );
+    let json = run(
+        Command::new(env!("CARGO_BIN_EXE_metaphor-schema")).args(["schema", "rules", ".", "-f", "json"]).current_dir(&module).env("NO_COLOR", "1"),
+        "schema rules json",
+    );
+    let declared = serde_json::from_slice::<Value>(&json.stdout)
+        .ok()
+        .and_then(|v| v["search"].as_array().cloned())
+        .unwrap_or_default();
+    let entity = fs::read_to_string(module.join("src/domain/entity/project.rs")).unwrap_or_default();
+    let search_list = entity.split("fn search_fields()").nth(1).and_then(|r| r.split('}').next()).unwrap_or_default().to_string();
+    rows.push(gen_row(
+        "H",
+        "Search fields",
+        "`schema rules` labels a declared search set, and the entity carries it (an optional field the derivation skips)",
+        out.status.success()
+            && String::from_utf8_lossy(&pretty.stdout).contains("Project  SEARCH code, name, summary  declared (@searchable)")
+            && declared.iter().any(|s| {
+                s["model"].as_str() == Some("Project")
+                    && s["fields"]
+                        .as_array()
+                        .map(|f| f.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>() == ["code", "name", "summary"])
+                        .unwrap_or(false)
+            })
+            && search_list.contains("\"summary\""),
+        "generate the fixture and run schema rules (the summary field is @searchable)",
+        "a `Project  SEARCH code, name, summary  declared (@searchable)` line; search_fields() carries summary",
+        &format!(
+            "generate exit {:?}; register: {}; entity search_fields: {}",
+            out.status.code(),
+            one_line(&String::from_utf8_lossy(&pretty.stdout).lines().filter(|l| l.contains("SEARCH")).collect::<Vec<_>>().join(" | ")),
+            one_line(&search_list)
+        ),
+        "metaphor-plugin-schema/src/commands/schema/rules.rs (search_declarations) and src/ast/model.rs (search_fields)",
+    ));
+
+    // `@searchable` beside `requires:` on the same field is the search oracle: refused.
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(PROJECT), |t| t.replace(
+            "      summary:\n        type: string?\n        attributes: [\"@max(500)\", \"@searchable\"]\n",
+            "      summary:\n        type: string?\n        attributes: [\"@max(500)\", \"@searchable\"]\n        requires: \"project:read_bid\"\n",
+        ))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Search fields",
+        "`@searchable` beside `requires:` on one field fails generation, naming the leak",
+        !out.status.success() && text.contains("`Project`.summary is both searchable (`@searchable`) and `requires: project:read_bid`") && text.contains("one character at a time"),
+        "give the @searchable summary a `requires: project:read_bid` and generate",
+        "generation fails: ?search= is a substring probe any holder of the read may send",
+        &one_line(text.lines().filter(|l| l.contains("searchable")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (validate_search_declarations)",
+    ));
+
+    // A model-level `search:` naming a gated field is the same leak, refused the same way.
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(PROJECT), |t| t.replacen(DECLARED_ANCHOR, &format!("{DECLARED_ANCHOR}    search: [code, bid_value]\n"), 1))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Search fields",
+        "a `search:` list naming a permission-gated field fails generation",
+        !out.status.success() && text.contains("`Project`.bid_value is both searchable (named in `search:`) and `requires: project:read_bid`"),
+        "declare Project `search: [code, bid_value]` (bid_value is gated) and generate",
+        "generation fails naming bid_value",
+        &one_line(text.lines().filter(|l| l.contains("search")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (validate_search_declarations)",
+    ));
+
+    // An unknown name in the list is a typo the generator names, not a silently empty search.
+    let dir = tempfile::tempdir().unwrap();
+    let (_module, out) = prepare(skeleton, fixture, dir.path(), |m| {
+        edit(&m.join(PROJECT), |t| t.replacen(DECLARED_ANCHOR, &format!("{DECLARED_ANCHOR}    search: [code, nam]\n"), 1))
+    });
+    let text = output_text(&out);
+    rows.push(gen_row(
+        "I",
+        "Search fields",
+        "a `search:` list naming no field of the model fails generation, naming the entry",
+        !out.status.success() && text.contains("`Project` search: `nam` names no field"),
+        "declare Project `search: [code, nam]` and generate",
+        "generation fails naming `nam`",
+        &one_line(text.lines().filter(|l| l.contains("search")).take(2).collect::<Vec<_>>().join(" | ").as_str()),
+        "metaphor-plugin-schema/src/resolver/validator.rs (validate_search_declarations)",
+    ));
+}
+
 /// Trigger probes that need a variant of the fixture: the doctor on a missing or careless hand half,
 /// and the build refusing an implementation that lacks a required method.
 fn trigger_variant_probes(skeleton: &Path, fixture: &Path, framework: Option<&Path>, rows: &mut Vec<Row>) {
@@ -1496,6 +1600,7 @@ fn every_backbone_feature_works_at_runtime_through_the_generator() {
     register_probes(&module, &mut rows, &runtime);
     variant_probes(&skeleton, &fixture, &module, &output_text(&generate), &mut rows);
     permission_variant_probes(&skeleton, &fixture, &mut rows);
+    search_declaration_probes(&skeleton, &fixture, &mut rows);
     trigger_variant_probes(&skeleton, &fixture, framework.as_deref(), &mut rows);
     workflow_variant_probes(&skeleton, &fixture, framework.as_deref(), &mut rows);
     rows.sort_by_key(|r| AREAS.iter().position(|(k, _)| *k == r.area).unwrap_or(99));

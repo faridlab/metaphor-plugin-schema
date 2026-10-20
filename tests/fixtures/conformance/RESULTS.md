@@ -3,24 +3,24 @@
 Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 `CONFORMANCE_DATABASE_URL=... cargo test --test conformance -- --ignored --nocapture`.
 
-- Generator: metaphor-plugin-schema 0.41.0 (built from this checkout)
+- Generator: metaphor-plugin-schema 0.42.0 (built from this checkout)
 - Framework: local checkout `<workspace>/modules/backbone-framework` via [patch.crates-io]
-- Generation: 2s; whole run: 76s
+- Generation: 2s; whole run: 77s
 
 ## Summary
 
 | Area | PASS | FAIL | UNSUPPORTED |
 |---|---|---|---|
-| A. Generic routes | 134 | 0 | 0 |
+| A. Generic routes | 135 | 0 | 0 |
 | B. Validation | 42 | 0 | 0 |
 | C. Custom validation | 15 | 0 | 0 |
 | D. Hooks and events | 79 | 0 | 0 |
 | E. State machine | 20 | 0 | 0 |
 | F. Extension | 66 | 0 | 0 |
 | G. Scoping | 36 | 0 | 0 |
-| H. Debuggability | 35 | 0 | 0 |
-| I. Permissions | 162 | 0 | 0 |
-| **Total** | **589** | **0** | **0** |
+| H. Debuggability | 36 | 0 | 0 |
+| I. Permissions | 165 | 0 | 0 |
+| **Total** | **594** | **0** | **0** |
 
 ## Matrix
 
@@ -84,6 +84,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | A | List sort | orderby=priority:desc orders descending | PASS |
 | A | List sort | the typed sort_by/sort_order parameters order the list | PASS |
 | A | List search | search=Alpha matches the name | PASS |
+| A | List search | search=zephyr matches the optional @searchable summary | PASS |
 | A | List paging | offset paging limit=2&page=2 gives the 3rd and 4th rows | PASS |
 | A | List paging | an oversized limit is clamped to the page cap (100) | PASS |
 | A | List paging | page=0 answers 200 or 400, never 5xx | PASS |
@@ -453,6 +454,7 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | H | Schema doctor | `schema doctor .` counts the workflows the engine runs, the hand methods they owe, and points at where a stuck instance shows | PASS |
 | H | Schema doctor | `schema doctor .` accepts the freshly generated module with its extension files | PASS |
 | H | Diagnostics | a hook file with an `assert:` rule (no message) beside its `states:` generates, or names the offending rule | PASS |
+| H | Search fields | `schema rules` labels a declared search set, and the entity carries it (an optional field the derivation skips) | PASS |
 | I | Seeds | the seed migration writes every permission the routes require, the declared custom verbs and the system roles' grants | PASS |
 | I | Seeds | a declared system role is seeded with its baseline grants (the dotted spelling normalised: projects.read -> project:read) | PASS |
 | I | Seeds | the ADMIN system role is declared with *:* in the seed | PASS |
@@ -615,6 +617,9 @@ Written by `tests/conformance.rs`; do not edit by hand. Rerun with
 | I | Public routes | `public_scoped: true` accepts a public model that carries a fence, and the doctor says it is fenced | PASS |
 | I | Public routes | `public:` naming something that is no generic action fails generation, naming it | PASS |
 | I | Public routes | a public action that also carries a `requires:` rename fails generation | PASS |
+| I | Search fields | `@searchable` beside `requires:` on one field fails generation, naming the leak | PASS |
+| I | Search fields | a `search:` list naming a permission-gated field fails generation | PASS |
+| I | Search fields | a `search:` list naming no field of the model fails generation, naming the entry | PASS |
 
 ## Failures (0)
 

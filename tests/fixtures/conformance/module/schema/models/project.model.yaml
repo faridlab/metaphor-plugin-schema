@@ -26,7 +26,7 @@ models:
 
       summary:
         type: string?
-        attributes: ["@max(500)"]
+        attributes: ["@max(500)", "@searchable"]
 
       backup_email:
         type: string?

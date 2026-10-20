@@ -722,6 +722,11 @@ async fn area_a(c: &Ctx) {
         if let Some(s) = site {
             extra["website"] = json!(s);
         }
+        // A word only the optional `summary` carries: the `search=zephyr` probe below matches
+        // it only because the field is declared `@searchable` (optional text never derives).
+        if i == 3 {
+            extra["summary"] = json!(format!("{tag} zephyr digest"));
+        }
         let p = c.project(ta, c.org.company_a, extra).await;
         if p.status != 201 {
             r.check("A", "List", "list fixture rows are created", false, &p.request, "201", &p.got(), "harness");
@@ -828,6 +833,8 @@ async fn area_a(c: &Ctx) {
 
     let s = app.get(&q("search=Alpha"), ta).await;
     r.check("A", "List search", "search=Alpha matches the name", s.status == 200 && s.items().len() == 1, &s.request, "1 item", &s.got(), "backbone-orm generic_repository search_fields");
+    let s = app.get(&q("search=zephyr"), ta).await;
+    r.check("A", "List search", "search=zephyr matches the optional @searchable summary", s.status == 200 && s.items().len() == 1, &s.request, "1 item", &s.got(), "backbone-orm generic_repository search_fields (the schema-declared @searchable set, an optional field the derivation would skip)");
 
     let p = app.get(&q("sort=priority&limit=2&page=2"), ta).await;
     r.check("A", "List paging", "offset paging limit=2&page=2 gives the 3rd and 4th rows", p.status == 200 && prios(&p) == vec![3, 4] && p.body["meta"]["page"] == json!(2) && p.body["meta"]["total"] == json!(5), &p.request, "priorities [3,4], meta.page 2, total 5", &p.got(), CRUD);
