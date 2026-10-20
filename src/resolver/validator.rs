@@ -72,6 +72,9 @@ impl<'a> SchemaValidator<'a> {
         // Validate field-level lifecycle declarations (ADR-0016)
         errors.extend(self.validate_lifecycles());
 
+        // Validate search declarations (`search:` on a model, `@searchable` on a field)
+        errors.extend(self.validate_search_declarations());
+
         // Validate scheduled-job postures (ADR-0020)
         errors.extend(self.validate_scheduled_jobs());
 
@@ -383,6 +386,98 @@ impl<'a> SchemaValidator<'a> {
     ///   workers will double-process the same rows (MMB-4 class). The exempt
     ///   postures either don't run on a schedule at all (`read_time_lazy`) or
     ///   aren't the ones doing the claiming (`inactive_then_icp`).
+    /// A search declaration — the model's `search:` list, or `@searchable` on a field —
+    /// widens what a `?search=` substring query may match. `?search=` is served to any
+    /// caller holding the route's read, so the declaration may only name text fields
+    /// (`string`, `email`, `slug`, optional included) that are neither secrets
+    /// (`@sensitive`/`@hashed`) nor permission-gated (`requires:`): a searchable gated
+    /// field would let a non-holder recover the value one character at a time through
+    /// plain `?search=` — the exact leak the field gate closes. A grants-aware search
+    /// path does not exist, so the combination is refused, and the emitter keeps a gated
+    /// field out of the derived set regardless.
+    fn validate_search_declarations(&self) -> Vec<ResolveError> {
+        let mut errors = Vec::new();
+        for model in &self.schema.models {
+            let gated_refusal = |field: &crate::ast::Field,
+                                 where_: &str,
+                                 errors: &mut Vec<ResolveError>| {
+                errors.push(ResolveError::validation(format!(
+                    "`{}`.{} is both searchable ({where_}) and `requires: {}`: `?search=` is a \
+                     substring match served to any caller holding the route's read, so a \
+                     non-holder could probe the gated value one character at a time — a \
+                     grants-aware search path does not exist, so drop one",
+                    model.name,
+                    field.name,
+                    field.requires.as_deref().unwrap_or("?")
+                )));
+            };
+            let mut seen = std::collections::HashSet::new();
+            for name in &model.search {
+                if !seen.insert(name.as_str()) {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` search: `{name}` is listed twice",
+                        model.name
+                    )));
+                    continue;
+                }
+                let Some(field) = model.find_field(name) else {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` search: `{name}` names no field of the model",
+                        model.name
+                    )));
+                    continue;
+                };
+                if !field.is_search_text() {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` search: `{name}` is not a text field, and search is a substring \
+                         match over text — declare a `string`, `email` or `slug` field",
+                        model.name
+                    )));
+                }
+                if field.has_attribute("sensitive") || field.has_attribute("hashed") {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` search: `{name}` is a secret (`@sensitive`/`@hashed`), and a \
+                         substring probe recovers a digest one character at a time",
+                        model.name
+                    )));
+                }
+                if field.requires.is_some() {
+                    gated_refusal(field, "named in `search:`", &mut errors);
+                }
+            }
+            for field in &model.fields {
+                if !field.has_attribute("searchable") {
+                    continue;
+                }
+                if !model.search.is_empty() && !model.search.iter().any(|n| n == &field.name) {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` declares `search:`, which is the whole set, and `@searchable` on \
+                         `{}`, which the list does not name — name it there or drop the attribute",
+                        model.name, field.name
+                    )));
+                }
+                if !field.is_search_text() {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}`.{} carries `@searchable` but is not a text field, and search is \
+                         a substring match over text — declare a `string`, `email` or `slug` field",
+                        model.name, field.name
+                    )));
+                }
+                if field.has_attribute("sensitive") || field.has_attribute("hashed") {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}`.{} is both a secret (`@sensitive`/`@hashed`) and `@searchable`: \
+                         a substring probe recovers a digest one character at a time — drop one",
+                        model.name, field.name
+                    )));
+                }
+                if field.requires.is_some() {
+                    gated_refusal(field, "`@searchable`", &mut errors);
+                }
+            }
+        }
+        errors
+    }
+
     fn validate_scheduled_jobs(&self) -> Vec<ResolveError> {
         use crate::ast::JobPosture;
 
@@ -2441,5 +2536,173 @@ mod workflow_warning_tests {
         let w = retired_generator_warnings(&s);
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(w[0].contains("opt_in") && w[0].contains("'trigger'") && w[1].contains("enabled") && w[1].contains("'flows'"), "{w:?}");
+    }
+}
+
+#[cfg(test)]
+mod search_declaration_tests {
+    use super::*;
+    use crate::ast::{Attribute, Field, Model, PrimitiveType, TypeRef};
+
+    fn field(name: &str, type_ref: TypeRef) -> Field {
+        Field::new(name, type_ref)
+    }
+
+    fn model_with(fields: Vec<Field>) -> Model {
+        let mut m = Model::new("Employee");
+        m.fields = fields;
+        m
+    }
+
+    fn errors_of(model: Model) -> Vec<String> {
+        let mut s = ModuleSchema::new("test");
+        s.models = vec![model];
+        match SchemaValidator::new(&s).validate() {
+            Ok(()) => vec![],
+            Err(es) => es.into_iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    fn opt_text(name: &str) -> Field {
+        field(
+            name,
+            TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::String))),
+        )
+    }
+
+    #[test]
+    fn a_well_formed_declaration_validates() {
+        // The employee shape: required text derived, optional text declared, an optional
+        // gated decimal outside the set entirely.
+        let mut gated = field("base_salary", TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::Decimal))));
+        gated.requires = Some("employee:read_confidential".into());
+        let mut m = model_with(vec![
+            field("employee_number", TypeRef::Primitive(PrimitiveType::String)),
+            opt_text("last_name"),
+            gated,
+        ]);
+        m.search = vec!["employee_number".into(), "last_name".into()];
+        // The gated field's permission must be declared for the rbac check to pass; a
+        // schema without the vocabulary still reports only that, never a search error.
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().all(|e| !e.contains("search") && !e.contains("searchable")),
+            "a well-formed search list adds no error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn searchable_on_an_optional_text_field_validates() {
+        let mut f = opt_text("email");
+        f.attributes.push(Attribute::new("searchable"));
+        let errs = errors_of(model_with(vec![f]));
+        assert!(
+            errs.iter().all(|e| !e.contains("search") && !e.contains("searchable")),
+            "@searchable on optional text adds no error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn search_naming_an_unknown_field_is_an_error() {
+        let mut m = model_with(vec![field("name", TypeRef::Primitive(PrimitiveType::String))]);
+        m.search = vec!["no_such_field".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().any(|e| e.contains("`Employee` search: `no_such_field` names no field")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn search_naming_a_non_text_field_is_an_error() {
+        let mut m = model_with(vec![field("budget", TypeRef::Primitive(PrimitiveType::Decimal))]);
+        m.search = vec!["budget".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().any(|e| e.contains("`Employee` search: `budget` is not a text field")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn searchable_on_a_non_text_field_is_an_error() {
+        let mut f = field("budget", TypeRef::Primitive(PrimitiveType::Decimal));
+        f.attributes.push(Attribute::new("searchable"));
+        let errs = errors_of(model_with(vec![f]));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("`Employee`.budget carries `@searchable` but is not a text field")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn searchable_besides_requires_is_refused_naming_the_leak() {
+        // The search-oracle fix: `?search=` is a substring probe any holder of the
+        // route's read may send, so a gated field must not be searchable.
+        let mut f = opt_text("mobile_phone");
+        f.attributes.push(Attribute::new("searchable"));
+        f.requires = Some("employee:read_confidential".into());
+        let errs = errors_of(model_with(vec![f]));
+        assert!(
+            errs.iter().any(|e| e.contains(
+                "`Employee`.mobile_phone is both searchable (`@searchable`) and `requires: employee:read_confidential`"
+            ) && e.contains("one character at a time")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn search_naming_a_gated_field_is_refused_too() {
+        let mut f = opt_text("mobile_phone");
+        f.requires = Some("employee:read_confidential".into());
+        let mut m = model_with(vec![f]);
+        m.search = vec!["mobile_phone".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().any(|e| e.contains(
+                "`Employee`.mobile_phone is both searchable (named in `search:`) and `requires: employee:read_confidential`"
+            )),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn search_naming_a_secret_is_an_error() {
+        let mut f = opt_text("token_hash");
+        f.attributes.push(Attribute::new("hashed"));
+        let mut m = model_with(vec![f]);
+        m.search = vec!["token_hash".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().any(|e| e.contains("`Employee` search: `token_hash` is a secret")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn searchable_outside_a_declared_list_is_dead_and_refused() {
+        let mut f = opt_text("email");
+        f.attributes.push(Attribute::new("searchable"));
+        let mut m = model_with(vec![field("name", TypeRef::Primitive(PrimitiveType::String)), f]);
+        m.search = vec!["name".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().any(|e| e.contains(
+                "`Employee` declares `search:`, which is the whole set, and `@searchable` on `email`"
+            )),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_listed_name_twice_is_an_error() {
+        let mut m = model_with(vec![field("name", TypeRef::Primitive(PrimitiveType::String))]);
+        m.search = vec!["name".into(), "name".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().any(|e| e.contains("`Employee` search: `name` is listed twice")),
+            "got: {errs:?}"
+        );
     }
 }

@@ -76,6 +76,7 @@ fn test_entity_template_emits_no_serial_name_annotations() {
         requires: Default::default(),
         public: Default::default(),
         public_scoped: Default::default(),
+        search: Default::default(),
         fields: vec![
             Field {
                 name: "id".to_string(),
@@ -157,6 +158,7 @@ fn test_entity_template_no_annotation_for_matching_names() {
         requires: Default::default(),
         public: Default::default(),
         public_scoped: Default::default(),
+        search: Default::default(),
         fields: vec![
             Field {
                 name: "id".to_string(),

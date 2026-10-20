@@ -2,7 +2,7 @@
 //!
 //! Defines AST nodes for model schemas including models, fields, relations, and enums.
 
-use super::{Span, TypeRef};
+use super::{PrimitiveType, Span, TypeRef};
 use crate::utils::{pluralize, to_snake_case};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,13 @@ pub struct Model {
     /// the tenant scope admits, acknowledged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub public_scoped: bool,
+    /// `search:` — the fields a `?search=` substring query may match, declared as the whole
+    /// list (its order is the emitted order). Empty means derive: every required text field
+    /// that is neither a secret nor permission-gated, plus every `@searchable` field. A name
+    /// that is no field, no text, a secret (`@sensitive`/`@hashed`) or permission-gated
+    /// (`requires:`) is a validation error ([`crate::resolver::validator`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search: Vec<String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,
@@ -116,6 +123,11 @@ impl Model {
     /// Find a field by name
     pub fn find_field(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.name == name)
+    }
+
+    /// Find a field by name, mutably
+    pub fn find_field_mut(&mut self, name: &str) -> Option<&mut Field> {
+        self.fields.iter_mut().find(|f| f.name == name)
     }
 
     /// Find a relation by name
@@ -208,6 +220,35 @@ impl Model {
             .collect()
     }
 
+    /// The fields a `?search=` substring query may match, from the single source the Rust
+    /// entity's `EntityRepoMeta::search_fields()` emits: the model's declared `search:` list
+    /// when present (its order; trusted because validation refuses a name that is no field,
+    /// no text, a secret or permission-gated), else derived — every required text field
+    /// (`string`, `email`, `slug`; an optional one never matches structurally, which is why
+    /// `@searchable` exists) that is neither a secret (`@sensitive`/`@hashed`) nor
+    /// permission-gated (`requires:`), plus every field carrying `@searchable`.
+    ///
+    /// A gated field never lands in the derived set: `?search=` is a substring match any
+    /// caller holding the route's read may send, so a searchable gated field would hand a
+    /// non-holder the value one character at a time — the exact leak the field gate closes.
+    /// Declaring one (`@searchable` + `requires:`, or `search:` naming it) is a validation
+    /// error instead; a grants-aware search path does not exist yet.
+    pub fn search_fields(&self) -> Vec<&str> {
+        if !self.search.is_empty() {
+            return self.search.iter().map(|s| s.as_str()).collect();
+        }
+        self.fields
+            .iter()
+            .filter(|f| {
+                (f.has_attribute("searchable") || f.is_required_text()) &&
+                    !f.has_attribute("sensitive") &&
+                    !f.has_attribute("hashed") &&
+                    f.requires.is_none()
+            })
+            .map(|f| f.name.as_str())
+            .collect()
+    }
+
     /// The default route-function name for this model in a CRUD composer:
     /// `create_{snake}_read_routes` when read-only (GET endpoints only) or when
     /// any field declares a hand_set lifecycle (verb-guarded state generic writes
@@ -225,7 +266,6 @@ impl Model {
 
     /// Check if model has a strongly-typed ID (Uuid primary key)
     pub fn has_typed_id(&self) -> bool {
-        use super::PrimitiveType;
         self.primary_key()
             .map(|f| matches!(&f.type_ref, TypeRef::Primitive(PrimitiveType::Uuid)))
             .unwrap_or(true) // Default Uuid when no explicit PK
@@ -375,6 +415,35 @@ impl Field {
     /// Check if field is required (has @required or no ?)
     pub fn is_required(&self) -> bool {
         self.has_attribute("required") || !self.type_ref.is_optional()
+    }
+
+    /// Whether the field's type is one of the text kinds a substring search runs over
+    /// (`string`, `email`, `slug`), optional included — the kinds `@searchable` and a
+    /// model's `search:` list accept.
+    pub fn is_search_text(&self) -> bool {
+        let text = |t: &TypeRef| {
+            matches!(
+                t,
+                TypeRef::Primitive(PrimitiveType::String)
+                    | TypeRef::Primitive(PrimitiveType::Email)
+                    | TypeRef::Primitive(PrimitiveType::Slug)
+            )
+        };
+        match &self.type_ref {
+            TypeRef::Optional(inner) => text(inner),
+            t => text(t),
+        }
+    }
+
+    /// Whether the field is a required (non-optional) text kind — the structural shape
+    /// [`Model::search_fields`] has always derived its default set from.
+    pub fn is_required_text(&self) -> bool {
+        matches!(
+            &self.type_ref,
+            TypeRef::Primitive(PrimitiveType::String)
+                | TypeRef::Primitive(PrimitiveType::Email)
+                | TypeRef::Primitive(PrimitiveType::Slug)
+        )
     }
 
     /// Check if field is the primary key
@@ -1783,5 +1852,92 @@ mod tests {
         m.fields.push(mo_state);
         assert!(!m.has_hand_set_lifecycle());
         assert_eq!(m.default_route_fn(), "create_manufacturing_order_routes");
+    }
+
+    fn text(name: &str, optional: bool, attributes: &[&str]) -> Field {
+        let inner = TypeRef::Primitive(PrimitiveType::String);
+        let mut f = Field::new(
+            name,
+            if optional {
+                TypeRef::Optional(Box::new(inner))
+            } else {
+                inner
+            },
+        );
+        for a in attributes {
+            f.attributes.push(Attribute::new(*a));
+        }
+        f
+    }
+
+    #[test]
+    fn search_fields_derive_from_required_text_only() {
+        // The structural default is unchanged: required string/email/slug fields,
+        // never a secret. Optional text stays out until declared.
+        let mut m = Model::new("Session");
+        m.fields = vec![
+            text("employee_number", false, &[]),
+            text("last_name", true, &[]),
+            text("email", true, &[]),
+            text("password_hash", false, &["hashed"]),
+            text("legacy_token", false, &["sensitive"]),
+        ];
+        assert_eq!(m.search_fields(), vec!["employee_number"]);
+    }
+
+    #[test]
+    fn searchable_attribute_widens_the_derived_set_to_optional_text() {
+        let mut m = Model::new("Employee");
+        m.fields = vec![
+            text("employee_number", false, &[]),
+            text("first_name", false, &[]),
+            {
+                let mut f = text("last_name", true, &[]);
+                f.attributes.push(Attribute::new("searchable"));
+                f
+            },
+            {
+                let mut f = text("email", true, &[]);
+                f.attributes.push(Attribute::new("searchable"));
+                f
+            },
+        ];
+        assert_eq!(
+            m.search_fields(),
+            vec!["employee_number", "first_name", "last_name", "email"]
+        );
+    }
+
+    #[test]
+    fn declared_search_list_overrides_the_derived_set_in_its_order() {
+        let mut m = Model::new("Employee");
+        m.fields = vec![
+            text("employee_number", false, &[]),
+            text("first_name", false, &[]),
+            text("last_name", true, &[]),
+            text("email", true, &[]),
+            Field::new("budget", TypeRef::Primitive(PrimitiveType::Decimal)),
+        ];
+        m.search = vec![
+            "employee_number".to_string(),
+            "first_name".to_string(),
+            "last_name".to_string(),
+            "email".to_string(),
+        ];
+        assert_eq!(
+            m.search_fields(),
+            vec!["employee_number", "first_name", "last_name", "email"]
+        );
+    }
+
+    #[test]
+    fn a_permission_gated_field_never_lands_in_the_derived_search_set() {
+        // `?search=` is a substring probe any holder of the route's read may send, so a
+        // gated required-text field is excluded at the source, not left to callers.
+        let mut m = Model::new("Employee");
+        let mut gated = text("mobile_phone", false, &[]);
+        gated.requires = Some("employee:read_confidential".to_string());
+        m.fields = vec![text("employee_number", false, &[]), gated];
+        assert_eq!(m.search_fields(), vec!["employee_number"]);
     }
 }

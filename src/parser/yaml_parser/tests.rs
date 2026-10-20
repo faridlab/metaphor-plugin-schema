@@ -1181,3 +1181,57 @@ fn a_broken_map_format_hook_names_its_own_mistake() {
     let list = "model: Ticket\nrules:\n  - name: tone\n    when: [create]\n    assert: \"the title reads well\"\n";
     assert!(matches!(parse_hook_yaml_flexible(list), Ok(YamlHookParseResult::Hook(_))));
 }
+
+#[test]
+fn test_model_search_list_and_searchable_attribute_parse() {
+    // `search:` on the model declares the whole list; `@searchable` on a field widens
+    // the derived default. Both land on the AST the emitter's single source reads.
+    let yaml = r#"
+models:
+  - name: Employee
+    collection: employees
+    search: [employee_number, first_name, last_name, email]
+    fields:
+      id: uuid
+      employee_number: string
+      first_name: string
+      last_name:
+        type: string?
+        attributes: ["@searchable"]
+      email: string?
+"#;
+    let schema = parse_model_yaml_str(yaml).unwrap();
+    let model = schema
+        .models
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_model()
+        .unwrap();
+    assert_eq!(
+        model.search,
+        vec![
+            "employee_number".to_string(),
+            "first_name".to_string(),
+            "last_name".to_string(),
+            "email".to_string(),
+        ]
+    );
+    assert!(model.find_field("last_name").unwrap().has_attribute("searchable"));
+
+    // Without the model-level list, the declared order is gone but the attribute stays.
+    let yaml = yaml.replacen("    search: [employee_number, first_name, last_name, email]\n", "", 1);
+    let schema = parse_model_yaml_str(&yaml).unwrap();
+    let model = schema
+        .models
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_model()
+        .unwrap();
+    assert!(model.search.is_empty());
+    assert_eq!(
+        model.search_fields(),
+        vec!["employee_number", "first_name", "last_name"]
+    );
+}

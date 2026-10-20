@@ -162,6 +162,12 @@ pub struct YamlModel {
     /// only to callers the tenant scope admits.
     #[serde(default)]
     pub public_scoped: Option<bool>,
+    /// The fields a `?search=` substring query may match, declared as the whole list (the emitted
+    /// order); each field may instead carry `@searchable` to widen the derived default (required
+    /// text fields). Validation refuses a name that is no field, no text, a secret or
+    /// permission-gated.
+    #[serde(default)]
+    pub search: Vec<String>,
     /// Enroll this entity in data-change audit capture (ADR-0025): the
     /// generator emits one migration per audited table attaching the
     /// row-level trigger that calls the composed backbone-auditlog module's
