@@ -14,8 +14,8 @@
 //! are read from the identity tables once per request) or not (permissions are whatever the host's
 //! authentication put on the `AuthContext`). Nothing is allowed by default in either.
 
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use walkdir::WalkDir;
@@ -103,9 +103,87 @@ fn line_of(text: &str, offset: usize) -> usize {
     text[..offset].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
+/// The files under `src` that are compiled only for tests: those a parent declares as
+/// `#[cfg(test)] mod name;` (with or without a `#[path = ".."]`), those carrying the inner
+/// attribute `#![cfg(test)]`, and every file such a file declares in turn. A test module in its own
+/// file has no `#[cfg(test)]` of its own to cut at, so the scan would otherwise read it as hand code.
+fn test_only_files(src: &Path) -> HashSet<PathBuf> {
+    let cfg_test_mod = Regex::new(
+        r#"#\[cfg\(test\)\]\s*(?:#\[path\s*=\s*"([^"]+)"\]\s*)?(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;"#,
+    )
+    .unwrap();
+    let any_mod =
+        Regex::new(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;").unwrap();
+
+    // The files `parent` declares as `mod name;`, found where the module system looks for them.
+    let declared = |parent: &Path, name: &str, path_attr: Option<&str>| -> Vec<PathBuf> {
+        let dir = parent.parent().unwrap_or(Path::new(""));
+        if let Some(rel) = path_attr {
+            return vec![dir.join(rel)];
+        }
+        let base = match parent.file_stem().and_then(|s| s.to_str()) {
+            Some("mod") | Some("lib") | Some("main") => dir.to_path_buf(),
+            Some(stem) => dir.join(stem),
+            None => dir.to_path_buf(),
+        };
+        vec![
+            base.join(format!("{name}.rs")),
+            base.join(name).join("mod.rs"),
+        ]
+    };
+
+    let mut files: Vec<(PathBuf, String)> = Vec::new();
+    for entry in WalkDir::new(src).follow_links(false).into_iter().flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                files.push((path.to_path_buf(), text));
+            }
+        }
+    }
+
+    let mut test_only: HashSet<PathBuf> = HashSet::new();
+    for (path, text) in &files {
+        if text.contains("#![cfg(test)]") {
+            test_only.insert(path.clone());
+        }
+        for c in cfg_test_mod.captures_iter(text) {
+            let name = &c[2];
+            let path_attr = c.get(1).map(|m| m.as_str());
+            for child in declared(path, name, path_attr) {
+                if child.is_file() {
+                    test_only.insert(child);
+                }
+            }
+        }
+    }
+
+    // A file only a test file can reach is test code too.
+    loop {
+        let before = test_only.len();
+        for (path, text) in &files {
+            if !test_only.contains(path) {
+                continue;
+            }
+            for c in any_mod.captures_iter(text) {
+                for child in declared(path, &c[1], None) {
+                    if child.is_file() {
+                        test_only.insert(child);
+                    }
+                }
+            }
+        }
+        if test_only.len() == before {
+            break;
+        }
+    }
+    test_only
+}
+
 /// Read the hand-written source under `root/src`.
 pub fn scan(root: &Path) -> SourceReport {
     let mut report = SourceReport::default();
+    let test_files = test_only_files(&root.join("src"));
     let route_call = Regex::new(r"\.route\(").unwrap();
     let guard_call = Regex::new(r"\bguarded(?:_all|_needs|_with)?\(").unwrap();
     let require_call = Regex::new(r"\.require(?:_with)?\(").unwrap();
@@ -124,6 +202,9 @@ pub fn scan(root: &Path) -> SourceReport {
     {
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        if test_files.contains(path) {
             continue;
         }
         let Ok(full) = std::fs::read_to_string(path) else {
@@ -291,6 +372,29 @@ mod tests {
             perms,
             vec!["ticket:escalate", "ticket:read", "ticket:update"]
         );
+    }
+
+    #[test]
+    fn a_file_declared_as_a_cfg_test_module_is_test_code_and_not_scanned() {
+        let hand = "fn r() { Router::new().route(\"/real\", post(h)); }\n";
+        let fixture = "fn f() { Router::new().route(\"/fixture\", guarded(get(g), \"thing:read\")); }\n";
+        let dir = tree(&[
+            (
+                "src/lib.rs",
+                "pub mod live;\n#[cfg(test)]\nmod tests;\n#[cfg(test)]\n#[path = \"odd_name.rs\"]\nmod renamed;\n",
+            ),
+            ("src/live.rs", hand),
+            ("src/tests.rs", &format!("mod nested;\n{fixture}")),
+            ("src/tests/nested.rs", fixture),
+            ("src/odd_name.rs", fixture),
+            ("src/inner.rs", &format!("#![cfg(test)]\n{fixture}")),
+        ]);
+        let r = scan(dir.path());
+        assert_eq!(
+            r.routes.iter().map(|x| x.what.as_str()).collect::<Vec<_>>(),
+            vec!["/real"]
+        );
+        assert!(r.named.is_empty());
     }
 
     #[test]
