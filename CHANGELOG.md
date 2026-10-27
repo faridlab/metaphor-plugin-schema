@@ -7,6 +7,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.43.1] - 2026-10-27
+
+### Fixed
+
+- **`schema doctor`'s permission audit no longer reads test files as hand-written routes**: the
+  scan cut a file at a literal `#[cfg(test)]` only, so a test module kept in its own file (declared
+  `#[cfg(test)] mod name;` from its parent, with or without a `#[path]`, carrying `#![cfg(test)]`,
+  or declared by such a file) was scanned whole, and its fixture routes and permission names failed
+  the gate with a route that is never mounted. Those files now count as test code, like the
+  `#[cfg(test)]` block inside a file already did.
+
 ## [0.43.0] - 2026-10-21
 
 ### Added
