@@ -995,10 +995,10 @@ pub fn tenancy_decorator_chain(
 pub struct SqlGenerator {
     version: Option<String>,
     split: bool,
-    /// Enum name → Postgres schema, for the enums that declare one. Filled at
-    /// the start of `generate` so a column of such an enum names its type with
-    /// the schema too.
-    enum_schemas: std::cell::RefCell<std::collections::HashMap<String, String>>,
+    /// Enum name → Postgres schema, for the enums that declare one. Empty on a
+    /// configured generator; `generate` builds a run that owns the map for its
+    /// schema, so a column of such an enum names its type with the schema too.
+    enum_schemas: std::collections::HashMap<String, String>,
 }
 
 impl SqlGenerator {
@@ -1970,7 +1970,7 @@ impl SqlGenerator {
         match type_ref {
             TypeRef::Primitive(p) => p.postgres_type().to_string(),
             // Assume it's an enum; named with its schema when it declares one.
-            TypeRef::Custom(name) => match self.enum_schemas.borrow().get(name) {
+            TypeRef::Custom(name) => match self.enum_schemas.get(name) {
                 Some(s) => format!("{}.{}", s, to_snake_case(name)),
                 None => to_snake_case(name),
             },
@@ -2042,25 +2042,31 @@ impl Default for SqlGenerator {
 
 impl Generator for SqlGenerator {
     fn generate(&self, schema: &ResolvedSchema) -> Result<GeneratedOutput, GenerateError> {
-        *self.enum_schemas.borrow_mut() = schema
-            .schema
-            .enums
-            .iter()
-            .filter_map(|e| {
-                e.schema
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .map(|s| (e.name.clone(), s.to_string()))
-            })
-            .collect();
+        // The enum lookup belongs to one run over one schema, so the run owns
+        // it: the configured generator stays immutable and can be reused.
+        let run = SqlGenerator {
+            version: self.version.clone(),
+            split: self.split,
+            enum_schemas: schema
+                .schema
+                .enums
+                .iter()
+                .filter_map(|e| {
+                    e.schema
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| (e.name.clone(), s.to_string()))
+                })
+                .collect(),
+        };
         let mut output = GeneratedOutput::new();
 
-        if self.split {
+        if run.split {
             // Split mode: generate separate files for each model
-            self.generate_split(&mut output, schema)?;
+            run.generate_split(&mut output, schema)?;
         } else {
             // Single file mode: generate one migration file
-            self.generate_single(&mut output, schema)?;
+            run.generate_single(&mut output, schema)?;
         }
 
         Ok(output)
