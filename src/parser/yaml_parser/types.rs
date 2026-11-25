@@ -168,6 +168,11 @@ pub struct YamlModel {
     /// permission-gated.
     #[serde(default)]
     pub search: Vec<String>,
+    /// The fields a list may be filtered on, when the service applies a filter on those only
+    /// (an allow list); absent, every simple field may be. Validation refuses a name that is no
+    /// field or a secret.
+    #[serde(default)]
+    pub filters: Vec<String>,
     /// Enroll this entity in data-change audit capture (ADR-0025): the
     /// generator emits one migration per audited table attaching the
     /// row-level trigger that calls the composed backbone-auditlog module's

@@ -100,6 +100,18 @@ impl EntitySchemaGenerator {
         )
     }
 
+    /// The model's `filters:` list, empty when it declares none (or the module schema could not be
+    /// loaded, which keeps today's every-simple-field behaviour).
+    fn declared_filters(&self, entity: &EntityDefinition) -> &[String] {
+        let Some(schema) = self.module_schema() else {
+            return &[];
+        };
+        let Some(model) = schema.models.iter().find(|m| m.name == entity.name) else {
+            return &[];
+        };
+        &model.filters
+    }
+
     /// The fields a generic write may not change (the service refuses a new value), as the
     /// Rust entity lists them.
     fn write_protected(&self, entity: &EntityDefinition) -> Vec<String> {
@@ -774,8 +786,14 @@ export const {entity_camel}RelationTargets = {{
         enums: &[EnumDefinition],
     ) -> String {
         let mut fields = Vec::new();
+        // A model that declares `filters:` is filtered on those fields only (its service ignores
+        // any other), so the schema offers exactly them; without one, every simple field.
+        let allowed = self.declared_filters(entity);
 
         for field in &entity.fields {
+            if !allowed.is_empty() && !allowed.iter().any(|name| name == &field.name) {
+                continue;
+            }
             // Skip complex types for simple filters
             if matches!(field.type_name, FieldType::Json | FieldType::Text) {
                 continue;
@@ -1488,6 +1506,48 @@ mod tests {
         assert!(content.contains("name: z.string().max(80, { message: \"This field must be at most 80 characters\" }).superRefine("), "{content}");
         assert!(content.contains("note: z.string().max(120, { message: \"This field must be at most 120 characters\" }).nullable().optional()"), "{content}");
         crate::webgen::generators::domain::type_mapping::tests::assert_every_message_coded(&content);
+    }
+
+    /// A model that declares `filters:` gets a filter schema of exactly those fields, because its
+    /// service ignores a filter on any other; a model without one keeps every simple field.
+    #[test]
+    fn the_filter_schema_offers_the_declared_filters_only() {
+        let filter_body = |content: &str| {
+            content
+                .split("ListFilterSchema = z.object({\n")
+                .nth(1)
+                .and_then(|rest| rest.split("\n}).partial();").next())
+                .map(str::to_string)
+                .unwrap_or_default()
+        };
+        let names = |body: &str| {
+            body.lines()
+                .filter_map(|l| l.trim().split(':').next().map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+
+        let declared = PERIOD.replacen(
+            "    collection: periods\n",
+            "    collection: periods\n    filters: [name, opened_on]\n",
+            1,
+        );
+        let (_dir, config, entity, enums) = module_on_disk(&declared);
+        let generator = EntitySchemaGenerator::new(config, TypeMapper::new());
+        let content = generator.generate_schema_content(&entity, &enums, None);
+        assert_eq!(
+            names(&filter_body(&content)),
+            vec!["name", "opened_on"],
+            "{content}"
+        );
+
+        let (_dir, config, entity, enums) = module_on_disk(PERIOD);
+        let generator = EntitySchemaGenerator::new(config, TypeMapper::new());
+        let content = generator.generate_schema_content(&entity, &enums, None);
+        let all = names(&filter_body(&content));
+        assert!(
+            all.len() > 2 && all.contains(&"code".to_string()) && all.contains(&"note".to_string()),
+            "{all:?}"
+        );
     }
 
     /// The create and update schemas offer exactly the fields the service's Create and Update
