@@ -292,14 +292,15 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
         }
     }
 
-    /// `EnumName.FirstVariant`, or a safe cast if the enum has no variants.
+    /// `EnumName.FirstVariant` (`EnumName['first-variant']` when quoted), or a safe cast if the enum has no
+    /// variants.
     fn first_enum_member(enum_name: &str, enums: &[EnumDefinition]) -> String {
         match enums
             .iter()
             .find(|e| e.name == enum_name)
             .and_then(|e| e.variants.first())
         {
-            Some(v) => format!("{}.{}", enum_name, v.name),
+            Some(v) => format!("{}{}", enum_name, enum_member_access(&v.name)),
             None => format!("'' as unknown as {}", enum_name),
         }
     }
@@ -366,9 +367,9 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
                     "[]".to_string()
                 }
             }
-            FieldType::Enum(name) => format!("{}.{}", name, value),
+            FieldType::Enum(name) => format!("{}{}", name, enum_member_access(value)),
             FieldType::Custom(name) if enums.iter().any(|e| &e.name == name) => {
-                format!("{}.{}", name, value)
+                format!("{}{}", name, enum_member_access(value))
             }
             FieldType::Custom(name) if TypeMapper::is_numeric_scalar(name) => {
                 if value.parse::<f64>().is_ok() {
@@ -430,7 +431,7 @@ export interface {entity_pascal}WithRelations extends {entity_pascal} {{
         let variants: Vec<String> = enum_def
             .variants
             .iter()
-            .map(|v| format!("  {} = '{}',", v.name, v.name))
+            .map(|v| format!("  {} = '{}',", enum_member_name(&v.name), v.name))
             .collect();
 
         let variant_union: Vec<String> = enum_def
@@ -498,15 +499,41 @@ export function get{name}Label(value: {name}): string {{
                 .map(|v| {
                     let label = v.description.as_ref().unwrap_or(&v.name);
                     format!(
-                        "    [{}.{}]: '{}',",
+                        "    [{}{}]: '{}',",
                         enum_def.name,
-                        v.name,
+                        enum_member_access(&v.name),
                         escape_single_quoted(label)
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
         )
+    }
+}
+
+/// Whether a variant can name a TypeScript enum member as it is written.
+fn is_ts_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// A variant as an enum member's name: as written when it is an identifier, else quoted
+/// (`'ready-onstore' = 'ready-onstore'`), since a value such as `ready-onstore` is not one.
+fn enum_member_name(name: &str) -> String {
+    if is_ts_identifier(name) {
+        name.to_string()
+    } else {
+        format!("'{}'", escape_single_quoted(name))
+    }
+}
+
+/// How a member is read off its enum: `.name`, or `['ready-onstore']` for a quoted one.
+fn enum_member_access(name: &str) -> String {
+    if is_ts_identifier(name) {
+        format!(".{name}")
+    } else {
+        format!("['{}']", escape_single_quoted(name))
     }
 }
 
@@ -630,5 +657,31 @@ mod tests {
             .contains("[PunchSource.kiosk]: 'Kiosk PIN (Tier B) — the kiosk\\'s own reader',"));
         // Descriptions without prose hazards pass through untouched.
         assert!(content.contains("[PunchSource.manual]: 'manual',"));
+    }
+
+    #[test]
+    fn test_enum_member_that_is_not_an_identifier_is_quoted() {
+        let generator = EntityGenerator::new(test_config(), TypeMapper::new());
+
+        let variant = |name: &str| EnumVariant {
+            name: name.to_string(),
+            description: None,
+            is_default: false,
+        };
+        let enum_def = EnumDefinition {
+            name: "PickupState".to_string(),
+            variants: vec![variant("ready"), variant("ready-onstore"), variant("2fa")],
+        };
+
+        let content = generator.generate_enum_content(&enum_def);
+        // An identifier stays bare, in the member and in the label map.
+        assert!(content.contains("  ready = 'ready',"));
+        assert!(content.contains("[PickupState.ready]: 'ready',"));
+        // A hyphen or a leading digit makes no identifier: the member is quoted and read by index.
+        assert!(content.contains("  'ready-onstore' = 'ready-onstore',"));
+        assert!(content.contains("[PickupState['ready-onstore']]: 'ready-onstore',"));
+        assert!(content.contains("  '2fa' = '2fa',"));
+        assert!(content.contains("[PickupState['2fa']]: '2fa',"));
+        assert!(!content.contains("PickupState.ready-onstore"));
     }
 }
