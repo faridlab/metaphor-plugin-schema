@@ -112,6 +112,24 @@ models:
 > [Generators Configuration](#generators-configuration) for the correct
 > shape.
 
+### Filter allow list (`filters:`)
+
+A model may list the fields its list can be filtered on, when the service applies a filter on those
+fields only and ignores any other (a query layer that reads a per-model allow list, such as
+laravel-search-query's `$filters`):
+
+```yaml
+models:
+  - name: Category
+    collection: categories
+    filters: [id, parent_id, type, name, slug, choice, choice_order]
+```
+
+The webapp's `<Entity>ListFilterSchema` then holds exactly these fields (in the model's field order;
+complex `json` and long `text` fields are still left out). Without `filters:` it holds every simple
+field, as before. Validation refuses a name listed twice, a name that is no field of the model, and a
+secret (`@sensitive`/`@hashed`), since a filter on a stored digest lets a caller test guesses against it.
+
 ### Field Properties
 
 | Property | Type | Description |

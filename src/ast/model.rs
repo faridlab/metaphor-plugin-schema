@@ -64,6 +64,13 @@ pub struct Model {
     /// (`requires:`) is a validation error ([`crate::resolver::validator`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search: Vec<String>,
+    /// `filters:` — the fields a list may be filtered on, when the service applies a filter on
+    /// those only and ignores any other (a service whose query layer reads a per-model allow list).
+    /// The webapp's `<Entity>ListFilterSchema` then offers exactly these. Empty means every simple
+    /// field, as before. A name that is no field, or a secret, is a validation error
+    /// ([`crate::resolver::validator`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<String>,
     /// Source location
     #[serde(skip)]
     pub span: Span,

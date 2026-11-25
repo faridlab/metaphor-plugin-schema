@@ -1235,3 +1235,42 @@ models:
         vec!["employee_number", "first_name", "last_name"]
     );
 }
+
+#[test]
+fn test_model_filters_list_parses() {
+    // `filters:` on the model lists the fields its service filters a list on; absent, it is empty.
+    let yaml = r#"
+models:
+  - name: Category
+    collection: categories
+    filters: [name, parent_id]
+    fields:
+      id: uuid
+      name: string
+      parent_id: uuid?
+      note: string?
+"#;
+    let schema = parse_model_yaml_str(yaml).unwrap();
+    let model = schema
+        .models
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_model()
+        .unwrap();
+    assert_eq!(
+        model.filters,
+        vec!["name".to_string(), "parent_id".to_string()]
+    );
+
+    let yaml = yaml.replacen("    filters: [name, parent_id]\n", "", 1);
+    let schema = parse_model_yaml_str(&yaml).unwrap();
+    let model = schema
+        .models
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_model()
+        .unwrap();
+    assert!(model.filters.is_empty());
+}

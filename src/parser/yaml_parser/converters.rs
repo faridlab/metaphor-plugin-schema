@@ -155,6 +155,7 @@ impl YamlModel {
         model.public = self.public.as_ref().map(|p| p.actions()).unwrap_or_default();
         model.public_scoped = self.public_scoped == Some(true);
         model.search = self.search;
+        model.filters = self.filters;
 
         // Add soft_delete attribute if enabled in YAML schema
         if self.soft_delete == Some(true) {

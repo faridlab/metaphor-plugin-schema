@@ -75,6 +75,9 @@ impl<'a> SchemaValidator<'a> {
         // Validate search declarations (`search:` on a model, `@searchable` on a field)
         errors.extend(self.validate_search_declarations());
 
+        // Validate filter allow lists (`filters:` on a model)
+        errors.extend(self.validate_filter_declarations());
+
         // Validate scheduled-job postures (ADR-0020)
         errors.extend(self.validate_scheduled_jobs());
 
@@ -372,6 +375,39 @@ impl<'a> SchemaValidator<'a> {
             }
         }
 
+        errors
+    }
+
+    /// A model's `filters:` list names fields once each, of the model, and never a secret: a
+    /// filter on a digest lets a caller test guesses against it.
+    fn validate_filter_declarations(&self) -> Vec<ResolveError> {
+        let mut errors = Vec::new();
+        for model in &self.schema.models {
+            let mut seen = std::collections::HashSet::new();
+            for name in &model.filters {
+                if !seen.insert(name.as_str()) {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` filters: `{name}` is listed twice",
+                        model.name
+                    )));
+                    continue;
+                }
+                let Some(field) = model.find_field(name) else {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` filters: `{name}` names no field of the model",
+                        model.name
+                    )));
+                    continue;
+                };
+                if field.has_attribute("sensitive") || field.has_attribute("hashed") {
+                    errors.push(ResolveError::validation(format!(
+                        "`{}` filters: `{name}` is a secret (`@sensitive`/`@hashed`), and a filter \
+                         on it lets a caller test guesses against the stored value",
+                        model.name
+                    )));
+                }
+            }
+        }
         errors
     }
 
@@ -2702,6 +2738,64 @@ mod search_declaration_tests {
         let errs = errors_of(m);
         assert!(
             errs.iter().any(|e| e.contains("`Employee` search: `name` is listed twice")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_filter_list_of_plain_fields_validates() {
+        let mut m = model_with(vec![
+            field("name", TypeRef::Primitive(PrimitiveType::String)),
+            field("budget", TypeRef::Primitive(PrimitiveType::Decimal)),
+        ]);
+        m.filters = vec!["name".into(), "budget".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter().all(|e| !e.contains("filters:")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn filters_naming_an_unknown_field_is_an_error() {
+        let mut m = model_with(vec![field(
+            "name",
+            TypeRef::Primitive(PrimitiveType::String),
+        )]);
+        m.filters = vec!["no_such_field".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("`Employee` filters: `no_such_field` names no field")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn filters_naming_a_field_twice_is_an_error() {
+        let mut m = model_with(vec![field(
+            "name",
+            TypeRef::Primitive(PrimitiveType::String),
+        )]);
+        m.filters = vec!["name".into(), "name".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("`Employee` filters: `name` is listed twice")),
+            "got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn filters_naming_a_secret_is_an_error() {
+        let mut f = opt_text("token_hash");
+        f.attributes.push(Attribute::new("hashed"));
+        let mut m = model_with(vec![f]);
+        m.filters = vec!["token_hash".into()];
+        let errs = errors_of(m);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("`Employee` filters: `token_hash` is a secret")),
             "got: {errs:?}"
         );
     }

@@ -7,6 +7,13 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Added
+
+- **A model may list the fields its list filters on (`filters:`)**: for a service that applies a
+  filter on an allow list only and ignores any other (laravel-search-query's `$filters`), the
+  webapp's `<Entity>ListFilterSchema` now holds exactly those fields. Without the key it holds every
+  simple field, as before. Validation refuses a name listed twice, one that is no field, and a secret.
+
 ### Fixed
 
 - **An enum value that is not a TypeScript identifier no longer breaks the webapp build**: a variant
