@@ -7,6 +7,8 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-25
+
 ### Added
 
 - **A model may list the fields its list filters on (`filters:`)**: for a service that applies a
