@@ -7,6 +7,13 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Fixed
+
+- **An enum value that is not a TypeScript identifier no longer breaks the webapp build**: a variant
+  such as `ready-onstore` or `2fa` is now a quoted member (`'ready-onstore' = 'ready-onstore'`) and is
+  read by index (`Status['ready-onstore']`) in the label map and in factory defaults, where it used to
+  be written bare and failed to compile.
+
 ## [0.43.1] - 2026-10-27
 
 ### Fixed
