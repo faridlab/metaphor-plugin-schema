@@ -16,6 +16,13 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ### Fixed
 
+- **A webapp generated from part of a schema compiles when a relation points outside it**: the
+  relations view (`<Entity>WithRelations`) no longer imports a `.schema` file for a target this run
+  does not generate (a service exporting fifty models, a webapp generating three); such a relation
+  reads as `unknown`, like a cross-module one. A relation named like one of the entity's own fields
+  (an `address` relation beside an `address` JSON column) is left out of that view, since it would
+  contradict the field's type.
+
 - **An enum value that is not a TypeScript identifier no longer breaks the webapp build**: a variant
   such as `ready-onstore` or `2fa` is now a quoted member (`'ready-onstore' = 'ready-onstore'`) and is
   read by index (`Status['ready-onstore']`) in the label map and in factory defaults, where it used to

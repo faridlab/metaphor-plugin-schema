@@ -3,7 +3,9 @@
 //! Generates TypeScript interfaces, factory functions, and type guards
 //! from schema entity definitions.
 
+use std::collections::HashSet;
 use std::fs;
+use std::sync::OnceLock;
 
 use super::type_mapping::TypeMapper;
 use super::DomainGenerationResult;
@@ -16,6 +18,9 @@ use crate::webgen::parser::{to_camel_case, to_camel_case_binding, to_pascal_case
 pub struct EntityGenerator {
     config: Config,
     type_mapper: TypeMapper,
+    /// The models this run generates, by PascalCase name, read once from the module schema; `None` when the
+    /// schema cannot be read, and then every local relation target is taken to be generated, as before.
+    generated_models: OnceLock<Option<HashSet<String>>>,
 }
 
 impl EntityGenerator {
@@ -24,7 +29,43 @@ impl EntityGenerator {
         Self {
             config,
             type_mapper,
+            generated_models: OnceLock::new(),
         }
+    }
+
+    /// The models generated with this one. A schema directory may hold only some of a service's models (a
+    /// webapp generates the collections it has screens for), so a relation can point at a model with no file here.
+    fn generated_models(&self) -> Option<&HashSet<String>> {
+        self.generated_models
+            .get_or_init(|| {
+                crate::commands::schema::load_module_schema(
+                    &self.config.module,
+                    &self.config.schema_dir(),
+                )
+                .map(|schema| {
+                    schema
+                        .models
+                        .iter()
+                        .map(|m| to_pascal_case(&m.name))
+                        .collect()
+                })
+            })
+            .as_ref()
+    }
+
+    /// Whether a relation's target has a generated `.schema` file beside this entity: a local target (not a
+    /// qualified cross-module one) that this run generates.
+    fn target_is_generated(&self, target: &str) -> bool {
+        Self::is_local_relation(target)
+            && self
+                .generated_models()
+                .is_none_or(|models| models.contains(&to_pascal_case(target)))
+    }
+
+    /// Whether a relation shares its name with one of the entity's own fields (a JSON `address` column beside an
+    /// `address` relation): the field's type wins, so the relation is left out of the relations view.
+    fn shadowed_by_field(entity: &EntityDefinition, relation_name: &str) -> bool {
+        entity.fields.iter().any(|f| f.name == relation_name)
     }
 
     /// Generate entity type file for a single entity
@@ -183,7 +224,9 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
         // module and are rendered as `unknown` in the relations interface.
         let self_pascal = to_pascal_case(&entity.name);
         for relation in &entity.relations {
-            if !Self::is_local_relation(&relation.target_entity) {
+            if !self.target_is_generated(&relation.target_entity)
+                || Self::shadowed_by_field(entity, &relation.name)
+            {
                 continue;
             }
             let target_pascal = to_pascal_case(&relation.target_entity);
@@ -393,10 +436,13 @@ export const equals{entity_pascal} = (a: {entity_pascal}, b: {entity_pascal}): b
         let mut relation_fields = Vec::new();
 
         for relation in &entity.relations {
+            if Self::shadowed_by_field(entity, &relation.name) {
+                continue;
+            }
             let relation_name = to_camel_case(&relation.name);
 
-            // Cross-module/qualified targets aren't generated locally → `unknown`.
-            let target_pascal = if Self::is_local_relation(&relation.target_entity) {
+            // Cross-module/qualified targets, and local ones this run does not generate, have no file here → `unknown`.
+            let target_pascal = if self.target_is_generated(&relation.target_entity) {
                 to_pascal_case(&relation.target_entity)
             } else {
                 "unknown".to_string()
@@ -572,7 +618,9 @@ pub fn entity_file_symbols(entity: &EntityDefinition) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webgen::ast::entity::{EnumVariant, FieldDefinition, FieldType};
+    use crate::webgen::ast::entity::{
+        EnumVariant, FieldDefinition, FieldType, RelationDefinition, RelationType,
+    };
 
     fn test_config() -> Config {
         Config::new("test_module")
@@ -683,5 +731,60 @@ mod tests {
         assert!(content.contains("  '2fa' = '2fa',"));
         assert!(content.contains("[PickupState['2fa']]: '2fa',"));
         assert!(!content.contains("PickupState.ready-onstore"));
+    }
+
+    #[test]
+    fn test_relations_to_models_not_generated_or_named_like_a_field_stay_out_of_the_imports() {
+        let generator = EntityGenerator::new(test_config(), TypeMapper::new());
+        // This run generates the transaction and the user, not the warehouse.
+        generator
+            .generated_models
+            .set(Some(
+                ["Transaction", "User"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ))
+            .ok();
+        let field = |name: &str, type_name: FieldType| FieldDefinition {
+            name: name.to_string(),
+            type_name,
+            attributes: vec![],
+            description: None,
+            optional: true,
+            default_value: None,
+        };
+        let relation = |name: &str, target: &str| RelationDefinition {
+            name: name.to_string(),
+            target_entity: target.to_string(),
+            relation_type: RelationType::ManyToOne,
+            attributes: vec![],
+        };
+        let entity = EntityDefinition {
+            name: "Transaction".to_string(),
+            collection: "transactions".to_string(),
+            fields: vec![
+                field("id", FieldType::Uuid),
+                field("address", FieldType::Json),
+            ],
+            relations: vec![
+                relation("user", "User"),
+                relation("warehouse", "Warehouse"),
+                relation("address", "UserAddress"),
+            ],
+            indexes: vec![],
+            soft_delete: false,
+        };
+
+        let content = generator.generate_entity_content(&entity, &[]);
+        // A generated target is imported and typed.
+        assert!(content.contains("import type { User } from './User.schema';"));
+        assert!(content.contains("  user?: User | null;"));
+        // A target with no file in this run is neither imported nor named: it reads as unknown.
+        assert!(!content.contains("Warehouse.schema"));
+        assert!(content.contains("  warehouse?: unknown | null;"));
+        // The `address` column wins over the `address` relation, which would contradict its type.
+        assert!(!content.contains("UserAddress"));
+        assert!(!content.contains("  address?:"));
     }
 }
